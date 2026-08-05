@@ -1,0 +1,513 @@
+// Canonical OOXML serialization and the semantic equality oracle.
+//
+// This module owns normalized XML output from a canonical part — repository-controlled
+// prefixes, validated and escaped names/values — plus the namespace-aware fingerprint that
+// backs `ooxmlTreesEqual`. It is a projection of the tree in ooxml-tree.ts; the read path
+// stays there, and importers keep reaching everything through that module's re-exports.
+
+import { isValidNCName } from './qname.ts';
+import { escapeXmlChecked } from './sinks.ts';
+import {
+  MC_NAMESPACE_URI,
+  MC_QNAME_LIST_ATTRIBUTES,
+  WML_NAMESPACE_URI,
+  XML_NAMESPACE_URI,
+  XMLNS_NAMESPACE_URI,
+  XSI_NAMESPACE_URI,
+  canonicalQNameAttributeValue,
+  expandedKey,
+  normalizedWmlTextAttributes,
+  resolvedPrefixNamespaceSet,
+  resolvedQNameToken,
+  validateQNameAttributeValues,
+  wmlTextValueOf,
+} from './ooxml-shared.ts';
+import type { OoxmlAttribute, OoxmlElement, OoxmlNode, OoxmlPart } from './ooxml-tree.ts';
+
+function assertSerializableName(localName: string): void {
+  if (!isValidNCName(localName))
+    throw new Error(`invalid local name for OOXML serialization: ${JSON.stringify(localName)}`);
+}
+
+function assertSerializableNamespace(namespaceUri: string): void {
+  if (namespaceUri === XMLNS_NAMESPACE_URI)
+    throw new Error('the XMLNS namespace cannot name an OOXML element or authored attribute');
+  escapeXmlChecked(namespaceUri, 'namespace URI');
+}
+
+function collectNamespacesAndAliases(
+  node: OoxmlNode,
+  namespaceUris: Set<string>,
+  aliasUris: Map<string, Set<string>>
+): void {
+  if (node.kind === 'textValue') return;
+  if (node.namespaceUri !== '') namespaceUris.add(node.namespaceUri);
+  for (const attribute of node.attributes)
+    if (attribute.namespaceUri !== '') namespaceUris.add(attribute.namespaceUri);
+  for (const binding of node.namespaceBindings) {
+    if (binding.namespaceUri !== '') namespaceUris.add(binding.namespaceUri);
+    const uris = aliasUris.get(binding.prefix) ?? new Set<string>();
+    uris.add(binding.namespaceUri);
+    aliasUris.set(binding.prefix, uris);
+  }
+  for (const child of node.children) collectNamespacesAndAliases(child, namespaceUris, aliasUris);
+}
+
+function isMcPrefixListAttribute(attribute: OoxmlAttribute, owner: OoxmlElement): boolean {
+  return (
+    (attribute.namespaceUri === MC_NAMESPACE_URI &&
+      (attribute.localName === 'Ignorable' || attribute.localName === 'MustUnderstand')) ||
+    (owner.namespaceUri === MC_NAMESPACE_URI &&
+      owner.localName === 'Choice' &&
+      attribute.namespaceUri === '' &&
+      attribute.localName === 'Requires')
+  );
+}
+
+function isQNameValuedAttribute(attribute: OoxmlAttribute): boolean {
+  return (
+    (attribute.namespaceUri === MC_NAMESPACE_URI &&
+      MC_QNAME_LIST_ATTRIBUTES.has(attribute.localName)) ||
+    (attribute.namespaceUri === XSI_NAMESPACE_URI && attribute.localName === 'type')
+  );
+}
+
+/** Namespaces that must have a non-empty controlled prefix (attrs + MC/XSI QName values). */
+function collectNonEmptyPrefixUris(
+  node: OoxmlNode,
+  inheritedBindings: ReadonlyMap<string, string>,
+  uris: Set<string>
+): void {
+  if (node.kind === 'textValue') return;
+  const bindings = new Map(inheritedBindings);
+  for (const binding of node.namespaceBindings) bindings.set(binding.prefix, binding.namespaceUri);
+  for (const attribute of node.attributes) {
+    if (attribute.namespaceUri !== '') uris.add(attribute.namespaceUri);
+    if (typeof attribute.value !== 'string') continue;
+    try {
+      if (isMcPrefixListAttribute(attribute, node)) {
+        for (const namespaceUri of resolvedPrefixNamespaceSet(attribute.value, bindings))
+          uris.add(namespaceUri);
+      } else if (isQNameValuedAttribute(attribute)) {
+        for (const token of attribute.value.trim().split(/\s+/).filter(Boolean)) {
+          const [namespaceUri] = resolvedQNameToken(token, bindings);
+          if (namespaceUri !== '') uris.add(namespaceUri);
+        }
+      }
+    } catch {
+      // Undeclared / invalid tokens fail closed later during validate/serialize.
+    }
+  }
+  for (const child of node.children) collectNonEmptyPrefixUris(child, bindings, uris);
+}
+
+interface ControlledPrefixes {
+  /** Element-name prefixes; may map a root-default URI to `''`. */
+  readonly byUri: ReadonlyMap<string, string>;
+  /**
+   * Non-empty aliases for URIs whose element prefix is `''` but that also name
+   * attributes or appear in MC/XSI QName / prefix-list attribute values.
+   */
+  readonly attributeAliases: ReadonlyMap<string, string>;
+}
+
+/** Prefer a uniquely authored non-empty prefix for a URI (stable: sorted NCName). */
+function preferredAuthoredPrefix(
+  namespaceUri: string,
+  aliasUris: ReadonlyMap<string, ReadonlySet<string>>,
+  used: ReadonlySet<string>
+): string | undefined {
+  const candidates: string[] = [];
+  for (const [prefix, uris] of aliasUris) {
+    if (
+      prefix !== '' &&
+      isValidNCName(prefix) &&
+      !used.has(prefix) &&
+      uris.size === 1 &&
+      uris.has(namespaceUri)
+    )
+      candidates.push(prefix);
+  }
+  candidates.sort();
+  return candidates[0];
+}
+
+function controlledPrefixMap(root: OoxmlElement): ControlledPrefixes {
+  const namespaceUris = new Set<string>();
+  const aliasUris = new Map<string, Set<string>>();
+  collectNamespacesAndAliases(root, namespaceUris, aliasUris);
+  namespaceUris.delete('');
+  namespaceUris.delete(XML_NAMESPACE_URI);
+  namespaceUris.delete(XMLNS_NAMESPACE_URI);
+  const byUri = new Map<string, string>([[XML_NAMESPACE_URI, 'xml']]);
+  const used = new Set(['xml', 'xmlns']);
+  const allocate = (namespaceUri: string, preferred: string): void => {
+    let prefix = preferred;
+    let suffix = 0;
+    while (
+      used.has(prefix) ||
+      [...(aliasUris.get(prefix) ?? [])].some((uri) => uri !== namespaceUri)
+    ) {
+      suffix += 1;
+      // Empty preferred means "default xmlns"; collide into nsN rather than "0"/"1".
+      prefix = preferred === '' ? `ns${suffix}` : `${preferred}${suffix}`;
+    }
+    byUri.set(namespaceUri, prefix);
+    used.add(prefix);
+    namespaceUris.delete(namespaceUri);
+  };
+  // OPC relationship parts (and other default-xmlns roots) must re-emit the unprefixed
+  // default form. Descendant `xmlns=""` / other default rebinds must NOT bump the root
+  // URI to `nsN` — that yields the Word Online–corrupt dual `xmlns` + `nsN:Relationships`.
+  const rootDefault =
+    root.namespaceUri !== '' &&
+    root.namespaceBindings.some(
+      (binding) => binding.prefix === '' && binding.namespaceUri === root.namespaceUri
+    );
+  if (rootDefault) {
+    byUri.set(root.namespaceUri, '');
+    used.add('');
+    namespaceUris.delete(root.namespaceUri);
+  }
+  if (namespaceUris.has(WML_NAMESPACE_URI)) allocate(WML_NAMESPACE_URI, 'w');
+  if (namespaceUris.has(MC_NAMESPACE_URI)) allocate(MC_NAMESPACE_URI, 'mc');
+  if (namespaceUris.has(XSI_NAMESPACE_URI)) allocate(XSI_NAMESPACE_URI, 'xsi');
+  let generated = 0;
+  for (const namespaceUri of [...namespaceUris].sort()) {
+    const authored = preferredAuthoredPrefix(namespaceUri, aliasUris, used);
+    let preferred = authored;
+    if (preferred === undefined) {
+      do {
+        generated += 1;
+        preferred = `ns${generated}`;
+      } while (used.has(preferred));
+    }
+    allocate(namespaceUri, preferred);
+  }
+
+  const needsNonEmpty = new Set<string>();
+  collectNonEmptyPrefixUris(
+    root,
+    new Map([
+      ['xml', XML_NAMESPACE_URI],
+      ['xmlns', XMLNS_NAMESPACE_URI],
+    ]),
+    needsNonEmpty
+  );
+  const attributeAliases = new Map<string, string>();
+  for (const namespaceUri of [...needsNonEmpty].sort()) {
+    if (byUri.get(namespaceUri) !== '') continue;
+    let preferred = preferredAuthoredPrefix(namespaceUri, aliasUris, used);
+    if (preferred === undefined) {
+      do {
+        generated += 1;
+        preferred = `ns${generated}`;
+      } while (used.has(preferred));
+    }
+    attributeAliases.set(namespaceUri, preferred);
+    used.add(preferred);
+  }
+  return { byUri, attributeAliases };
+}
+
+function prefixForAttributeOrQName(namespaceUri: string, prefixes: ControlledPrefixes): string {
+  const alias = prefixes.attributeAliases.get(namespaceUri);
+  if (alias !== undefined) return alias;
+  const prefix = prefixes.byUri.get(namespaceUri);
+  if (prefix === undefined)
+    throw new Error(`no controlled prefix for namespace ${JSON.stringify(namespaceUri)}`);
+  if (prefix === '')
+    throw new Error(
+      `namespace ${JSON.stringify(namespaceUri)} requires a non-empty controlled prefix`
+    );
+  return prefix;
+}
+
+function controlledQualifiedName(
+  namespaceUri: string,
+  localName: string,
+  prefixes: ControlledPrefixes,
+  attribute: boolean
+): string {
+  assertSerializableName(localName);
+  assertSerializableNamespace(namespaceUri);
+  if (namespaceUri === '') return localName;
+  if (attribute) {
+    const prefix = prefixForAttributeOrQName(namespaceUri, prefixes);
+    return `${prefix}:${localName}`;
+  }
+  const prefix = prefixes.byUri.get(namespaceUri);
+  if (prefix === undefined)
+    throw new Error(`no controlled prefix for namespace ${JSON.stringify(namespaceUri)}`);
+  if (prefix === '') return localName;
+  return `${prefix}:${localName}`;
+}
+
+function sortedAttributes(attributes: readonly OoxmlAttribute[]): readonly OoxmlAttribute[] {
+  const seen = new Set<string>();
+  for (const attribute of attributes) {
+    assertSerializableName(attribute.localName);
+    assertSerializableNamespace(attribute.namespaceUri);
+    const key = expandedKey(attribute.namespaceUri, attribute.localName);
+    if (seen.has(key))
+      throw new Error(
+        `duplicate expanded attribute {${attribute.namespaceUri}}${attribute.localName}`
+      );
+    seen.add(key);
+  }
+  return [...attributes].sort((left, right) => {
+    const leftKey = expandedKey(left.namespaceUri, left.localName);
+    const rightKey = expandedKey(right.namespaceUri, right.localName);
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
+}
+
+function controlledQNameValue(
+  attribute: OoxmlAttribute,
+  owner: OoxmlElement,
+  bindings: ReadonlyMap<string, string>,
+  prefixes: ControlledPrefixes
+): string {
+  const rawValue: unknown = attribute.value;
+  if (typeof rawValue !== 'string')
+    throw new Error(
+      `attribute {${attribute.namespaceUri}}${attribute.localName} value must be a string scalar`
+    );
+  if (isMcPrefixListAttribute(attribute, owner)) {
+    return resolvedPrefixNamespaceSet(rawValue, bindings)
+      .map((namespaceUri) => prefixForAttributeOrQName(namespaceUri, prefixes))
+      .sort()
+      .join(' ');
+  }
+  if (!isQNameValuedAttribute(attribute)) return rawValue;
+  return rawValue
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token) => {
+      const [namespaceUri, localName] = resolvedQNameToken(token, bindings);
+      assertSerializableName(localName);
+      assertSerializableNamespace(namespaceUri);
+      if (namespaceUri === '') return localName;
+      const prefix = prefixForAttributeOrQName(namespaceUri, prefixes);
+      return `${prefix}:${localName}`;
+    })
+    .sort()
+    .join(' ');
+}
+
+function controlledRootDeclares(
+  binding: { readonly prefix: string; readonly namespaceUri: string },
+  rootBindings: ReadonlyMap<string, string>,
+  prefixes: ControlledPrefixes
+): boolean {
+  if (rootBindings.get(binding.prefix) === binding.namespaceUri) return true;
+  // One stable binding per URI on the root: controlled element prefix (possibly
+  // '') plus an optional non-empty attribute/QName alias are emitted in
+  // rootDeclarations. Extra authored aliases for the same URI
+  // (`xmlns:w14` + `xmlns:ns13`) are save-introduced bloat and must be dropped.
+  if (
+    prefixes.byUri.has(binding.namespaceUri) ||
+    prefixes.attributeAliases.has(binding.namespaceUri)
+  )
+    return true;
+  return false;
+}
+
+function serializeNode(
+  node: OoxmlNode,
+  prefixes: ControlledPrefixes,
+  inheritedBindings: ReadonlyMap<string, string>,
+  inheritedPreserve: boolean,
+  rootDeclarations: string
+): string {
+  if (node.kind === 'textValue') return escapeXmlChecked(node.value, 'OOXML text');
+  const bindings = new Map(inheritedBindings);
+  const seenDeclarationPrefixes = new Set<string>();
+  const declarations = [...node.namespaceBindings]
+    .sort((left, right) => {
+      const prefixOrder = left.prefix.localeCompare(right.prefix);
+      return prefixOrder !== 0 ? prefixOrder : left.namespaceUri.localeCompare(right.namespaceUri);
+    })
+    .map((binding) => {
+      if (
+        (binding.prefix !== '' && !isValidNCName(binding.prefix)) ||
+        binding.prefix === 'xmlns' ||
+        seenDeclarationPrefixes.has(binding.prefix)
+      )
+        throw new Error(`invalid or duplicate namespace prefix ${JSON.stringify(binding.prefix)}`);
+      assertSerializableNamespace(binding.namespaceUri);
+      seenDeclarationPrefixes.add(binding.prefix);
+      const declaredByControlledRoot =
+        rootDeclarations !== '' && controlledRootDeclares(binding, bindings, prefixes);
+      bindings.set(binding.prefix, binding.namespaceUri);
+      if (declaredByControlledRoot) return '';
+      const declarationName = binding.prefix === '' ? 'xmlns' : `xmlns:${binding.prefix}`;
+      return ` ${declarationName}="${escapeXmlChecked(binding.namespaceUri, declarationName)}"`;
+    })
+    .join('');
+  const elementAttributes =
+    // `w:delText` is `CT_Text` exactly as `w:t` is (§17.3.3.7), so it needs the same
+    // `xml:space` normalization. Without it, striking " b " wrote `<w:delText> b </w:delText>`
+    // with no attribute, a conformant reader dropped the edge spaces, and REJECTING the
+    // deletion later restored the words with the spacing already gone.
+    node.kind === 'text' || node.kind === 'deletedText' || node.kind === 'instrText'
+      ? normalizedWmlTextAttributes(node.attributes, wmlTextValueOf(node))
+      : node.attributes;
+  validateQNameAttributeValues(elementAttributes, bindings, node.namespaceUri, node.localName);
+  const ownSpace = xmlSpaceValue(elementAttributes);
+  const preserve =
+    ownSpace === 'preserve' ? true : ownSpace === 'default' ? false : inheritedPreserve;
+  const name = controlledQualifiedName(node.namespaceUri, node.localName, prefixes, false);
+  const attributes = sortedAttributes(elementAttributes)
+    .map((attribute) => {
+      const attributeName = controlledQualifiedName(
+        attribute.namespaceUri,
+        attribute.localName,
+        prefixes,
+        true
+      );
+      const value = controlledQNameValue(attribute, node, bindings, prefixes);
+      return ` ${attributeName}="${escapeXmlChecked(value, `attribute ${attributeName}`)}"`;
+    })
+    .join('');
+  const open = `<${name}${rootDeclarations}${declarations}${attributes}`;
+  const children = significantChildren(node, preserve);
+  if (children.length === 0) return `${open}/>`;
+  return `${open}>${children
+    .map((child) => serializeNode(child, prefixes, bindings, preserve, ''))
+    .join('')}</${name}>`;
+}
+
+function formatNamespaceDeclaration(namespaceUri: string, prefix: string): string {
+  if (prefix === '') return ` xmlns="${escapeXmlChecked(namespaceUri, 'xmlns')}"`;
+  return ` xmlns:${prefix}="${escapeXmlChecked(namespaceUri, `namespace ${prefix}`)}"`;
+}
+
+/**
+ * Serialize normalized XML from a canonical part using repository-controlled
+ * prefixes and validated, escaped names and values. This does not yet replace
+ * writeDocx; package integration belongs to the subsequent migration pass.
+ */
+export function serializeOoxmlPart(part: OoxmlPart): string {
+  const prefixes = controlledPrefixMap(part.root);
+  const rootBindings = new Map<string, string>([
+    ['xml', XML_NAMESPACE_URI],
+    ['xmlns', XMLNS_NAMESPACE_URI],
+  ]);
+  const declarationEntries: { namespaceUri: string; prefix: string }[] = [];
+  for (const [namespaceUri, prefix] of prefixes.byUri) {
+    if (namespaceUri === XML_NAMESPACE_URI) continue;
+    declarationEntries.push({ namespaceUri, prefix });
+  }
+  for (const [namespaceUri, prefix] of prefixes.attributeAliases)
+    declarationEntries.push({ namespaceUri, prefix });
+  const declarations = declarationEntries
+    .sort((left, right) => left.prefix.localeCompare(right.prefix))
+    .map(({ namespaceUri, prefix }) => {
+      rootBindings.set(prefix, namespaceUri);
+      return formatNamespaceDeclaration(namespaceUri, prefix);
+    })
+    .join('');
+  return serializeNode(part.root, prefixes, rootBindings, false, declarations);
+}
+
+type FingerprintValue =
+  | readonly ['text', string]
+  | readonly [
+      'element',
+      string,
+      string,
+      readonly (readonly [string, string, string])[],
+      readonly FingerprintValue[],
+    ];
+
+function xmlSpaceValue(attributes: readonly OoxmlAttribute[]): string | undefined {
+  return attributes.find(
+    (attribute) => attribute.namespaceUri === XML_NAMESPACE_URI && attribute.localName === 'space'
+  )?.value;
+}
+
+function significantChildren(node: OoxmlElement, preserve: boolean): readonly OoxmlNode[] {
+  const hasElementChild = node.children.some((child) => child.kind !== 'textValue');
+  const hasNonWhitespaceText = node.children.some(
+    (child) => child.kind === 'textValue' && !/^\s*$/.test(child.value)
+  );
+  return node.children.filter(
+    (child) =>
+      child.kind !== 'textValue' ||
+      preserve ||
+      node.kind === 'text' ||
+      node.kind === 'instrText' ||
+      !hasElementChild ||
+      hasNonWhitespaceText ||
+      !/^\s*$/.test(child.value)
+  );
+}
+
+function fingerprintNode(
+  node: OoxmlNode,
+  inheritedPreserve: boolean,
+  inheritedBindings: ReadonlyMap<string, string>
+): FingerprintValue {
+  if (node.kind === 'textValue') return ['text', node.value];
+  const bindings = new Map(inheritedBindings);
+  for (const binding of node.namespaceBindings) bindings.set(binding.prefix, binding.namespaceUri);
+  const elementAttributes =
+    // `w:delText` is `CT_Text` exactly as `w:t` is (§17.3.3.7), so it needs the same
+    // `xml:space` normalization. Without it, striking " b " wrote `<w:delText> b </w:delText>`
+    // with no attribute, a conformant reader dropped the edge spaces, and REJECTING the
+    // deletion later restored the words with the spacing already gone.
+    node.kind === 'text' || node.kind === 'deletedText' || node.kind === 'instrText'
+      ? normalizedWmlTextAttributes(node.attributes, wmlTextValueOf(node))
+      : node.attributes;
+  const ownSpace = xmlSpaceValue(elementAttributes);
+  const preserve =
+    ownSpace === 'preserve' ? true : ownSpace === 'default' ? false : inheritedPreserve;
+  const attributes = sortedAttributes(elementAttributes).map(
+    (attribute) =>
+      [
+        attribute.namespaceUri,
+        attribute.localName,
+        canonicalQNameAttributeValue(attribute, bindings, node.namespaceUri, node.localName),
+      ] as const
+  );
+  const children = significantChildren(node, preserve).map((child) =>
+    fingerprintNode(child, preserve, bindings)
+  );
+  return ['element', node.namespaceUri, node.localName, attributes, children];
+}
+
+/** Default namespace bindings for fingerprinting a subtree in isolation. */
+export const DEFAULT_FINGERPRINT_BINDINGS = new Map<string, string>([
+  ['xml', XML_NAMESPACE_URI],
+  ['xmlns', XMLNS_NAMESPACE_URI],
+]);
+
+/** Repository-owned namespace-aware semantic XML oracle. */
+export function canonicalOoxmlFingerprintWithBindings(
+  value: OoxmlPart | OoxmlNode,
+  inheritedBindings: ReadonlyMap<string, string> = DEFAULT_FINGERPRINT_BINDINGS
+): string {
+  return JSON.stringify(
+    fingerprintNode('root' in value ? value.root : value, false, inheritedBindings)
+  );
+}
+
+/** Repository-owned namespace-aware semantic XML oracle. */
+export function canonicalOoxmlFingerprint(value: OoxmlPart | OoxmlNode): string {
+  return canonicalOoxmlFingerprintWithBindings(value);
+}
+
+/**
+ * Structural equality of two canonical trees, ignoring node ids.
+ *
+ * Ids differ between two parses of the same bytes, so comparing them would report every reopen as
+ * a change. This compares what the document SAYS.
+ */
+export function ooxmlTreesEqual(
+  left: OoxmlPart | OoxmlNode,
+  right: OoxmlPart | OoxmlNode
+): boolean {
+  return canonicalOoxmlFingerprint(left) === canonicalOoxmlFingerprint(right);
+}

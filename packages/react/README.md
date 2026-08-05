@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://www.docx-editor.dev/">
-    <img src="https://raw.githubusercontent.com/eigenpal/docx-editor/main/.github/assets/header.png" alt="DOCX Editor — .docx in, .docx out. Open source, agent ready, client-side." width="500" />
+    <img src="https://raw.githubusercontent.com/eigenpal/docx-editor/main/.github/assets/header.png" alt="DOCX Editor — .docx in, .docx out. Open source, client-side." width="500" />
   </a>
 </p>
 
@@ -14,13 +14,19 @@
 
 # @docx-editor.dev/react
 
-React adapter for the [docx-editor](https://docx-editor.dev). WYSIWYG `.docx` editing with canonical OOXML, tracked changes, comments, real-time collaboration, and an AI agent bridge.
+WYSIWYG `.docx` editor for React. Opens a Word file in the browser, paints the real paginated
+layout, edits it in place, and writes a `.docx` back out. No upload service, no conversion
+backend: parsing and serialization both happen client-side.
 
-## Quick Start
+**It is lossless.** Everything you do not edit comes back byte for byte, including the parts
+the editor does not understand: custom XML, embedded fonts, macros, unknown extensions. Two
+oracles gate that in CI, so opening a document here cannot quietly destroy it.
 
 ```bash
 npm install @docx-editor.dev/react
 ```
+
+## Quick start
 
 ```tsx
 import { useState } from 'react';
@@ -28,112 +34,107 @@ import { DocxEditor } from '@docx-editor.dev/react';
 import '@docx-editor.dev/react/styles.css';
 
 export function App() {
-  const [buffer, setBuffer] = useState<ArrayBuffer | null>(null);
+  const [doc, setDoc] = useState<Uint8Array>();
 
   return (
-    <>
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <input
         type="file"
         accept=".docx"
-        onChange={async (e) => setBuffer((await e.target.files?.[0]?.arrayBuffer()) ?? null)}
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          setDoc(file ? new Uint8Array(await file.arrayBuffer()) : undefined);
+        }}
       />
-      {buffer && <DocxEditor documentBuffer={buffer} mode="editing" />}
-    </>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        {doc && <DocxEditor document={doc} mode="edit" />}
+      </div>
+    </div>
   );
 }
 ```
 
-> **Next.js / SSR:** Use dynamic import. The editor requires the DOM.
+`<DocxEditor>` is the batteries-included host: title bar, menu, toolbar, navigation pane,
+context menu, and the painted document. Two things catch people out: it fills its parent, so
+give it a box with a real height, and the stylesheet import is required once.
 
-## Start with a blank document
+> **Next.js / SSR:** the editor measures text in the DOM at mount, so render it client-side
+> (`dynamic(..., { ssr: false })`).
 
-Skip the file picker for new documents. `createEmptyDocument` returns a fresh `Document` model you can pass straight to the editor:
+## Build your own UI
 
-```tsx
-import { DocxEditor, createEmptyDocument } from '@docx-editor.dev/react';
-import '@docx-editor.dev/react/styles.css';
-
-const doc = createEmptyDocument();
-// Or with options:
-// createEmptyDocument({ initialText: 'Untitled', pageWidth: 12240 })
-
-<DocxEditor document={doc} mode="editing" />;
-```
-
-`createDocumentWithText(text, options?)` is the same idea with a starting paragraph already typed. Both helpers are re-exported from `@docx-editor.dev/core` so you don't need a separate dependency.
-
-## Customize File > Open
-
-By default, the built-in `File > Open` item and Cmd/Ctrl+O prompt for a `.docx` file and load it into the local editor view. Pass `onOpen` to keep the native file picker but route the selected `File` through your own import pipeline instead:
+The packaged chrome is one arrangement of parts that are all public. There is no private API
+behind it. Every packaged control is a consumer of the same hooks you would use.
 
 ```tsx
-<DocxEditor
-  document={doc}
-  externalContent
-  externalPlugins={plugins}
-  onOpen={async (file) => {
-    await importIntoBackend(file);
-  }}
-/>
+import { DocxEditor, useEditorCommand } from '@docx-editor.dev/react';
+
+function BoldButton() {
+  const bold = useEditorCommand('text.bold');
+  return (
+    <button
+      onMouseDown={(e) => e.preventDefault()} // chrome must not steal the caret
+      onClick={() => bold.execute()}
+      disabled={!bold.isEnabled}
+      data-active={bold.isActive || undefined}
+    >
+      B
+    </button>
+  );
+}
+
+export function Editor({ bytes }: { bytes: Uint8Array }) {
+  return (
+    <DocxEditor.Root document={bytes}>
+      <BoldButton />
+      <DocxEditor.Viewport>
+        <DocxEditor.Content />
+      </DocxEditor.Viewport>
+    </DocxEditor.Root>
+  );
+}
 ```
 
-Set `showFileOpen={false}` to hide the built-in Open item and leave Cmd/Ctrl+O for your own menu or toolbar.
+`Root` owns the editor instance, `Viewport` is the scroll container, `Content` is where pages
+are painted. Everything else — toolbar, menu, rulers, navigation, link popover, context menu —
+is optional and placed by name.
 
-## Packages
+The customization ladder, in order: `className` and `data-active` → the `icon` prop →
+`asChild` (merge behavior onto your own element) → in-place slot override (`hidden`,
+`preset={false}`) → the hooks.
 
-| Package                                                                            | Description                                                                                                                                |
-| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`@docx-editor.dev/react`](https://www.npmjs.com/package/@docx-editor.dev/react)   | <img src="https://cdn.simpleicons.org/react/61DAFB" width="20" align="middle" /> &nbsp; React adapter. Toolbar, paged editor, plugins.     |
-| [`@docx-editor.dev/vue`](https://www.npmjs.com/package/@docx-editor.dev/vue)       | <img src="https://cdn.simpleicons.org/vuedotjs/4FC08D" width="20" align="middle" /> &nbsp; Vue 3 adapter. Toolbar, paged editor, plugins.  |
-| [`@docx-editor.dev/core`](https://www.npmjs.com/package/@docx-editor.dev/core)     | Framework-agnostic core: OOXML parser, serializer, layout engine, ProseMirror schema. Depend on this if you fork the React or Vue adapter. |
-| [`@docx-editor.dev/i18n`](https://www.npmjs.com/package/@docx-editor.dev/i18n)     | Shared locale strings and types consumed by both adapters.                                                                                 |
-| [`@docx-editor.dev/agents`](https://www.npmjs.com/package/@docx-editor.dev/agents) | Agent SDK and chat UI: framework-agnostic bridge, MCP server, AI SDK adapters, plus React UI.                                              |
+## Hooks
 
-> **Forking the adapter?** Keep your fork thin. Depend on `@docx-editor.dev/core` directly so parser, serializer, and rendering fixes land in your build automatically, without backporting each upstream change by hand.
+| Hook                                           | What it gives you                                    |
+| ---------------------------------------------- | ---------------------------------------------------- |
+| `useEditorCommand(slot)`                       | `execute`, `isActive`, `isEnabled`, `disabledReason` |
+| `useEditorState(selector)`                     | A memoized slice of the editor snapshot              |
+| `useDocxEditor()`                              | The editor instance, or `null` before mount          |
+| `useEditorEvent(event, fn)`                    | `change`, `selectionChange`, `error`                 |
+| `useFontFamily()` / `useParagraphStyle()`      | Value controls: current value, options, setter       |
+| `usePageSetup()`                               | Margins, orientation, paper size                     |
+| `useDocumentOutline()` / `useDocumentSearch()` | The navigation pane, headless                        |
+| `useContentControl()`                          | Word content controls at the caret                   |
 
-## Imperative mounting
+Enabled state has exactly one source. A control that hardcodes `disabled` will drift from the
+engine. Read `isEnabled` and show `disabledReason`.
 
-```ts
-import { renderAsync } from '@docx-editor.dev/react';
+## Companion packages
 
-const editor = await renderAsync(file, document.getElementById('editor')!, { mode: 'editing' });
-await editor.save();
-editor.destroy();
-```
+- [`@docx-editor.dev/pro`](https://www.npmjs.com/package/@docx-editor.dev/pro) — tracked
+  changes, comments, custom nodes
+- [`@docx-editor.dev/editor-api`](https://www.npmjs.com/package/@docx-editor.dev/editor-api) —
+  Office.js-compatible editing API, on a server or against an open editor
+- [`@docx-editor.dev/core`](https://www.npmjs.com/package/@docx-editor.dev/core) — the engine
+  this adapter renders
 
-## Subpaths
+## Documentation
 
-- `@docx-editor.dev/react` — `DocxEditor`, `renderAsync`, public types
-- `@docx-editor.dev/react/ui` — toolbar primitives, pickers, sidebars, dialogs
-- `@docx-editor.dev/react/hooks` — `useAutoSave`, `useTableSelection`, ...
-- `@docx-editor.dev/react/dialogs` — dialog components barrel
-- `@docx-editor.dev/react/plugin-api` — plugin host and plugin-facing types
-- `@docx-editor.dev/react/styles` — style constants (`EDITOR_CSS_PATH`, z-index)
+- [Quickstart](https://www.docx-editor.dev/docs/2.x/quickstart)
+- [Composition](https://www.docx-editor.dev/docs/2.x/react/composition)
+- [Hooks](https://www.docx-editor.dev/docs/2.x/react/hooks)
+- [Props and ref](https://www.docx-editor.dev/docs/2.x/react/props)
 
-## Plugins
+## License
 
-```tsx
-import { DocxEditor } from '@docx-editor.dev/react';
-import { PluginHost, templatePlugin } from '@docx-editor.dev/react/plugin-api';
-
-<PluginHost plugins={[templatePlugin]}>
-  <DocxEditor documentBuffer={buffer} />
-</PluginHost>;
-```
-
-## Component API
-
-Full props and ref reference: **[docx-editor.dev/docs/props](https://www.docx-editor.dev/docs/props)**. `DocxEditor` and `DocxEditorRef` mirror the Vue adapter, so docs apply with just the import path swapped.
-
-`@docx-editor.dev/core` is installed transitively. Add it to your `package.json` only if your own code imports core APIs directly. Strict installers like pnpm with peer auto-install disabled may also need the ProseMirror peers listed in `package.json`.
-
-Examples: [Vite](https://github.com/eigenpal/docx-editor/tree/main/examples/vite) · [Next.js](https://github.com/eigenpal/docx-editor/tree/main/examples/nextjs) · [Remix](https://github.com/eigenpal/docx-editor/tree/main/examples/remix) · [Astro](https://github.com/eigenpal/docx-editor/tree/main/examples/astro)
-
-## Contributing
-
-Contributions welcome. See [CONTRIBUTING.md](https://github.com/eigenpal/docx-editor/blob/main/CONTRIBUTING.md) for setup, tests, and the one-time CLA signature.
-
-## Commercial Support
-
-> [!TIP]
-> Questions or custom features? Email **[docx-editor@eigenpal.com](mailto:docx-editor@eigenpal.com)**.
+Apache-2.0

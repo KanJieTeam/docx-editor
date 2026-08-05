@@ -45,7 +45,9 @@
     "watermark": "水印",
     "break": null,
     "sectionBreakContinuous": null,
-    "sectionBreakNextPage": null
+    "sectionBreakNextPage": null,
+    "insertFootnote": "插入脚注",
+    "insertEndnote": "插入尾注"
   },
   "formattingBar": {
     "groups": {
@@ -58,7 +60,9 @@
       "alignment": "对齐",
       "listFormatting": "列表格式",
       "image": "图片",
-      "table": "表格"
+      "table": "表格",
+      "insert": "插入",
+      "contentControl": "内容控件"
     },
     "undo": "撤销",
     "undoShortcut": "撤销(Ctrl+Z)",
@@ -83,7 +87,11 @@
     "imagePropertiesShortcut": "图片属性(替代文本、边框)...",
     "clearFormatting": "清除格式",
     "commentsAndChanges": null,
-    "moreItems": null
+    "moreItems": null,
+    "unavailableInPreview": null,
+    "more": null,
+    "altText": null,
+    "imageWrap": null
   },
   "alignment": {
     "alignLeft": "左对齐",
@@ -109,7 +117,11 @@
     "double": "双倍行距",
     "lineSpacingTitle": "行距: {label}",
     "blockSpacingRules": "段间距",
-    "label": null
+    "label": null,
+    "addSpaceAfter": null,
+    "addSpaceBefore": null,
+    "removeSpaceAfter": null,
+    "removeSpaceBefore": null
   },
   "styles": {
     "selectAriaLabel": "选择段落样式",
@@ -191,7 +203,39 @@
       "lightBlue2": "浅蓝 2",
       "lightMagenta": "浅品红",
       "brightGreen": "亮绿",
-      "violet": "紫罗兰色"
+      "violet": "紫罗兰色",
+      "darkCyan": null,
+      "darkMagenta": null,
+      "lightGray": null
+    },
+    "apply": null,
+    "theme": {
+      "accent1": null,
+      "accent2": null,
+      "accent3": null,
+      "accent4": null,
+      "accent5": null,
+      "accent6": null,
+      "background1": null,
+      "background2": null,
+      "darker25": null,
+      "darker50": null,
+      "lighter40": null,
+      "lighter60": null,
+      "lighter80": null,
+      "text1": null,
+      "text2": null,
+      "lighter50": null,
+      "lighter35": null,
+      "lighter25": null,
+      "lighter15": null,
+      "lighter5": null,
+      "darker5": null,
+      "darker10": null,
+      "darker15": null,
+      "darker35": null,
+      "darker75": null,
+      "darker90": null
     }
   },
   "dialogs": {
@@ -380,7 +424,10 @@
         "a5": "A5 (5.83\" × 8.27\")",
         "b5": "B5 (6.93\" × 9.84\")",
         "executive": "Executive (7.25\" × 10.5\")"
-      }
+      },
+      "applyTo": null,
+      "applyToDocument": null,
+      "applyToSection": null
     },
     "tableProperties": {
       "title": "表格属性",
@@ -610,7 +657,9 @@
       "makeCasual": "口语化",
       "custom": "自定义"
     },
-    "updateTableOfContents": "更新目录"
+    "updateTableOfContents": "更新目录",
+    "editCustomNode": null,
+    "removeCustomNode": null
   },
   "documentOutline": {
     "ariaLabel": "文档大纲",
@@ -689,7 +738,23 @@
       "gridTable4Accent5": "网格表 4 强调色 5",
       "gridTable4Accent6": "网格表 4 强调色 6"
     },
-    "selectTable": null
+    "selectTable": null,
+    "borderStyles": {
+      "dashed": null,
+      "dotted": null,
+      "double": null,
+      "single": null,
+      "thick": null,
+      "triple": null
+    },
+    "borderWidths": {
+      "halfPt": null,
+      "oneHalfPt": null,
+      "onePt": null,
+      "threePt": null,
+      "twoPt": null
+    },
+    "clearCellFill": null
   },
   "tableAdvanced": {
     "verticalAlignment": "垂直对齐",
@@ -753,7 +818,21 @@
       "inLineWithText": "图像作为字形在行中流动",
       "squareLeft": "图像靠左，文字环绕右侧",
       "squareRight": "图像靠右，文字环绕左侧"
-    }
+    },
+    "square": null,
+    "targets": {
+      "behind": null,
+      "inFront": null,
+      "inline": null,
+      "square": null,
+      "squareLeft": null,
+      "squareRight": null,
+      "through": null,
+      "tight": null,
+      "topAndBottom": null
+    },
+    "through": null,
+    "tight": null
   },
   "responsePreview": {
     "loading": "正在{action}...",
@@ -781,14 +860,24 @@
     "failedToParse": "解析文档失败",
     "linkRemoved": "链接已删除",
     "linkCopied": "链接已复制到剪贴板",
-    "failedToSave": "保存文档失败"
+    "failedToSave": "保存文档失败",
+    "fontSubstitutionNotice": null
   },
   "hyperlinkPopup": {
     "displayTextPlaceholder": "显示文本",
     "urlPlaceholder": "https://example.com",
     "copyLink": "复制链接",
     "editLink": "编辑链接",
-    "removeLink": "删除链接"
+    "removeLink": "删除链接",
+    "apply": null,
+    "bookmarkTarget": null,
+    "cancel": null,
+    "editTitle": null,
+    "inertTarget": null,
+    "insertTitle": null,
+    "openLink": null,
+    "refused": null,
+    "urlLabel": null
   },
   "headerFooter": {
     "header": "页眉",
@@ -797,12 +886,43 @@
     "insertPageNumber": "插入当前页码",
     "insertTotalPages": "插入总页数",
     "remove": "删除 {label}",
-    "closeEditing": "关闭 {label} 编辑"
+    "closeEditing": "关闭 {label} 编辑",
+    "chromeAriaLabel": "页眉页脚编辑",
+    "firstPageHeader": "首页页眉",
+    "firstPageFooter": "首页页脚",
+    "evenPageHeader": "偶数页页眉",
+    "evenPageFooter": "偶数页页脚",
+    "regionSection": "{region} — 第 {section} 节",
+    "sameAsPrevious": "与上一节相同",
+    "sameAsPreviousHint": "编辑也会应用于上一节的页面。",
+    "differentFirstPage": "首页不同",
+    "differentOddEven": "奇偶页不同",
+    "differentOddEvenHint": "应用于整个文档。",
+    "linkToPrevious": "链接到上一节",
+    "unlinkFromPrevious": "取消与上一节的链接",
+    "headerDistance": "页眉距边缘的距离",
+    "footerDistance": "页脚距边缘的距离",
+    "removeHeader": "删除页眉",
+    "removeFooter": "删除页脚",
+    "insertSectionPages": "插入本节页数",
+    "insertPageXofY": "插入第 X 页，共 Y 页",
+    "pageXofYLabel": "第",
+    "pageXofYSeparator": "页，共",
+    "pageNumbers": null
   },
   "image": {
     "placeholder": "图片占位符",
     "placeholderText": "[图片]",
-    "editableAriaLabel": "可编辑图片"
+    "editableAriaLabel": "可编辑图片",
+    "contentMismatch": null,
+    "decodeFailed": null,
+    "externalResource": null,
+    "invalidResource": null,
+    "missingResource": null,
+    "nonPictureGraphic": null,
+    "pendingResource": null,
+    "resourceLimit": null,
+    "unsupportedFormat": null
   },
   "ruler": {
     "horizontal": "水平标尺",
@@ -811,7 +931,8 @@
     "leftIndent": "左缩进",
     "rightIndent": "右缩进",
     "topMargin": "上边距",
-    "bottomMargin": "下边距"
+    "bottomMargin": "下边距",
+    "hangingIndent": null
   },
   "print": {
     "label": "打印",
@@ -830,20 +951,6 @@
   "loading": {
     "label": "正在加载"
   },
-  "agentPanel": {
-    "defaultTitle": "助手",
-    "toggle": "打开助手",
-    "close": "关闭面板",
-    "resizeHandle": "调整助手面板大小",
-    "thinking": "助手正在思考",
-    "composerPlaceholder": "向助手提问…",
-    "send": "发送",
-    "timeline": {
-      "working": "处理中… {count, plural, one {# 步} other {# 步}}",
-      "summary": "{count, plural, one {# 步} other {# 步}}",
-      "earlier": "+ {count, plural, one {# 个历史步骤} other {# 个历史步骤}}"
-    }
-  },
   "viewer": {
     "pageIndicator": "第 {current} 页，共 {total} 页"
   },
@@ -851,7 +958,18 @@
     "deleteImage": "删除图片",
     "imageProperties": "图片属性",
     "rotate": "旋转",
-    "replaceImage": null
+    "replaceImage": null,
+    "handle": {
+      "e": null,
+      "n": null,
+      "ne": null,
+      "nw": null,
+      "s": null,
+      "se": null,
+      "sw": null,
+      "w": null
+    },
+    "selection": null
   },
   "revisions": {
     "cellDeleted": null,
@@ -870,6 +988,171 @@
     "runPropertiesChanged": null
   },
   "toc": {
-    "updatePrompt": null
+    "updatePrompt": null,
+    "refresh": "更新整个目录",
+    "refreshPageNumbers": "仅更新页码"
+  },
+  "app": {
+    "name": null,
+    "newDocument": null,
+    "by": null,
+    "framework": null,
+    "theme": null
+  },
+  "editingMode": {
+    "editing": null,
+    "label": null,
+    "editingHint": null,
+    "suggesting": null,
+    "suggestingHint": null,
+    "viewing": null,
+    "viewingHint": null
+  },
+  "navigation": {
+    "ariaLabel": null,
+    "closeAriaLabel": null,
+    "closeTitle": null,
+    "find": {
+      "clearAriaLabel": null,
+      "counter": null,
+      "counterTruncated": null,
+      "inputAriaLabel": null,
+      "matchCase": null,
+      "nextAriaLabel": null,
+      "noResults": null,
+      "optionsAriaLabel": null,
+      "placeholder": null,
+      "previousAriaLabel": null,
+      "resultsAriaLabel": null,
+      "searching": null,
+      "wholeWord": null,
+      "total": null,
+      "totalTruncated": null
+    },
+    "headings": {
+      "noHeadings": null
+    },
+    "openAriaLabel": null,
+    "openTitle": null,
+    "tabs": {
+      "find": null,
+      "headings": null
+    },
+    "title": null
+  },
+  "contentControl": {
+    "formFill": "表单填写模式",
+    "group": "内容控件",
+    "inspector": "内容控件属性",
+    "inspectorPanel": {
+      "alias": "标题",
+      "bound": "已绑定数据",
+      "boundNote": "此控件已绑定外部数据，无法编辑。",
+      "empty": "—",
+      "lock": "锁定",
+      "lockedNote": "此控件已锁定内容编辑。",
+      "no": "否",
+      "placeholder": "占位符",
+      "tag": "标记",
+      "title": "内容控件",
+      "type": "类型",
+      "yes": "是"
+    },
+    "lock": {
+      "contentLocked": "内容已锁定",
+      "sdtContentLocked": "内容控件和内容均已锁定",
+      "sdtLocked": "内容控件已锁定",
+      "unlocked": "未锁定"
+    },
+    "noControl": "请将光标放在内容控件内",
+    "remove": "删除内容控件",
+    "showAll": "显示内容控件边框",
+    "types": {
+      "checkbox": "复选框",
+      "comboBox": "组合框",
+      "date": "日期",
+      "dropdown": "下拉列表",
+      "picture": "图片",
+      "plainText": "纯文本",
+      "repeatingSection": "重复节",
+      "richText": "格式文本"
+    }
+  },
+  "notes": {
+    "editingBanner": "正在编辑脚注/尾注",
+    "closeNote": "关闭脚注/尾注",
+    "delete": "删除脚注/尾注",
+    "convertToEndnote": "转换为尾注",
+    "convertToFootnote": "转换为脚注",
+    "scope": "应用于",
+    "scopeDocument": "整个文档",
+    "scopeSection": "本节",
+    "previewFallback": "脚注",
+    "chromeAriaLabel": "脚注/尾注编辑",
+    "editingRegion": "{kind} {number}",
+    "footnoteKind": "脚注",
+    "endnoteKind": "尾注",
+    "convertAllFootnotes": "将所有脚注转换为尾注",
+    "convertAllEndnotes": "将所有尾注转换为脚注",
+    "inheritedValue": "（继承）"
+  },
+  "review": {
+    "accept": null,
+    "ariaLabel": null,
+    "commentRefused": null,
+    "deleted": null,
+    "empty": null,
+    "inserted": null,
+    "movedFrom": null,
+    "movedTo": null,
+    "reject": null,
+    "replaced": null,
+    "replacedWith": null,
+    "reply": null,
+    "replyRefused": null,
+    "showPane": null,
+    "structural": null,
+    "deleteComment": null,
+    "discardChange": null
+  },
+  "imageAltText": {
+    "description": null,
+    "panelTitle": null,
+    "title": null
+  },
+  "imageInsert": {
+    "errors": {
+      "emptyFile": null,
+      "invalidSignature": null,
+      "oversize": null,
+      "refused": null,
+      "unsupportedFormat": null
+    }
+  },
+  "imageProperties": {
+    "crop": null,
+    "cropBottom": null,
+    "cropLeft": null,
+    "cropRight": null,
+    "cropTop": null,
+    "errors": {
+      "invalidCrop": null,
+      "invalidDimensions": null,
+      "refused": null,
+      "invalidPosition": null
+    },
+    "hyperlink": null,
+    "nonPictureHint": null,
+    "resetNaturalSize": null,
+    "units": {
+      "points": null
+    },
+    "horizontalOffset": null,
+    "position": null,
+    "positionLocked": null,
+    "positionUnavailable": null,
+    "relativeToHorizontal": null,
+    "relativeToVertical": null,
+    "verticalOffset": null
   }
 }

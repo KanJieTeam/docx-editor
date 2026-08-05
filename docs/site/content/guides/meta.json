@@ -2,13 +2,12 @@
   "title": "Guides",
   "pages": [
     "loading-and-saving",
-    "tracked-changes",
-    "comments",
+    "toolbar",
     "content-controls",
     "headers-footers",
+    "images",
     "custom-styles",
-    "toolbar",
-    "dark-mode",
-    "headless-processing"
+    "fonts",
+    "dark-mode"
   ]
 }

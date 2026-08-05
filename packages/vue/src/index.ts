@@ -1,15 +1,9 @@
 /**
  * @docx-editor.dev/vue
  *
- * Curated root entry for the documented Vue 3 editor API. Advanced surfaces
- * stay public through explicit subpaths:
- * - `@docx-editor.dev/vue/ui`
- * - `@docx-editor.dev/vue/dialogs`
- * - `@docx-editor.dev/vue/composables`
- * - `@docx-editor.dev/vue/plugin-api`
- *
- * Framework-agnostic document utilities live in `@docx-editor.dev/core`.
- * Agent/MCP surfaces live in `@docx-editor.dev/agents`.
+ * Vue 3 adapter for the DOCX editor. A thin renderer over the `Editor`
+ * contract from `@docx-editor.dev/core`: it supplies DOM and paints
+ * the engine's positioned display list, and holds no editing-engine state.
  *
  * @packageDocumentation
  * @public
@@ -17,27 +11,81 @@
 
 export const VERSION = '0.0.2';
 
-// Main editor contract
-export { default as DocxEditor } from './components/DocxEditor';
-export type { DocxEditorProps, EditorMode } from './components/DocxEditor/types';
-
-// Document factory helpers — re-exported from `@docx-editor.dev/core` so
-// the common "spawn a blank editor" affordance is available without forcing
-// consumers to add `-core` to their dependency tree alongside `-vue`.
+export { default as DocxEditor } from './DocxEditor';
+export { PaginatedDocxEditor } from './components/PaginatedDocxEditor';
+export type {
+  PaginatedDocxEditorExpose,
+  PaginatedDocxEditorHandle,
+  PaginatedDocxEditorProps,
+} from './components/PaginatedDocxEditor';
+export { EditorFontError } from './types';
+export type {
+  DocxEditorProps,
+  DocxEditorRef,
+  EditorMode,
+  EditorFontErrorCode,
+  FontConfiguration,
+  FontFaceRequest,
+  FontSource,
+  FontSourceSubstitution,
+} from './types';
+// The font-composition surface, re-exported so the 80% path (fonts package + adapter)
+// never needs a core import. Paired with the React barrel.
 export {
-  createEmptyDocument,
-  createDocumentWithText,
-  type CreateEmptyDocumentOptions,
-} from '@docx-editor.dev/core';
+  MAX_RESOLVER_FAMILIES,
+  WORD_DEFAULT_FONT,
+  composeFontConfiguration,
+  createFontSource,
+  loadFonts,
+  type FontConfigurationBase,
+  type FontConfigurationFragment,
+  type FontLoadFailure,
+  type FontLoadFailureReason,
+  type FontResolutionRequest,
+  type FontResolver,
+  type FontUrlSource,
+  type LoadFontsRequest,
+  type LoadFontsResult,
+} from '@docx-editor.dev/core/editor';
 
-// i18n contract — runtime only. Locale string types (LocaleStrings,
-// Translations, PartialLocaleStrings, TranslationKey) live in
-// `@docx-editor.dev/i18n`; import them from there.
-export { useTranslation, provideLocale, i18nPlugin, defaultLocale } from './i18n';
-
-// renderAsync
-export { renderAsync } from './renderAsync';
-export type { DocxEditorHandle, RenderAsyncOptions } from './renderAsync';
-
-// Public ref shape (typecheck contract with EditorRefLike — Decision 10).
-export type { DocxEditorRef } from './components/DocxEditor/types';
+// Re-export the contract types a consumer needs to drive the editor.
+export type {
+  Editor,
+  EditorCommand,
+  EditorQuery,
+  EditorSnapshot,
+  EditorScope,
+  PageSetup,
+} from '@docx-editor.dev/core/contracts/editor';
+export type { DocxDocument } from '@docx-editor.dev/core/contracts/types';
+export { default as DocxEditorShell, type DocxEditorShellProps } from './DocxEditorShell';
+export { default as DocxEditorTitleBar, type DocxEditorTitleBarProps } from './DocxEditorTitleBar';
+export { default as DocxEditorToolbar, type DocxEditorToolbarProps } from './DocxEditorToolbar';
+export { default as PageIndicator, type PageIndicatorProps } from './PageIndicator';
+export { default as HorizontalRuler, type HorizontalRulerProps } from './HorizontalRuler';
+export { default as VerticalRuler, RULER_WIDTH, type VerticalRulerProps } from './VerticalRuler';
+export {
+  default as DocxEditorSidebar,
+  DEFERRED_DIALOGS,
+  type DocxEditorSidebarProps,
+  type SidebarPanel,
+  type DeferredDialogId,
+} from './DocxEditorSidebar';
+export { useEditorSnapshot } from './useEditorSnapshot';
+// The shared engine helpers both adapters expose, so the two package surfaces
+// match (enforced by `bun run check:export-parity`).
+export {
+  commandForSlot,
+  runSave,
+  runToolbarCommand,
+  toolbarCommandState,
+  toolbarCommandStates,
+  type ChromeSlotId,
+  type ToolbarCommandState,
+  generateRulerTicks,
+  rulerPageBox,
+  PX_PER_INCH,
+  PX_PER_CM,
+  type RulerTick,
+  type RulerUnit,
+} from '@docx-editor.dev/core/editor';

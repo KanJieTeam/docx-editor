@@ -45,7 +45,9 @@
     "watermark": "वॉटरमार्क",
     "break": null,
     "sectionBreakContinuous": null,
-    "sectionBreakNextPage": null
+    "sectionBreakNextPage": null,
+    "insertFootnote": "फ़ुटनोट डालें",
+    "insertEndnote": "एंडनोट डालें"
   },
   "formattingBar": {
     "groups": {
@@ -58,7 +60,9 @@
       "alignment": "संरेखण",
       "listFormatting": "सूची प्रारूपण",
       "image": "चित्र",
-      "table": "तालिका"
+      "table": "तालिका",
+      "insert": "सम्मिलित करें",
+      "contentControl": "सामग्री नियंत्रण"
     },
     "undo": "पूर्ववत करें",
     "undoShortcut": "पूर्ववत करें (Ctrl+Z)",
@@ -83,7 +87,11 @@
     "imagePropertiesShortcut": "चित्र की विशेषताएँ (ऑल्ट टेक्स्ट, बॉर्डर)...",
     "clearFormatting": "प्रारूपण साफ करें",
     "commentsAndChanges": null,
-    "moreItems": null
+    "moreItems": null,
+    "unavailableInPreview": null,
+    "more": null,
+    "altText": null,
+    "imageWrap": null
   },
   "alignment": {
     "alignLeft": "बाएं संरेखित करें",
@@ -109,7 +117,11 @@
     "double": "दुगुना",
     "lineSpacingTitle": "लाइन स्पेसिंग: {label}",
     "blockSpacingRules": "पैराग्राफ स्पेसिंग",
-    "label": null
+    "label": null,
+    "addSpaceAfter": null,
+    "addSpaceBefore": null,
+    "removeSpaceAfter": null,
+    "removeSpaceBefore": null
   },
   "styles": {
     "selectAriaLabel": "पैराग्राफ शैली चुनें",
@@ -191,7 +203,39 @@
       "lightBlue2": "हल्का नीला 2",
       "lightMagenta": "हल्का मैजेंटा",
       "brightGreen": "चमकीला हरा",
-      "violet": "बैंगनी"
+      "violet": "बैंगनी",
+      "darkCyan": null,
+      "darkMagenta": null,
+      "lightGray": null
+    },
+    "apply": null,
+    "theme": {
+      "accent1": null,
+      "accent2": null,
+      "accent3": null,
+      "accent4": null,
+      "accent5": null,
+      "accent6": null,
+      "background1": null,
+      "background2": null,
+      "darker25": null,
+      "darker50": null,
+      "lighter40": null,
+      "lighter60": null,
+      "lighter80": null,
+      "text1": null,
+      "text2": null,
+      "lighter50": null,
+      "lighter35": null,
+      "lighter25": null,
+      "lighter15": null,
+      "lighter5": null,
+      "darker5": null,
+      "darker10": null,
+      "darker15": null,
+      "darker35": null,
+      "darker75": null,
+      "darker90": null
     }
   },
   "dialogs": {
@@ -380,7 +424,10 @@
         "a5": "A5 (5.83\" × 8.27\")",
         "b5": "B5 (6.93\" × 9.84\")",
         "executive": "Executive (7.25\" × 10.5\")"
-      }
+      },
+      "applyTo": null,
+      "applyToDocument": null,
+      "applyToSection": null
     },
     "tableProperties": {
       "title": "तालिका की विशेषताएँ",
@@ -610,7 +657,9 @@
       "makeCasual": "अनौपचारिक बनाएं",
       "custom": "कस्टम"
     },
-    "updateTableOfContents": "विषय-सूची अपडेट करें"
+    "updateTableOfContents": "विषय-सूची अपडेट करें",
+    "editCustomNode": null,
+    "removeCustomNode": null
   },
   "documentOutline": {
     "ariaLabel": "दस्तावेज़ की रूपरेखा",
@@ -692,7 +741,23 @@
       "gridTable4Accent5": "ग्रिड तालिका 4 एक्सेंट 5",
       "gridTable4Accent6": "ग्रिड तालिका 4 एक्सेंट 6"
     },
-    "selectTable": null
+    "selectTable": null,
+    "borderStyles": {
+      "dashed": null,
+      "dotted": null,
+      "double": null,
+      "single": null,
+      "thick": null,
+      "triple": null
+    },
+    "borderWidths": {
+      "halfPt": null,
+      "oneHalfPt": null,
+      "onePt": null,
+      "threePt": null,
+      "twoPt": null
+    },
+    "clearCellFill": null
   },
   "tableAdvanced": {
     "verticalAlignment": "लंबवत संरेखण",
@@ -756,7 +821,21 @@
       "squareRight": "चित्र दाईं ओर तैरता है, पाठ बाईं ओर लपेटता है",
       "behindText": "चित्र मुख्य टेक्स्ट के पीछे पेंट करता है",
       "inFrontOfText": "चित्र मुख्य टेक्स्ट के ऊपर पेंट करता है"
-    }
+    },
+    "square": null,
+    "targets": {
+      "behind": null,
+      "inFront": null,
+      "inline": null,
+      "square": null,
+      "squareLeft": null,
+      "squareRight": null,
+      "through": null,
+      "tight": null,
+      "topAndBottom": null
+    },
+    "through": null,
+    "tight": null
   },
   "responsePreview": {
     "loading": "{action}...",
@@ -784,14 +863,24 @@
     "failedToParse": "दस्तावेज़ का विश्लेषण करने में विफल",
     "linkRemoved": "लिंक हटा दिया गया",
     "linkCopied": "लिंक क्लिपबोर्ड पर कॉपी किया गया",
-    "failedToSave": "दस्तावेज़ सहेजने में विफल"
+    "failedToSave": "दस्तावेज़ सहेजने में विफल",
+    "fontSubstitutionNotice": null
   },
   "hyperlinkPopup": {
     "displayTextPlaceholder": "दिखाया जाने वाला टेक्स्ट",
     "urlPlaceholder": "https://example.com",
     "copyLink": "लिंक कॉपी करें",
     "editLink": "लिंक संपादित करें",
-    "removeLink": "लिंक हटाएं"
+    "removeLink": "लिंक हटाएं",
+    "apply": null,
+    "bookmarkTarget": null,
+    "cancel": null,
+    "editTitle": null,
+    "inertTarget": null,
+    "insertTitle": null,
+    "openLink": null,
+    "refused": null,
+    "urlLabel": null
   },
   "headerFooter": {
     "header": "हेडर",
@@ -800,18 +889,60 @@
     "insertPageNumber": "वर्तमान पेज नंबर डालें",
     "insertTotalPages": "कुल पेज संख्या डालें",
     "remove": "{label} हटाएं",
-    "closeEditing": "{label} संपादन बंद करें"
+    "closeEditing": "{label} संपादन बंद करें",
+    "chromeAriaLabel": "हेडर और फ़ुटर संपादन",
+    "firstPageHeader": "पहले पृष्ठ का हेडर",
+    "firstPageFooter": "पहले पृष्ठ का फ़ुटर",
+    "evenPageHeader": "सम पृष्ठ का हेडर",
+    "evenPageFooter": "सम पृष्ठ का फ़ुटर",
+    "regionSection": "{region} — अनुभाग {section}",
+    "sameAsPrevious": "पिछले जैसा",
+    "sameAsPreviousHint": "संपादन पिछले अनुभाग के पृष्ठों पर भी लागू होते हैं।",
+    "differentFirstPage": "अलग पहला पृष्ठ",
+    "differentOddEven": "अलग विषम और सम पृष्ठ",
+    "differentOddEvenHint": "पूरे दस्तावेज़ पर लागू होता है।",
+    "linkToPrevious": "पिछले से लिंक करें",
+    "unlinkFromPrevious": "पिछले से अनलिंक करें",
+    "headerDistance": "हेडर की दूरी किनारे से",
+    "footerDistance": "फ़ुटर की दूरी किनारे से",
+    "removeHeader": "हेडर हटाएं",
+    "removeFooter": "फ़ुटर हटाएं",
+    "insertSectionPages": "अनुभाग पृष्ठ संख्या डालें",
+    "insertPageXofY": "पृष्ठ X of Y डालें",
+    "pageXofYLabel": "पृष्ठ",
+    "pageXofYSeparator": "में से",
+    "pageNumbers": null
   },
   "image": {
     "placeholder": "चित्र प्लेसहोल्डर",
     "placeholderText": "[चित्र]",
-    "editableAriaLabel": "संपादित करने योग्य चित्र"
+    "editableAriaLabel": "संपादित करने योग्य चित्र",
+    "contentMismatch": null,
+    "decodeFailed": null,
+    "externalResource": null,
+    "invalidResource": null,
+    "missingResource": null,
+    "nonPictureGraphic": null,
+    "pendingResource": null,
+    "resourceLimit": null,
+    "unsupportedFormat": null
   },
   "imageOverlay": {
     "rotate": "घुमाएं",
     "imageProperties": "चित्र की विशेषताएँ",
     "deleteImage": "चित्र हटाएं",
-    "replaceImage": null
+    "replaceImage": null,
+    "handle": {
+      "e": null,
+      "n": null,
+      "ne": null,
+      "nw": null,
+      "s": null,
+      "se": null,
+      "sw": null,
+      "w": null
+    },
+    "selection": null
   },
   "ruler": {
     "horizontal": "क्षैतिज रूलर",
@@ -820,7 +951,8 @@
     "leftIndent": "बायां इंडेंट",
     "rightIndent": "दायां इंडेंट",
     "topMargin": "शीर्ष मार्जिन",
-    "bottomMargin": "तल मार्जिन"
+    "bottomMargin": "तल मार्जिन",
+    "hangingIndent": null
   },
   "print": {
     "label": "प्रिंट करें",
@@ -839,20 +971,6 @@
   "loading": {
     "label": "लोड हो रहा है"
   },
-  "agentPanel": {
-    "defaultTitle": "सहायक",
-    "toggle": "सहायक खोलें",
-    "close": "पैनल बंद करें",
-    "resizeHandle": "सहायक पैनल का आकार बदलें",
-    "thinking": "सहायक सोच रहा है...",
-    "composerPlaceholder": "सहायक से पूछें…",
-    "send": "भेजें",
-    "timeline": {
-      "working": "काम चल रहा है… {count, plural, one {# चरण} other {# चरण}}",
-      "summary": "{count, plural, one {# चरण} other {# चरण}}",
-      "earlier": "+ {count, plural, one {# पूर्व चरण} other {# पूर्व चरण}}"
-    }
-  },
   "revisions": {
     "cellDeleted": null,
     "cellInserted": null,
@@ -870,6 +988,171 @@
     "runPropertiesChanged": null
   },
   "toc": {
-    "updatePrompt": null
+    "updatePrompt": null,
+    "refresh": "पूरी तालिका अपडेट करें",
+    "refreshPageNumbers": "केवल पृष्ठ संख्याएँ अपडेट करें"
+  },
+  "app": {
+    "name": null,
+    "newDocument": null,
+    "by": null,
+    "framework": null,
+    "theme": null
+  },
+  "editingMode": {
+    "editing": null,
+    "label": null,
+    "editingHint": null,
+    "suggesting": null,
+    "suggestingHint": null,
+    "viewing": null,
+    "viewingHint": null
+  },
+  "navigation": {
+    "ariaLabel": null,
+    "closeAriaLabel": null,
+    "closeTitle": null,
+    "find": {
+      "clearAriaLabel": null,
+      "counter": null,
+      "counterTruncated": null,
+      "inputAriaLabel": null,
+      "matchCase": null,
+      "nextAriaLabel": null,
+      "noResults": null,
+      "optionsAriaLabel": null,
+      "placeholder": null,
+      "previousAriaLabel": null,
+      "resultsAriaLabel": null,
+      "searching": null,
+      "wholeWord": null,
+      "total": null,
+      "totalTruncated": null
+    },
+    "headings": {
+      "noHeadings": null
+    },
+    "openAriaLabel": null,
+    "openTitle": null,
+    "tabs": {
+      "find": null,
+      "headings": null
+    },
+    "title": null
+  },
+  "contentControl": {
+    "formFill": "फ़ॉर्म भरने का मोड",
+    "group": "सामग्री नियंत्रण",
+    "inspector": "सामग्री नियंत्रण की विशेषताएँ",
+    "inspectorPanel": {
+      "alias": "शीर्षक",
+      "bound": "डेटा बाध्य",
+      "boundNote": "यह नियंत्रण बाहरी डेटा से बाध्य है। संपादन अस्वीकार कर दिया गया।",
+      "empty": "—",
+      "lock": "लॉक",
+      "lockedNote": "इस नियंत्रण पर सामग्री संपादन लॉक है।",
+      "no": "नहीं",
+      "placeholder": "प्लेसहोल्डर",
+      "tag": "टैग",
+      "title": "सामग्री नियंत्रण",
+      "type": "प्रकार",
+      "yes": "हाँ"
+    },
+    "lock": {
+      "contentLocked": "सामग्री लॉक है",
+      "sdtContentLocked": "सामग्री नियंत्रण और सामग्री लॉक हैं",
+      "sdtLocked": "सामग्री नियंत्रण लॉक है",
+      "unlocked": "अनलॉक"
+    },
+    "noControl": "कर्सर को सामग्री नियंत्रण के अंदर रखें",
+    "remove": "सामग्री नियंत्रण हटाएँ",
+    "showAll": "सामग्री नियंत्रण की सीमाएँ दिखाएँ",
+    "types": {
+      "checkbox": "चेक बॉक्स",
+      "comboBox": "कॉम्बो बॉक्स",
+      "date": "दिनांक",
+      "dropdown": "ड्रॉपडाउन सूची",
+      "picture": "चित्र",
+      "plainText": "सादा पाठ",
+      "repeatingSection": "दोहराया जाने वाला अनुभाग",
+      "richText": "रिच टेक्स्ट"
+    }
+  },
+  "notes": {
+    "editingBanner": "नोट संपादित कर रहे हैं",
+    "closeNote": "नोट बंद करें",
+    "delete": "नोट हटाएं",
+    "convertToEndnote": "एंडनोट में बदलें",
+    "convertToFootnote": "फ़ुटनोट में बदलें",
+    "scope": "लागू करें",
+    "scopeDocument": "पूरा दस्तावेज़",
+    "scopeSection": "यह अनुभाग",
+    "previewFallback": "फ़ुटनोट",
+    "chromeAriaLabel": "नोट संपादन",
+    "editingRegion": "{kind} {number}",
+    "footnoteKind": "फ़ुटनोट",
+    "endnoteKind": "एंडनोट",
+    "convertAllFootnotes": "सभी फ़ुटनोट को एंडनोट में बदलें",
+    "convertAllEndnotes": "सभी एंडनोट को फ़ुटनोट में बदलें",
+    "inheritedValue": "(विरासत में)"
+  },
+  "review": {
+    "accept": null,
+    "ariaLabel": null,
+    "commentRefused": null,
+    "deleted": null,
+    "empty": null,
+    "inserted": null,
+    "movedFrom": null,
+    "movedTo": null,
+    "reject": null,
+    "replaced": null,
+    "replacedWith": null,
+    "reply": null,
+    "replyRefused": null,
+    "showPane": null,
+    "structural": null,
+    "deleteComment": null,
+    "discardChange": null
+  },
+  "imageAltText": {
+    "description": null,
+    "panelTitle": null,
+    "title": null
+  },
+  "imageInsert": {
+    "errors": {
+      "emptyFile": null,
+      "invalidSignature": null,
+      "oversize": null,
+      "refused": null,
+      "unsupportedFormat": null
+    }
+  },
+  "imageProperties": {
+    "crop": null,
+    "cropBottom": null,
+    "cropLeft": null,
+    "cropRight": null,
+    "cropTop": null,
+    "errors": {
+      "invalidCrop": null,
+      "invalidDimensions": null,
+      "refused": null,
+      "invalidPosition": null
+    },
+    "hyperlink": null,
+    "nonPictureHint": null,
+    "resetNaturalSize": null,
+    "units": {
+      "points": null
+    },
+    "horizontalOffset": null,
+    "position": null,
+    "positionLocked": null,
+    "positionUnavailable": null,
+    "relativeToHorizontal": null,
+    "relativeToVertical": null,
+    "verticalOffset": null
   }
 }

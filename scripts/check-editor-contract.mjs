@@ -3,39 +3,72 @@ import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 
-const reactSource = readFileSync(
-  resolve(root, 'packages/react/src/components/DocxEditor.tsx'),
-  'utf8'
-);
-const vueSource = readFileSync(
-  resolve(root, 'packages/vue/src/components/DocxEditor/types.ts'),
-  'utf8'
-);
+// Greenfield type locations. The pre-rebuild paths
+// (`packages/react/src/components/DocxEditor.tsx`,
+// `packages/vue/src/components/DocxEditor/types.ts`) were deleted by the strip
+// at 701c1a9f, which left this gate throwing ENOENT on every run — a check that
+// cannot pass reads as coverage while measuring nothing.
+const reactSource = readFileSync(resolve(root, 'packages/react/src/types.ts'), 'utf8');
+const vueSource = readFileSync(resolve(root, 'packages/vue/src/types.ts'), 'utf8');
 
 const VUE_ONLY_PROPS = new Set([
-  // Vue chrome split that does not exist as a React prop.
-  'showMenuBar',
+  // None. The greenfield Vue adapter declares no prop React lacks.
 ]);
 
+// React props with no Vue PROP counterpart — each an idiomatic framework
+// divergence, not a missing feature. Vue exposes the same capability another
+// way, so these are declared divergences rather than gaps to close. The same
+// three are recorded in scripts/parity/parity.contract.json.
 const REACT_PROPS_NOT_YET_IN_VUE = new Set([
+  // Vue applies `class` as a native fallthrough attribute.
+  'className',
+  // Vue exposes these as EMITS (`@ready`, `@change`), which never appear in a
+  // props interface.
+  'onReady',
+  'onChange',
+  // M6V.1 chrome props, React-only until 10V.1 ports the chrome to Vue.
+  //
+  // These are NOT idiomatic-framework divergences like the three above — they are a
+  // deliberate, time-boxed gap with a named closing task. 10V.1 MUST remove all five
+  // entries; a divergence with no closing task is how a gate quietly stops meaning
+  // anything.
+  't',
+  'chrome',
+  'title',
+  'onTitleChange',
   'onSave',
-  'onFontsLoaded',
-  'externalContent',
-  'showMarginGuides',
-  'marginGuideColor',
-  'rulerUnit',
-  'placeholder',
-  'loadingIndicator',
-  'printOptions',
-  'onCopy',
-  'onCut',
-  'onPaste',
-  'comments',
-  'onRenderedDomContextReady',
-  'pluginOverlays',
-  'pluginSidebarItems',
-  'pluginRenderedDomContext',
-  'agentPanel',
+  // The link popover is part of the provider/hooks layer, which landed React-first: it is
+  // a context-backed hook plus a compound over it, and its Vue twin is the composable form
+  // that lands with the rest of that layer. The ENGINE half is already shared — typed
+  // links, sanitization, click classification, bookmark jumps, the ops, and Vue's
+  // `text.link` enabled state all come from core — so this gap is the panel, not the
+  // capability. Removed when the Vue provider/hooks twin lands.
+  'hyperlinkPopup',
+  // The navigation pane rides that same provider/hooks layer: a compound plus three
+  // behavior hooks over the context-published editor, so its Vue twin is the composable
+  // form. The ENGINE half is already shared — the search derivation, the session memo,
+  // `findMatches`/`selectMatch` and the outline all live in core, and Vue reaches them
+  // through the same facade — so this gap is the panel, not the capability. Removed when
+  // the Vue provider/hooks twin lands.
+  'navigation',
+  // The menu bar rides that same provider/hooks layer. The ENGINE half is already shared
+  // and MORE so than the pane's: `CHROME_MENUS` is the core registry both adapters read,
+  // every actionable row is a `ChromeSlotId` whose enabled state comes from the same
+  // `toolbarCommandState`, the two break commands are core rows, and the styles are in
+  // the core stylesheet — so the Vue twin is markup over data it already has. `onOpen` is
+  // that bar's File row handler and closes with it. Removed when the Vue provider/hooks
+  // twin lands.
+  'menu',
+  'onOpen',
+  // React renders viewport extras as children; Vue's equivalent is its default slot.
+  'children',
+  // The right-click menu rides that same provider/hooks layer, and its engine half is the
+  // most shared of the four: `selectAll`, `copy`, `cut` and `paste` are core commands, the
+  // rows ARE the menu bar's rows, every enabled state comes from the same `Editor.can`, the
+  // styles are in the core stylesheet, and the surface's pointer controller already ignores
+  // non-primary buttons so a right-click reaches a menu with the selection intact. The Vue
+  // twin is a panel and a placement rule. Removed when the Vue provider/hooks twin lands.
+  'contextMenu',
 ]);
 
 function extractInterfaceBody(source, name) {
@@ -55,7 +88,7 @@ function extractInterfaceBody(source, name) {
 function extractPropKeys(source, name) {
   const body = extractInterfaceBody(source, name);
   const keys = new Set();
-  const propRegex = /^\s{2}([A-Za-z_$][\w$]*)\??\s*:/gm;
+  const propRegex = /^\s+([A-Za-z_$][\w$]*)\??\s*:/gm;
   for (const match of body.matchAll(propRegex)) keys.add(match[1]);
   return keys;
 }

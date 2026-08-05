@@ -45,7 +45,9 @@
     "watermark": "Wasserzeichen",
     "break": null,
     "sectionBreakContinuous": null,
-    "sectionBreakNextPage": null
+    "sectionBreakNextPage": null,
+    "insertFootnote": "Fußnote einfügen",
+    "insertEndnote": "Endnote einfügen"
   },
   "formattingBar": {
     "groups": {
@@ -58,7 +60,9 @@
       "alignment": "Ausrichtung",
       "listFormatting": "Listenformatierung",
       "image": "Grafik",
-      "table": "Tabelle"
+      "table": "Tabelle",
+      "insert": "Einfügen",
+      "contentControl": "Inhaltssteuerelemente"
     },
     "undo": "Rückgängig",
     "undoShortcut": "Rückgängig (Strg+Z)",
@@ -83,7 +87,11 @@
     "imagePropertiesShortcut": "Bildeigenschaften (Alternativtext, Rahmen)...",
     "clearFormatting": "Formatierung löschen",
     "commentsAndChanges": "Kommentare & Änderungen",
-    "moreItems": "{count, plural, one {# weiteres Element} other {# weitere Elemente}}"
+    "moreItems": "{count, plural, one {# weiteres Element} other {# weitere Elemente}}",
+    "unavailableInPreview": null,
+    "more": null,
+    "altText": null,
+    "imageWrap": null
   },
   "alignment": {
     "alignLeft": "Linksbündig",
@@ -109,7 +117,11 @@
     "double": "Doppelt",
     "lineSpacingTitle": "Zeilenabstand: {label}",
     "blockSpacingRules": "Absatzabstand",
-    "label": "Zeilenabstand"
+    "label": "Zeilenabstand",
+    "addSpaceAfter": null,
+    "addSpaceBefore": null,
+    "removeSpaceAfter": null,
+    "removeSpaceBefore": null
   },
   "styles": {
     "selectAriaLabel": "Absatzformatvorlage auswählen",
@@ -191,7 +203,39 @@
       "lightBlue2": "Hellblau 2",
       "lightMagenta": "Hell-Magenta",
       "brightGreen": "Hellgrün",
-      "violet": "Violett"
+      "violet": "Violett",
+      "darkCyan": null,
+      "darkMagenta": null,
+      "lightGray": null
+    },
+    "apply": null,
+    "theme": {
+      "accent1": null,
+      "accent2": null,
+      "accent3": null,
+      "accent4": null,
+      "accent5": null,
+      "accent6": null,
+      "background1": null,
+      "background2": null,
+      "darker25": null,
+      "darker50": null,
+      "lighter40": null,
+      "lighter60": null,
+      "lighter80": null,
+      "text1": null,
+      "text2": null,
+      "lighter50": null,
+      "lighter35": null,
+      "lighter25": null,
+      "lighter15": null,
+      "lighter5": null,
+      "darker5": null,
+      "darker10": null,
+      "darker15": null,
+      "darker35": null,
+      "darker75": null,
+      "darker90": null
     }
   },
   "dialogs": {
@@ -380,7 +424,10 @@
         "a5": "A5 (5,83\" × 8,27\")",
         "b5": "B5 (6,93\" × 9,84\")",
         "executive": "Executive (7,25\" × 10,5\")"
-      }
+      },
+      "applyTo": null,
+      "applyToDocument": null,
+      "applyToSection": null
     },
     "tableProperties": {
       "title": "Tabelleneigenschaften",
@@ -610,7 +657,9 @@
       "makeCasual": "Lockerer formulieren",
       "custom": "Benutzerdefiniert"
     },
-    "updateTableOfContents": "Inhaltsverzeichnis aktualisieren"
+    "updateTableOfContents": "Inhaltsverzeichnis aktualisieren",
+    "editCustomNode": null,
+    "removeCustomNode": null
   },
   "documentOutline": {
     "ariaLabel": "Dokumentgliederung",
@@ -689,7 +738,23 @@
       "gridTable4Accent5": "Rastertabelle 4 Akzent 5",
       "gridTable4Accent6": "Rastertabelle 4 Akzent 6"
     },
-    "selectTable": null
+    "selectTable": null,
+    "borderStyles": {
+      "dashed": null,
+      "dotted": null,
+      "double": null,
+      "single": null,
+      "thick": null,
+      "triple": null
+    },
+    "borderWidths": {
+      "halfPt": null,
+      "oneHalfPt": null,
+      "onePt": null,
+      "threePt": null,
+      "twoPt": null
+    },
+    "clearCellFill": null
   },
   "tableAdvanced": {
     "verticalAlignment": "Vertikale Ausrichtung",
@@ -753,7 +818,21 @@
       "inLineWithText": "Bild fließt als Glyphe in der Zeile",
       "squareLeft": "Bild links, Text fließt rechts",
       "squareRight": "Bild rechts, Text fließt links"
-    }
+    },
+    "square": null,
+    "targets": {
+      "behind": null,
+      "inFront": null,
+      "inline": null,
+      "square": null,
+      "squareLeft": null,
+      "squareRight": null,
+      "through": null,
+      "tight": null,
+      "topAndBottom": null
+    },
+    "through": null,
+    "tight": null
   },
   "responsePreview": {
     "loading": "{action}...",
@@ -781,14 +860,24 @@
     "failedToParse": "Dokument konnte nicht verarbeitet werden",
     "linkRemoved": "Link entfernt",
     "linkCopied": "Link in Zwischenablage kopiert",
-    "failedToSave": "Dokument konnte nicht gespeichert werden"
+    "failedToSave": "Dokument konnte nicht gespeichert werden",
+    "fontSubstitutionNotice": null
   },
   "hyperlinkPopup": {
     "displayTextPlaceholder": "Anzuzeigender Text",
     "urlPlaceholder": "https://example.com",
     "copyLink": "Link kopieren",
     "editLink": "Link bearbeiten",
-    "removeLink": "Link entfernen"
+    "removeLink": "Link entfernen",
+    "apply": null,
+    "bookmarkTarget": null,
+    "cancel": null,
+    "editTitle": null,
+    "inertTarget": null,
+    "insertTitle": null,
+    "openLink": null,
+    "refused": null,
+    "urlLabel": null
   },
   "headerFooter": {
     "header": "Kopfzeile",
@@ -797,12 +886,43 @@
     "insertPageNumber": "Aktuelle Seitenzahl einfügen",
     "insertTotalPages": "Gesamtseitenzahl einfügen",
     "remove": "{label} entfernen",
-    "closeEditing": "{label}-Bearbeitung schließen"
+    "closeEditing": "{label}-Bearbeitung schließen",
+    "chromeAriaLabel": "Kopf- und Fußzeilenbearbeitung",
+    "firstPageHeader": "Kopfzeile der ersten Seite",
+    "firstPageFooter": "Fußzeile der ersten Seite",
+    "evenPageHeader": "Kopfzeile gerader Seiten",
+    "evenPageFooter": "Fußzeile gerader Seiten",
+    "regionSection": "{region} — Abschnitt {section}",
+    "sameAsPrevious": "Wie vorherige",
+    "sameAsPreviousHint": "Änderungen gelten auch für die Seiten des vorherigen Abschnitts.",
+    "differentFirstPage": "Erste Seite abweichend",
+    "differentOddEven": "Gerade und ungerade Seiten abweichend",
+    "differentOddEvenHint": "Gilt für das gesamte Dokument.",
+    "linkToPrevious": "Mit vorherigem verknüpfen",
+    "unlinkFromPrevious": "Verknüpfung mit vorherigem aufheben",
+    "headerDistance": "Kopfzeilenabstand vom Rand",
+    "footerDistance": "Fußzeilenabstand vom Rand",
+    "removeHeader": "Kopfzeile entfernen",
+    "removeFooter": "Fußzeile entfernen",
+    "insertSectionPages": "Abschnittsseitenzahl einfügen",
+    "insertPageXofY": "Seite X von Y einfügen",
+    "pageXofYLabel": "Seite",
+    "pageXofYSeparator": "von",
+    "pageNumbers": null
   },
   "image": {
     "placeholder": "Bildplatzhalter",
     "placeholderText": "[Grafik]",
-    "editableAriaLabel": "Bearbeitbares Bild"
+    "editableAriaLabel": "Bearbeitbares Bild",
+    "contentMismatch": null,
+    "decodeFailed": null,
+    "externalResource": null,
+    "invalidResource": null,
+    "missingResource": null,
+    "nonPictureGraphic": null,
+    "pendingResource": null,
+    "resourceLimit": null,
+    "unsupportedFormat": null
   },
   "ruler": {
     "horizontal": "Horizontales Lineal",
@@ -811,7 +931,8 @@
     "leftIndent": "Linker Einzug",
     "rightIndent": "Rechter Einzug",
     "topMargin": "Oberer Seitenrand",
-    "bottomMargin": "Unterer Seitenrand"
+    "bottomMargin": "Unterer Seitenrand",
+    "hangingIndent": null
   },
   "print": {
     "label": "Drucken",
@@ -830,20 +951,6 @@
   "loading": {
     "label": "Wird geladen"
   },
-  "agentPanel": {
-    "close": "Bereich schließen",
-    "composerPlaceholder": "Den Assistenten fragen…",
-    "defaultTitle": "Assistent",
-    "resizeHandle": "Assistentenbereich skalieren",
-    "send": "Senden",
-    "thinking": "Assistent denkt nach",
-    "timeline": {
-      "earlier": "+ {count, plural, one {# vorheriger Schritt} other {# vorherige Schritte}}",
-      "summary": "{count, plural, one {# Schritt} other {# Schritte}}",
-      "working": "Arbeite… {count, plural, one {# Schritt} other {# Schritte}}"
-    },
-    "toggle": "Assistent öffnen"
-  },
   "viewer": {
     "pageIndicator": "{current} von {total}"
   },
@@ -851,7 +958,18 @@
     "deleteImage": "Bild löschen",
     "imageProperties": "Bildeigenschaften",
     "rotate": "Drehen",
-    "replaceImage": "Bild ersetzen…"
+    "replaceImage": "Bild ersetzen…",
+    "handle": {
+      "e": null,
+      "n": null,
+      "ne": null,
+      "nw": null,
+      "s": null,
+      "se": null,
+      "sw": null,
+      "w": null
+    },
+    "selection": null
   },
   "revisions": {
     "cellDeleted": null,
@@ -870,6 +988,171 @@
     "runPropertiesChanged": null
   },
   "toc": {
-    "updatePrompt": null
+    "updatePrompt": null,
+    "refresh": "Gesamtes Verzeichnis aktualisieren",
+    "refreshPageNumbers": "Nur Seitenzahlen aktualisieren"
+  },
+  "app": {
+    "name": null,
+    "newDocument": null,
+    "by": null,
+    "framework": null,
+    "theme": null
+  },
+  "editingMode": {
+    "editing": null,
+    "label": null,
+    "editingHint": null,
+    "suggesting": null,
+    "suggestingHint": null,
+    "viewing": null,
+    "viewingHint": null
+  },
+  "navigation": {
+    "ariaLabel": null,
+    "closeAriaLabel": null,
+    "closeTitle": null,
+    "find": {
+      "clearAriaLabel": null,
+      "counter": null,
+      "counterTruncated": null,
+      "inputAriaLabel": null,
+      "matchCase": null,
+      "nextAriaLabel": null,
+      "noResults": null,
+      "optionsAriaLabel": null,
+      "placeholder": null,
+      "previousAriaLabel": null,
+      "resultsAriaLabel": null,
+      "searching": null,
+      "wholeWord": null,
+      "total": null,
+      "totalTruncated": null
+    },
+    "headings": {
+      "noHeadings": null
+    },
+    "openAriaLabel": null,
+    "openTitle": null,
+    "tabs": {
+      "find": null,
+      "headings": null
+    },
+    "title": null
+  },
+  "contentControl": {
+    "formFill": "Formularfüllmodus",
+    "group": "Inhaltssteuerelemente",
+    "inspector": "Eigenschaften des Inhaltssteuerelements",
+    "inspectorPanel": {
+      "alias": "Titel",
+      "bound": "Datenbindung",
+      "boundNote": "Dieses Steuerelement ist an externe Daten gebunden. Bearbeiten ist nicht möglich.",
+      "empty": "—",
+      "lock": "Sperre",
+      "lockedNote": "Die Inhaltsbearbeitung ist für dieses Steuerelement gesperrt.",
+      "no": "Nein",
+      "placeholder": "Platzhaltertext",
+      "tag": "Tag",
+      "title": "Inhaltssteuerelement",
+      "type": "Typ",
+      "yes": "Ja"
+    },
+    "lock": {
+      "contentLocked": "Inhalt gesperrt",
+      "sdtContentLocked": "Inhaltssteuerelement und Inhalt gesperrt",
+      "sdtLocked": "Inhaltssteuerelement gesperrt",
+      "unlocked": "Nicht gesperrt"
+    },
+    "noControl": "Setzen Sie den Cursor in ein Inhaltssteuerelement",
+    "remove": "Inhaltssteuerelement entfernen",
+    "showAll": "Grenzen der Inhaltssteuerelemente anzeigen",
+    "types": {
+      "checkbox": "Kontrollkästchen",
+      "comboBox": "Kombinationsfeld",
+      "date": "Datum",
+      "dropdown": "Dropdown-Liste",
+      "picture": "Bild",
+      "plainText": "Nur Text",
+      "repeatingSection": "Wiederholungsabschnitt",
+      "richText": "Rich Text"
+    }
+  },
+  "notes": {
+    "editingBanner": "Fußnote bearbeiten",
+    "closeNote": "Fußnote schließen",
+    "delete": "Fußnote löschen",
+    "convertToEndnote": "In Endnote umwandeln",
+    "convertToFootnote": "In Fußnote umwandeln",
+    "scope": "Anwenden auf",
+    "scopeDocument": "Ganzes Dokument",
+    "scopeSection": "Dieser Abschnitt",
+    "previewFallback": "Fußnote",
+    "chromeAriaLabel": "Fußnotenbearbeitung",
+    "editingRegion": "{kind} {number}",
+    "footnoteKind": "Fußnote",
+    "endnoteKind": "Endnote",
+    "convertAllFootnotes": "Alle Fußnoten in Endnoten umwandeln",
+    "convertAllEndnotes": "Alle Endnoten in Fußnoten umwandeln",
+    "inheritedValue": "(geerbt)"
+  },
+  "review": {
+    "accept": null,
+    "ariaLabel": null,
+    "commentRefused": null,
+    "deleted": null,
+    "empty": null,
+    "inserted": null,
+    "movedFrom": null,
+    "movedTo": null,
+    "reject": null,
+    "replaced": null,
+    "replacedWith": null,
+    "reply": null,
+    "replyRefused": null,
+    "showPane": null,
+    "structural": null,
+    "deleteComment": null,
+    "discardChange": null
+  },
+  "imageAltText": {
+    "description": null,
+    "panelTitle": null,
+    "title": null
+  },
+  "imageInsert": {
+    "errors": {
+      "emptyFile": null,
+      "invalidSignature": null,
+      "oversize": null,
+      "refused": null,
+      "unsupportedFormat": null
+    }
+  },
+  "imageProperties": {
+    "crop": null,
+    "cropBottom": null,
+    "cropLeft": null,
+    "cropRight": null,
+    "cropTop": null,
+    "errors": {
+      "invalidCrop": null,
+      "invalidDimensions": null,
+      "refused": null,
+      "invalidPosition": null
+    },
+    "hyperlink": null,
+    "nonPictureHint": null,
+    "resetNaturalSize": null,
+    "units": {
+      "points": null
+    },
+    "horizontalOffset": null,
+    "position": null,
+    "positionLocked": null,
+    "positionUnavailable": null,
+    "relativeToHorizontal": null,
+    "relativeToVertical": null,
+    "verticalOffset": null
   }
 }

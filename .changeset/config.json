@@ -4,18 +4,19 @@
   "commit": false,
   "fixed": [
     [
+      "@docx-editor.dev/core",
       "@docx-editor.dev/react",
-      "@docx-editor.dev/agents",
+      "@docx-editor.dev/editor-api",
       "@docx-editor.dev/vue",
       "@docx-editor.dev/nuxt",
-      "@docx-editor.dev/i18n"
+      "@docx-editor.dev/i18n",
+      "@docx-editor.dev/pro",
+      "@docx-editor.dev/fonts"
     ]
   ],
   "linked": [],
   "access": "public",
+  "privatePackages": { "version": true, "tag": false },
   "baseBranch": "main",
-  "updateInternalDependencies": "patch",
-  "ignore": [
-    "@docx-editor.dev/core-contract"
-  ]
+  "updateInternalDependencies": "patch"
 }

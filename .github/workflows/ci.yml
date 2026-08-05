@@ -62,8 +62,20 @@ jobs:
         run: bun run i18n:validate
 
       - name: Run tests
-        run: bun test
+        run: bun run test
 
+      # The React demo builds from LOCAL source, so this is the gate that a change to the
+      # engine or the shipped stylesheet still produces a working app. `build:packages`
+      # below does not catch it: a stylesheet that no CSS parser accepts passes typecheck,
+      # the whole suite and the adapter-CSS check, and only fails when an app bundles it.
+      - name: React demo app builds
+        run: bun run check:app-build
+
+      # The three Chromium gates that used to run here (`verify:a11y-tree`,
+      # `verify:real-adapter-smoke`, `verify:real-adapter-gate`) drove the legacy editor
+      # lane and went away with it — the scripts no longer exist, so the steps could only
+      # fail. The browser specs that replaced them (`bun run test:e2e:editor`) still need a
+      # Vue dev server this branch does not ship, so they are not wired in here yet.
       - name: CLA logic tests
         run: bash .github/cla/cla.test.sh
 
@@ -91,17 +103,32 @@ jobs:
       - name: API report check
         run: bun run api:check
 
+      # Same generator the release runs, here as a gate rather than for its
+      # output: it fails when a newly bundled dependency ships no license text,
+      # or when a tsup config stops emitting the metafile it reads. Catching
+      # that on the PR beats discovering it mid-publish.
+      - name: Third-party notices generate (gate)
+        run: bun run notices:generate
+
       - name: Published-package artifact check
         run: bun run check:package-artifacts
 
       - name: Published-package consumer check
         run: SKIP_CONSUMER_INSTALL_BUILD=1 bun run check:consumer-install
 
-      - name: Parity contract check
-        run: bun run check:parity-contract
+      # Parity contract check is disabled while @docx-editor.dev/vue is WIP and
+      # unpublished — it reads the Vue adapter's API Extractor snapshot, which is no
+      # longer regenerated now that the package is off `build:packages`, so it can only
+      # gate CI on an adapter that doesn't ship. Restore
+      # `- name: Parity contract check / run: bun run check:parity-contract` when the
+      # Vue package drops `private: true`.
 
       - name: i18n per-locale bundle size check
         run: bun run check:i18n-bundle-size
+
+      - name: Fonts package manifest check
+        # Baked sha256 hashes in @docx-editor.dev/fonts must match the shipped TTFs.
+        run: bun run check:fonts-manifest
 
       - name: Docs JSON generation (smoke test)
         # Not committed — `docs/json/` is gitignored. Run as a smoke test

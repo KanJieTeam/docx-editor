@@ -1,7 +1,7 @@
 ---
 title: 'Astro'
 description: 'Run an Astro DOCX editor as a React island with client:only. Why client:load crashes, how styles load, and the path from file upload to .docx download.'
-category: 'Frameworks'
+category: "Frameworks"
 seoTitle: 'Astro DOCX editor setup'
 ---
 
@@ -10,7 +10,7 @@ By the end of this page you have an Astro page that mounts the editor as a React
 ## Install
 
 ```bash
-npm install @docx-editor.dev/react
+npm install @docx-editor.dev/react @docx-editor.dev/core
 npx astro add react
 ```
 
@@ -42,7 +42,7 @@ import { Editor } from '../components/Editor';
 // src/components/Editor.tsx
 import { useRef, useState } from 'react';
 import { DocxEditor, type DocxEditorRef } from '@docx-editor.dev/react';
-import '@docx-editor.dev/react/styles.css';
+import '@docx-editor.dev/core/styles/editor.css';
 
 export function Editor() {
   const editorRef = useRef<DocxEditorRef>(null);
@@ -73,7 +73,9 @@ export function Editor() {
         <input type="file" accept=".docx" onChange={onFileSelect} />
         <button onClick={onSave}>Save .docx</button>
       </div>
-      <DocxEditor ref={editorRef} documentBuffer={buffer} showToolbar />
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <DocxEditor ref={editorRef} document={buffer ?? undefined} />
+      </div>
     </div>
   );
 }
@@ -99,7 +101,7 @@ bun run dev:astro   # http://localhost:4321
 
 ## Next steps
 
-- [Quickstart](/docs/1.x/quickstart): the load, edit, save flow in detail
-- [Loading and saving](/docs/1.x/guides/loading-and-saving): URLs, autosave, upload to your API
+- [Quickstart](/docs/2.x/quickstart): the load, edit, save flow in detail
+- [Loading and saving](/docs/2.x/guides/loading-and-saving): URLs, autosave, upload to your API
 - [Astro DOCX editor guide](/blog/astro-docx-editor): the long-form walkthrough
 - [Astro example on GitHub](https://github.com/eigenpal/docx-editor/tree/main/examples/astro)

@@ -45,7 +45,9 @@
     "watermark": "סימן מים",
     "break": null,
     "sectionBreakContinuous": null,
-    "sectionBreakNextPage": null
+    "sectionBreakNextPage": null,
+    "insertFootnote": "הוסף הערת שוליים",
+    "insertEndnote": "הוסף הערת סוף"
   },
   "formattingBar": {
     "groups": {
@@ -58,7 +60,9 @@
       "alignment": "יישור טקסט",
       "listFormatting": "עיצוב רשימה",
       "image": "תמונה",
-      "table": "טבלה"
+      "table": "טבלה",
+      "insert": "הוספה",
+      "contentControl": "מפקדי תוכן"
     },
     "undo": "בטל",
     "undoShortcut": "בטל (Ctrl+Z)",
@@ -83,7 +87,11 @@
     "imagePropertiesShortcut": "מאפייני תמונה",
     "clearFormatting": "נקה עיצוב",
     "commentsAndChanges": null,
-    "moreItems": null
+    "moreItems": null,
+    "unavailableInPreview": null,
+    "more": null,
+    "altText": null,
+    "imageWrap": null
   },
   "alignment": {
     "alignLeft": "יישור לשמאל",
@@ -109,7 +117,11 @@
     "double": "כפול",
     "lineSpacingTitle": "מרחק בין שורות: {label}",
     "blockSpacingRules": "מרחק בין פסקאות",
-    "label": null
+    "label": null,
+    "addSpaceAfter": null,
+    "addSpaceBefore": null,
+    "removeSpaceAfter": null,
+    "removeSpaceBefore": null
   },
   "styles": {
     "selectAriaLabel": "בחר סגנון פסקה",
@@ -191,7 +203,39 @@
       "lightBlue2": "כחול בהיר",
       "lightMagenta": "מג'נטה בהיר",
       "brightGreen": "ירוק בהיר",
-      "violet": "סגול"
+      "violet": "סגול",
+      "darkCyan": null,
+      "darkMagenta": null,
+      "lightGray": null
+    },
+    "apply": null,
+    "theme": {
+      "accent1": null,
+      "accent2": null,
+      "accent3": null,
+      "accent4": null,
+      "accent5": null,
+      "accent6": null,
+      "background1": null,
+      "background2": null,
+      "darker25": null,
+      "darker50": null,
+      "lighter40": null,
+      "lighter60": null,
+      "lighter80": null,
+      "text1": null,
+      "text2": null,
+      "lighter50": null,
+      "lighter35": null,
+      "lighter25": null,
+      "lighter15": null,
+      "lighter5": null,
+      "darker5": null,
+      "darker10": null,
+      "darker15": null,
+      "darker35": null,
+      "darker75": null,
+      "darker90": null
     }
   },
   "dialogs": {
@@ -380,7 +424,10 @@
         "a5": "A5 (5.83\" × 8.27\")",
         "b5": "B5 (6.93\" × 9.84\")",
         "executive": "Executive (7.25\" × 10.5\")"
-      }
+      },
+      "applyTo": null,
+      "applyToDocument": null,
+      "applyToSection": null
     },
     "tableProperties": {
       "title": "מאפייני טבלה",
@@ -610,7 +657,9 @@
       "makeCasual": "הפוך ללא רשמי",
       "custom": "מותאם אישית"
     },
-    "updateTableOfContents": "עדכן תוכן עניינים"
+    "updateTableOfContents": "עדכן תוכן עניינים",
+    "editCustomNode": null,
+    "removeCustomNode": null
   },
   "documentOutline": {
     "ariaLabel": "מתווה המסמך",
@@ -689,7 +738,23 @@
       "gridTable4Accent5": "רשת טבלה 4 הדגשה 5",
       "gridTable4Accent6": "רשת טבלה 4 הדגשה 6"
     },
-    "selectTable": null
+    "selectTable": null,
+    "borderStyles": {
+      "dashed": null,
+      "dotted": null,
+      "double": null,
+      "single": null,
+      "thick": null,
+      "triple": null
+    },
+    "borderWidths": {
+      "halfPt": null,
+      "oneHalfPt": null,
+      "onePt": null,
+      "threePt": null,
+      "twoPt": null
+    },
+    "clearCellFill": null
   },
   "tableAdvanced": {
     "verticalAlignment": "יישור אנכי",
@@ -753,7 +818,21 @@
       "inLineWithText": "התמונה זורמת בשורה כתו",
       "squareLeft": "תמונה משמאל, טקסט גולש מימין",
       "squareRight": "תמונה מימין, טקסט גולש משמאל"
-    }
+    },
+    "square": null,
+    "targets": {
+      "behind": null,
+      "inFront": null,
+      "inline": null,
+      "square": null,
+      "squareLeft": null,
+      "squareRight": null,
+      "through": null,
+      "tight": null,
+      "topAndBottom": null
+    },
+    "through": null,
+    "tight": null
   },
   "responsePreview": {
     "loading": "{action}...",
@@ -781,14 +860,24 @@
     "failedToParse": "שגיאה בפתיחת המסמך",
     "linkRemoved": "הקישור הוסר",
     "linkCopied": "הקישור הועתק ללוח",
-    "failedToSave": "שגיאה בשמירת המסמך"
+    "failedToSave": "שגיאה בשמירת המסמך",
+    "fontSubstitutionNotice": null
   },
   "hyperlinkPopup": {
     "displayTextPlaceholder": "טקסט לתצוגה",
     "urlPlaceholder": "https://example.com",
     "copyLink": "העתק קישור",
     "editLink": "ערוך קישור",
-    "removeLink": "הסר קישור"
+    "removeLink": "הסר קישור",
+    "apply": null,
+    "bookmarkTarget": null,
+    "cancel": null,
+    "editTitle": null,
+    "inertTarget": null,
+    "insertTitle": null,
+    "openLink": null,
+    "refused": null,
+    "urlLabel": null
   },
   "headerFooter": {
     "header": "כותרת עליונה",
@@ -797,12 +886,43 @@
     "insertPageNumber": "הוסף מספר עמוד נוכחי",
     "insertTotalPages": "הוסף סך כל העמודים",
     "remove": "הסר {label}",
-    "closeEditing": "סגור עריכת {label}"
+    "closeEditing": "סגור עריכת {label}",
+    "chromeAriaLabel": "עריכת כותרות עליונה ותחתונה",
+    "firstPageHeader": "כותרת עליונה של העמוד הראשון",
+    "firstPageFooter": "כותרת תחתונה של העמוד הראשון",
+    "evenPageHeader": "כותרת עליונה של עמודים זוגיים",
+    "evenPageFooter": "כותרת תחתונה של עמודים זוגיים",
+    "regionSection": "{region} — מקטע {section}",
+    "sameAsPrevious": "זהה לקודם",
+    "sameAsPreviousHint": "עריכות חלות גם על עמודי המקטע הקודם.",
+    "differentFirstPage": "עמוד ראשון שונה",
+    "differentOddEven": "עמודים זוגיים ואי-זוגיים שונים",
+    "differentOddEvenHint": "חל על כל המסמך.",
+    "linkToPrevious": "קשר לקודם",
+    "unlinkFromPrevious": "נתק מהקודם",
+    "headerDistance": "מרחק כותרת עליונה מהקצה",
+    "footerDistance": "מרחק כותרת תחתונה מהקצה",
+    "removeHeader": "הסר כותרת עליונה",
+    "removeFooter": "הסר כותרת תחתונה",
+    "insertSectionPages": "הוסף מספר עמודים במקטע",
+    "insertPageXofY": "הוסף עמוד X מתוך Y",
+    "pageXofYLabel": "עמוד",
+    "pageXofYSeparator": "מתוך",
+    "pageNumbers": null
   },
   "image": {
     "placeholder": "מיקום תמונה",
     "placeholderText": "[תמונה]",
-    "editableAriaLabel": "תמונה הניתנת לעריכה"
+    "editableAriaLabel": "תמונה הניתנת לעריכה",
+    "contentMismatch": null,
+    "decodeFailed": null,
+    "externalResource": null,
+    "invalidResource": null,
+    "missingResource": null,
+    "nonPictureGraphic": null,
+    "pendingResource": null,
+    "resourceLimit": null,
+    "unsupportedFormat": null
   },
   "ruler": {
     "horizontal": "סרגל אופקי",
@@ -811,7 +931,8 @@
     "leftIndent": "כניסה שמאלית",
     "rightIndent": "כניסה ימנית",
     "topMargin": "שוליים עליונים",
-    "bottomMargin": "שוליים תחתונים"
+    "bottomMargin": "שוליים תחתונים",
+    "hangingIndent": null
   },
   "print": {
     "label": "הדפסה",
@@ -830,20 +951,6 @@
   "loading": {
     "label": "טוען"
   },
-  "agentPanel": {
-    "defaultTitle": "עוזר",
-    "toggle": "פתח עוזר",
-    "close": "סגור חלונית",
-    "resizeHandle": "שנה גודל חלונית העוזר",
-    "thinking": "העוזר מעבד...",
-    "composerPlaceholder": "שאל את העוזר…",
-    "send": "שלח",
-    "timeline": {
-      "working": "{count, plural, one {עובד על # שלב} other {עובד על # שלבים}}",
-      "summary": "{count, plural, one {# שלב} other {# שלבים}}",
-      "earlier": "{count, plural, one {+ # שלב קודם} other {+ # שלבים קודמים}}"
-    }
-  },
   "viewer": {
     "pageIndicator": "{current} מתוך {total}"
   },
@@ -851,7 +958,18 @@
     "deleteImage": "מחק תמונה",
     "imageProperties": "מאפייני תמונה",
     "rotate": "סובב",
-    "replaceImage": null
+    "replaceImage": null,
+    "handle": {
+      "e": null,
+      "n": null,
+      "ne": null,
+      "nw": null,
+      "s": null,
+      "se": null,
+      "sw": null,
+      "w": null
+    },
+    "selection": null
   },
   "revisions": {
     "cellDeleted": null,
@@ -870,6 +988,171 @@
     "runPropertiesChanged": null
   },
   "toc": {
-    "updatePrompt": null
+    "updatePrompt": null,
+    "refresh": "עדכון הטבלה כולה",
+    "refreshPageNumbers": "עדכון מספרי עמודים בלבד"
+  },
+  "app": {
+    "name": null,
+    "newDocument": null,
+    "by": null,
+    "framework": null,
+    "theme": null
+  },
+  "editingMode": {
+    "editing": null,
+    "label": null,
+    "editingHint": null,
+    "suggesting": null,
+    "suggestingHint": null,
+    "viewing": null,
+    "viewingHint": null
+  },
+  "navigation": {
+    "ariaLabel": null,
+    "closeAriaLabel": null,
+    "closeTitle": null,
+    "find": {
+      "clearAriaLabel": null,
+      "counter": null,
+      "counterTruncated": null,
+      "inputAriaLabel": null,
+      "matchCase": null,
+      "nextAriaLabel": null,
+      "noResults": null,
+      "optionsAriaLabel": null,
+      "placeholder": null,
+      "previousAriaLabel": null,
+      "resultsAriaLabel": null,
+      "searching": null,
+      "wholeWord": null,
+      "total": null,
+      "totalTruncated": null
+    },
+    "headings": {
+      "noHeadings": null
+    },
+    "openAriaLabel": null,
+    "openTitle": null,
+    "tabs": {
+      "find": null,
+      "headings": null
+    },
+    "title": null
+  },
+  "contentControl": {
+    "formFill": "מצב מילוי טפסים",
+    "group": "מפקדי תוכן",
+    "inspector": "מאפייני מפקד תוכן",
+    "inspectorPanel": {
+      "alias": "כותרת",
+      "bound": "קשור לנתונים",
+      "boundNote": "מפקד זה קשור לנתונים חיצוניים. עריכה נדחית.",
+      "empty": "—",
+      "lock": "נעילה",
+      "lockedNote": "עריכת התוכן נעולה במפקד זה.",
+      "no": "לא",
+      "placeholder": "טקסט מציין מיקום",
+      "tag": "תג",
+      "title": "מפקד תוכן",
+      "type": "סוג",
+      "yes": "כן"
+    },
+    "lock": {
+      "contentLocked": "תוכן נעול",
+      "sdtContentLocked": "מפקד תוכן ותוכן נעולים",
+      "sdtLocked": "מפקד תוכן נעול",
+      "unlocked": "לא נעול"
+    },
+    "noControl": "הצב את הסמן בתוך מפקד תוכן",
+    "remove": "הסר מפקד תוכן",
+    "showAll": "הצג גבולות מפקדי תוכן",
+    "types": {
+      "checkbox": "תיבת סימון",
+      "comboBox": "תיבה משולבת",
+      "date": "תאריך",
+      "dropdown": "רשימה נפתחת",
+      "picture": "תמונה",
+      "plainText": "טקסט רגיל",
+      "repeatingSection": "מקטע חוזר",
+      "richText": "טקסט מעוצב"
+    }
+  },
+  "notes": {
+    "editingBanner": "עריכת הערה",
+    "closeNote": "סגור הערה",
+    "delete": "מחק הערה",
+    "convertToEndnote": "המר להערת סוף",
+    "convertToFootnote": "המר להערת שוליים",
+    "scope": "החל על",
+    "scopeDocument": "כל המסמך",
+    "scopeSection": "מקטע זה",
+    "previewFallback": "הערת שוליים",
+    "chromeAriaLabel": "עריכת הערות",
+    "editingRegion": "{kind} {number}",
+    "footnoteKind": "הערת שוליים",
+    "endnoteKind": "הערת סוף",
+    "convertAllFootnotes": "המר את כל הערות השוליים להערות סוף",
+    "convertAllEndnotes": "המר את כל הערות הסוף להערות שוליים",
+    "inheritedValue": "(בירושה)"
+  },
+  "review": {
+    "accept": null,
+    "ariaLabel": null,
+    "commentRefused": null,
+    "deleted": null,
+    "empty": null,
+    "inserted": null,
+    "movedFrom": null,
+    "movedTo": null,
+    "reject": null,
+    "replaced": null,
+    "replacedWith": null,
+    "reply": null,
+    "replyRefused": null,
+    "showPane": null,
+    "structural": null,
+    "deleteComment": null,
+    "discardChange": null
+  },
+  "imageAltText": {
+    "description": null,
+    "panelTitle": null,
+    "title": null
+  },
+  "imageInsert": {
+    "errors": {
+      "emptyFile": null,
+      "invalidSignature": null,
+      "oversize": null,
+      "refused": null,
+      "unsupportedFormat": null
+    }
+  },
+  "imageProperties": {
+    "crop": null,
+    "cropBottom": null,
+    "cropLeft": null,
+    "cropRight": null,
+    "cropTop": null,
+    "errors": {
+      "invalidCrop": null,
+      "invalidDimensions": null,
+      "refused": null,
+      "invalidPosition": null
+    },
+    "hyperlink": null,
+    "nonPictureHint": null,
+    "resetNaturalSize": null,
+    "units": {
+      "points": null
+    },
+    "horizontalOffset": null,
+    "position": null,
+    "positionLocked": null,
+    "positionUnavailable": null,
+    "relativeToHorizontal": null,
+    "relativeToVertical": null,
+    "verticalOffset": null
   }
 }

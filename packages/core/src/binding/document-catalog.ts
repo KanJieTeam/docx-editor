@@ -1,0 +1,271 @@
+// Document-derived catalogs: the fonts a document uses and the styles it defines.
+//
+// Both derivations read the CANONICAL TREES — the current main part, the immutable
+// styles part, and the resolved header/footer parts — never the DOM or the layout.
+// They exist for chrome (font picker, style picker), so every string that leaves this
+// module is validated here at the derivation boundary: a font name or style name is
+// authored file content, and downstream sinks (CSS font-family, dropdown labels) must
+// only ever receive names this module has already bounded.
+
+import type { OoxmlElement, OoxmlNode } from '../store/package/ooxml-tree.ts';
+
+/**
+ * The same shape `semantic-paint.ts` enforces at the CSS sink (its `FONT_NAME`):
+ * Unicode letters/digits/marks plus the join punctuation real family names use,
+ * bounded to 64 characters. Control characters, quotes, backslashes, semicolons and
+ * the empty string all fail. Kept in sync by value rather than import because the
+ * paint module is a different lane (output) and deliberately re-validates at its own
+ * sink either way.
+ */
+const FONT_NAME = /^[\p{L}\p{N}\p{M} \-.+_]{1,64}$/u;
+
+/** `w:rFonts` attributes that name a font family (theme* attributes name theme SLOTS). */
+const RFONTS_FAMILY_ATTRS = ['ascii', 'hAnsi', 'cs', 'eastAsia'] as const;
+
+/** `w:rFonts` attributes that reference a theme font slot rather than naming a family. */
+const RFONTS_THEME_ATTRS = ['asciiTheme', 'hAnsiTheme', 'cstheme', 'eastAsiaTheme'] as const;
+
+/** Identifier-ish strings from a file (style ids, style names): bounded, no controls. */
+const STYLE_STRING_MAX = 128;
+const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/;
+
+function isElement(node: OoxmlNode): node is OoxmlElement {
+  return node.kind !== 'textValue';
+}
+
+function attributeValue(node: OoxmlElement, localName: string): string | undefined {
+  return node.attributes.find((attribute) => attribute.localName === localName)?.value;
+}
+
+/**
+ * Every valid family name any `w:rFonts` in `roots` mentions, deduplicated
+ * case-insensitively (first-seen casing wins, so `Arial` and `arial` collapse to one
+ * entry spelled the way the document first spelled it) and sorted by code point for a
+ * deterministic picker order. Invalid names — over 64 characters, control characters,
+ * CSS-breaking punctuation — are dropped, never repaired.
+ */
+export function collectDocumentFonts(
+  roots: readonly OoxmlElement[],
+  themeFonts?: { readonly major: string | null; readonly minor: string | null }
+): readonly string[] {
+  const byFold = new Map<string, string>();
+  const add = (family: string | null | undefined): void => {
+    if (!family || !FONT_NAME.test(family)) return;
+    const fold = family.toLowerCase();
+    if (!byFold.has(fold)) byFold.set(fold, family);
+  };
+  // Iterative walk: the parse already bounds tree depth, but this derivation must not
+  // be the one place a deep generic subtree can overflow the call stack. Children are
+  // pushed in reverse so the stack pops them in DOCUMENT order — "first-seen casing"
+  // has to mean the first occurrence a reader would see, not the last.
+  const stack: OoxmlNode[] = [...roots].reverse();
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (!isElement(node)) continue;
+    if (node.localName === 'rFonts') {
+      for (const attr of RFONTS_FAMILY_ATTRS) {
+        add(attributeValue(node, attr));
+      }
+      // A theme reference (`w:asciiTheme="minorHAnsi"`) names no family itself, but the
+      // document still USES the theme's face — a template styled entirely through the
+      // theme otherwise reported "no fonts" while every run rendered in one.
+      if (themeFonts) {
+        for (const attr of RFONTS_THEME_ATTRS) {
+          const slot = attributeValue(node, attr);
+          if (slot === undefined) continue;
+          if (slot.startsWith('major')) add(themeFonts.major);
+          else if (slot.startsWith('minor')) add(themeFonts.minor);
+        }
+      }
+    }
+    for (let i = node.children.length - 1; i >= 0; i -= 1) stack.push(node.children[i]!);
+  }
+  const fonts = [...byFold.values()];
+  fonts.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return fonts;
+}
+
+/**
+ * How a style LOOKS, for a picker to preview it in its own face — Word shows the gallery
+ * that way, and a list of identical rows makes the user apply a style to find out what it
+ * is. PRESENTATION ONLY: these are the few properties a one-line preview can show, not the
+ * cascade layout resolves. Every value is already bounded here (the family against the same
+ * shape the CSS sink enforces, the colour against six hex digits), because a picker renders
+ * them into a style attribute and they come from an attacker-controlled `styles.xml`.
+ */
+export interface DocumentStylePreview {
+  readonly fontFamily: string | null;
+  /** Points, already halved from `w:sz`. Null when the style states no size. */
+  readonly fontSizePt: number | null;
+  readonly bold: boolean;
+  readonly italic: boolean;
+  /** RRGGBB, or null for inherited/automatic — theme colours are not resolved here. */
+  readonly color: string | null;
+}
+
+/** One `w:style` definition, projected for a style picker. */
+export interface DocumentStyleEntry {
+  readonly styleId: string;
+  readonly name: string;
+  readonly type: string;
+  readonly preview: DocumentStylePreview;
+}
+
+const STYLE_TYPES = new Set(['paragraph', 'character', 'table', 'numbering']);
+
+/** Six hex digits — the only `w:color` value a preview will render. */
+const HEX_COLOR = /^[0-9A-Fa-f]{6}$/;
+
+/**
+ * How far a `w:basedOn` chain is walked. Deep enough for any real styles part, bounded
+ * because the chain comes from the file and can be made circular (D14 resource limits).
+ */
+const BASED_ON_DEPTH = 16;
+
+/**
+ * Word's Styles gallery order, which is NOT the order `styles.xml` lists definitions in —
+ * a round-tripped file commonly puts Heading 6 above Heading 1, and a picker showing that
+ * looks broken. Everything unranked keeps its document order after the ranked ones.
+ */
+const STYLE_RANK: ReadonlyMap<string, number> = new Map([
+  ['normal', 0],
+  ['title', 1],
+  ['subtitle', 2],
+  ['heading 1', 11],
+  ['heading 2', 12],
+  ['heading 3', 13],
+  ['heading 4', 14],
+  ['heading 5', 15],
+  ['heading 6', 16],
+  ['heading 7', 17],
+  ['heading 8', 18],
+  ['heading 9', 19],
+]);
+
+/**
+ * A node's children as a plain node list.
+ *
+ * `OoxmlElement` is a union whose leaf members declare `readonly []`, so reading `.children`
+ * off the union loses `Array.find`'s type-guard overload — the same reason the run-defaults
+ * lane widens before iterating.
+ */
+function childrenOf(node: OoxmlElement): readonly OoxmlNode[] {
+  return node.children as readonly OoxmlNode[];
+}
+
+/** The first child element with this local name. */
+function childElementNamed(node: OoxmlElement, localName: string): OoxmlElement | undefined {
+  for (const child of childrenOf(node)) {
+    if (isElement(child) && child.localName === localName) return child;
+  }
+  return undefined;
+}
+
+function styleRank(entry: DocumentStyleEntry): number {
+  return (
+    STYLE_RANK.get(entry.name.toLowerCase()) ??
+    STYLE_RANK.get(entry.styleId.toLowerCase()) ??
+    Number.MAX_SAFE_INTEGER
+  );
+}
+
+function boundedString(raw: string | undefined): string | null {
+  if (raw === undefined || raw.length === 0 || raw.length > STYLE_STRING_MAX) return null;
+  if (CONTROL_CHARS.test(raw)) return null;
+  return raw;
+}
+
+/**
+ * The style definitions of a `/word/styles.xml` tree: every `w:style` child of the
+ * root with an accepted `w:type`, a valid `w:styleId`, and a display name from the
+ * `w:name` child's `w:val` (falling back to the styleId when the name is absent or
+ * fails validation). Definitions with a missing or invalid styleId are dropped: an
+ * unaddressable style cannot be applied, so listing it would be a dead control.
+ */
+export function collectDocumentStyles(
+  stylesRoot: OoxmlElement | null,
+  /**
+   * Font family and size for a styleId, resolved through the basedOn chain, `docDefaults`
+   * and the theme font scheme. Injected because THAT resolution belongs to the run-defaults
+   * lane, which already owns theme slots — this module would otherwise grow a second,
+   * divergent copy of it. Without one the preview simply carries no font or size.
+   */
+  resolveDefaults?: (styleId: string) => {
+    readonly fontFamily: string | null;
+    readonly fontSizeHalfPoints: number | null;
+  }
+): readonly DocumentStyleEntry[] {
+  if (!stylesRoot) return [];
+  const definitions = new Map<string, OoxmlElement>();
+  for (const child of stylesRoot.children) {
+    if (!isElement(child) || child.localName !== 'style') continue;
+    const styleId = boundedString(attributeValue(child, 'styleId'));
+    if (styleId !== null && !definitions.has(styleId)) definitions.set(styleId, child);
+  }
+
+  /** `w:b`/`w:i`/`w:color` as the style chain leaves them, nearest definition winning. */
+  const previewOf = (styleId: string): DocumentStylePreview => {
+    let bold = false;
+    let italic = false;
+    let color: string | null = null;
+    let seenBold = false;
+    let seenItalic = false;
+    const seen = new Set<string>();
+    let current: string | null = styleId;
+    for (let depth = 0; depth < BASED_ON_DEPTH && current !== null; depth += 1) {
+      // A `w:basedOn` cycle is authored content, not a bug — refuse to walk it twice.
+      if (seen.has(current)) break;
+      seen.add(current);
+      const definition = definitions.get(current);
+      if (!definition) break;
+      const rPr = childElementNamed(definition, 'rPr');
+      for (const property of rPr ? childrenOf(rPr) : []) {
+        if (!isElement(property)) continue;
+        const val = attributeValue(property, 'val');
+        // `w:b`/`w:i` are ST_OnOff: present with no `w:val` means on.
+        const on = val !== '0' && val !== 'false' && val !== 'off';
+        if (property.localName === 'b' && !seenBold) {
+          bold = on;
+          seenBold = true;
+        } else if (property.localName === 'i' && !seenItalic) {
+          italic = on;
+          seenItalic = true;
+        } else if (property.localName === 'color' && color === null && val && HEX_COLOR.test(val)) {
+          color = val;
+        }
+      }
+      const basedOn = childElementNamed(definition, 'basedOn');
+      current = basedOn ? boundedString(attributeValue(basedOn, 'val')) : null;
+    }
+    const defaults = resolveDefaults?.(styleId);
+    const family = defaults?.fontFamily ?? null;
+    return {
+      // Re-validated at THIS boundary even though the resolver bounds it too: the preview
+      // is rendered into a font-family declaration, and this module is the one that
+      // promises every string leaving it is safe for that sink.
+      fontFamily: family !== null && FONT_NAME.test(family) ? family : null,
+      fontSizePt:
+        defaults?.fontSizeHalfPoints != null && defaults.fontSizeHalfPoints > 0
+          ? defaults.fontSizeHalfPoints / 2
+          : null,
+      bold,
+      italic,
+      color,
+    };
+  };
+
+  const entries: DocumentStyleEntry[] = [];
+  for (const [styleId, definition] of definitions) {
+    const type = attributeValue(definition, 'type');
+    if (type === undefined || !STYLE_TYPES.has(type)) continue;
+    const nameElement = childElementNamed(definition, 'name');
+    const name = boundedString(nameElement ? attributeValue(nameElement, 'val') : undefined);
+    entries.push({ styleId, name: name ?? styleId, type, preview: previewOf(styleId) });
+  }
+  // Stable: equal ranks keep document order, so an unranked style never jumps around
+  // between reads of the same document.
+  return entries
+    .map((entry, index) => ({ entry, index, rank: styleRank(entry) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((row) => row.entry);
+}

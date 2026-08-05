@@ -45,7 +45,9 @@
     "symbol": "Simbol",
     "watermark": "Tanda Air",
     "help": "Bantuan",
-    "reportIssue": "Laporkan Masalah"
+    "reportIssue": "Laporkan Masalah",
+    "insertFootnote": "Sisipkan catatan kaki",
+    "insertEndnote": "Sisipkan catatan akhir"
   },
   "formattingBar": {
     "groups": {
@@ -58,7 +60,9 @@
       "alignment": "Perataan",
       "listFormatting": "Pemformatan Daftar",
       "image": "Gambar",
-      "table": "Tabel"
+      "table": "Tabel",
+      "insert": "Sisipkan",
+      "contentControl": "Kontrol konten"
     },
     "undo": "Urungkan",
     "undoShortcut": "Urungkan (Ctrl+Z)",
@@ -83,7 +87,11 @@
     "imagePropertiesShortcut": "Properti gambar (alt text, border)...",
     "clearFormatting": "Hapus Pemformatan",
     "commentsAndChanges": "Komentar & Perubahan",
-    "moreItems": "{count} item lainnya"
+    "moreItems": "{count} item lainnya",
+    "unavailableInPreview": null,
+    "more": null,
+    "altText": null,
+    "imageWrap": null
   },
   "alignment": {
     "alignLeft": "Rata Kiri",
@@ -109,7 +117,11 @@
     "single": "1.0",
     "double": "2.0",
     "lineSpacingTitle": "Jarak antar baris: {label}",
-    "blockSpacingRules": "Jarak antar paragraf"
+    "blockSpacingRules": "Jarak antar paragraf",
+    "addSpaceAfter": null,
+    "addSpaceBefore": null,
+    "removeSpaceAfter": null,
+    "removeSpaceBefore": null
   },
   "styles": {
     "selectAriaLabel": "Pilih gaya paragraf",
@@ -191,7 +203,39 @@
       "lightBlue2": "Biru Muda 2",
       "lightMagenta": "Magenta Muda",
       "brightGreen": "Hijau Cerah",
-      "violet": "Ungu Violet"
+      "violet": "Ungu Violet",
+      "darkCyan": null,
+      "darkMagenta": null,
+      "lightGray": null
+    },
+    "apply": null,
+    "theme": {
+      "accent1": null,
+      "accent2": null,
+      "accent3": null,
+      "accent4": null,
+      "accent5": null,
+      "accent6": null,
+      "background1": null,
+      "background2": null,
+      "darker25": null,
+      "darker50": null,
+      "lighter40": null,
+      "lighter60": null,
+      "lighter80": null,
+      "text1": null,
+      "text2": null,
+      "lighter50": null,
+      "lighter35": null,
+      "lighter25": null,
+      "lighter15": null,
+      "lighter5": null,
+      "darker5": null,
+      "darker10": null,
+      "darker15": null,
+      "darker35": null,
+      "darker75": null,
+      "darker90": null
     }
   },
   "dialogs": {
@@ -401,7 +445,10 @@
         "a5": "A5 (14,8 × 21 cm)",
         "b5": "B5 (17,6 × 25 cm)",
         "executive": "Executive (18,42 × 26,67 cm)"
-      }
+      },
+      "applyTo": null,
+      "applyToDocument": null,
+      "applyToSection": null
     },
     "tableProperties": {
       "title": "Properti Tabel",
@@ -626,7 +673,9 @@
       "makeCasual": "Jadikan Santai",
       "custom": "Kustom"
     },
-    "updateTableOfContents": "Perbarui daftar isi"
+    "updateTableOfContents": "Perbarui daftar isi",
+    "editCustomNode": null,
+    "removeCustomNode": null
   },
   "documentOutline": {
     "ariaLabel": "Struktur dokumen",
@@ -708,7 +757,23 @@
       "gridTable4Accent5": null,
       "gridTable4Accent6": null
     },
-    "selectTable": null
+    "selectTable": null,
+    "borderStyles": {
+      "dashed": null,
+      "dotted": null,
+      "double": null,
+      "single": null,
+      "thick": null,
+      "triple": null
+    },
+    "borderWidths": {
+      "halfPt": null,
+      "oneHalfPt": null,
+      "onePt": null,
+      "threePt": null,
+      "twoPt": null
+    },
+    "clearCellFill": null
   },
   "tableAdvanced": {
     "verticalAlignment": "Perataan Vertikal",
@@ -772,7 +837,21 @@
       "squareRight": "Gambar berada di kanan, teks mengelilingi di sisi kiri.",
       "behindText": "Gambar ditampilkan di belakang teks dokumen.",
       "inFrontOfText": "Gambar ditampilkan di depan teks dokumen."
-    }
+    },
+    "square": null,
+    "targets": {
+      "behind": null,
+      "inFront": null,
+      "inline": null,
+      "square": null,
+      "squareLeft": null,
+      "squareRight": null,
+      "through": null,
+      "tight": null,
+      "topAndBottom": null
+    },
+    "through": null,
+    "tight": null
   },
   "responsePreview": {
     "loading": "{action}...",
@@ -800,14 +879,24 @@
     "failedToParse": "Gagal membaca dokumen",
     "linkRemoved": "Tautan dihapus",
     "linkCopied": "Tautan disalin ke papan klip",
-    "failedToSave": "Gagal menyimpan dokumen"
+    "failedToSave": "Gagal menyimpan dokumen",
+    "fontSubstitutionNotice": null
   },
   "hyperlinkPopup": {
     "displayTextPlaceholder": "Teks yang ditampilkan",
     "urlPlaceholder": "https://example.com",
     "copyLink": "Salin Tautan",
     "editLink": "Edit Tautan",
-    "removeLink": "Hapus Tautan"
+    "removeLink": "Hapus Tautan",
+    "apply": null,
+    "bookmarkTarget": null,
+    "cancel": null,
+    "editTitle": null,
+    "inertTarget": null,
+    "insertTitle": null,
+    "openLink": null,
+    "refused": null,
+    "urlLabel": null
   },
   "headerFooter": {
     "header": "Header",
@@ -816,18 +905,60 @@
     "insertPageNumber": "Sisipkan nomor halaman saat ini",
     "insertTotalPages": "Sisipkan jumlah total halaman",
     "remove": "Hapus {label}",
-    "closeEditing": "Tutup pengeditan {label}"
+    "closeEditing": "Tutup pengeditan {label}",
+    "chromeAriaLabel": "Pengeditan header dan footer",
+    "firstPageHeader": "Header halaman pertama",
+    "firstPageFooter": "Footer halaman pertama",
+    "evenPageHeader": "Header halaman genap",
+    "evenPageFooter": "Footer halaman genap",
+    "regionSection": "{region} — Bagian {section}",
+    "sameAsPrevious": "Sama dengan sebelumnya",
+    "sameAsPreviousHint": "Edit juga berlaku untuk halaman bagian sebelumnya.",
+    "differentFirstPage": "Halaman pertama berbeda",
+    "differentOddEven": "Halaman ganjil dan genap berbeda",
+    "differentOddEvenHint": "Berlaku untuk seluruh dokumen.",
+    "linkToPrevious": "Tautkan ke sebelumnya",
+    "unlinkFromPrevious": "Putus tautan dari sebelumnya",
+    "headerDistance": "Jarak header dari tepi",
+    "footerDistance": "Jarak footer dari tepi",
+    "removeHeader": "Hapus header",
+    "removeFooter": "Hapus footer",
+    "insertSectionPages": "Sisipkan jumlah halaman bagian",
+    "insertPageXofY": "Sisipkan halaman X dari Y",
+    "pageXofYLabel": "Halaman",
+    "pageXofYSeparator": "dari",
+    "pageNumbers": null
   },
   "image": {
     "placeholder": "Placeholder gambar",
     "placeholderText": "[Gambar]",
-    "editableAriaLabel": "Gambar yang dapat diedit"
+    "editableAriaLabel": "Gambar yang dapat diedit",
+    "contentMismatch": null,
+    "decodeFailed": null,
+    "externalResource": null,
+    "invalidResource": null,
+    "missingResource": null,
+    "nonPictureGraphic": null,
+    "pendingResource": null,
+    "resourceLimit": null,
+    "unsupportedFormat": null
   },
   "imageOverlay": {
     "rotate": "Putar",
     "imageProperties": "Properti Gambar",
     "deleteImage": "Hapus Gambar",
-    "replaceImage": "Ganti Gambar..."
+    "replaceImage": "Ganti Gambar...",
+    "handle": {
+      "e": null,
+      "n": null,
+      "ne": null,
+      "nw": null,
+      "s": null,
+      "se": null,
+      "sw": null,
+      "w": null
+    },
+    "selection": null
   },
   "ruler": {
     "horizontal": "Penggaris Horizontal",
@@ -836,7 +967,8 @@
     "leftIndent": "Inden Kiri",
     "rightIndent": "Inden Kanan",
     "topMargin": "Margin Atas",
-    "bottomMargin": "Margin Bawah"
+    "bottomMargin": "Margin Bawah",
+    "hangingIndent": null
   },
   "print": {
     "label": "Cetak",
@@ -855,21 +987,172 @@
   "loading": {
     "label": "Memuat"
   },
-  "agentPanel": {
-    "defaultTitle": "Asisten",
-    "toggle": "Buka asisten",
-    "close": "Tutup panel",
-    "resizeHandle": "Ubah ukuran panel asisten",
-    "thinking": "Sedang berpikir",
-    "composerPlaceholder": "Tanyakan sesuatu...",
-    "send": "Kirim",
-    "timeline": {
-      "working": "Sedang memproses... {count, plural, one {# langkah} other {# langkah}}",
-      "summary": "{count, plural, one {# langkah} other {# langkah}}",
-      "earlier": "+ {count, plural, one {# langkah sebelumnya} other {# langkah sebelumnya}}"
+  "toc": {
+    "updatePrompt": null,
+    "refresh": "Perbarui seluruh tabel",
+    "refreshPageNumbers": "Perbarui nomor halaman saja"
+  },
+  "app": {
+    "name": null,
+    "newDocument": null,
+    "by": null,
+    "framework": null,
+    "theme": null
+  },
+  "editingMode": {
+    "editing": null,
+    "label": null,
+    "editingHint": null,
+    "suggesting": null,
+    "suggestingHint": null,
+    "viewing": null,
+    "viewingHint": null
+  },
+  "navigation": {
+    "ariaLabel": null,
+    "closeAriaLabel": null,
+    "closeTitle": null,
+    "find": {
+      "clearAriaLabel": null,
+      "counter": null,
+      "counterTruncated": null,
+      "inputAriaLabel": null,
+      "matchCase": null,
+      "nextAriaLabel": null,
+      "noResults": null,
+      "optionsAriaLabel": null,
+      "placeholder": null,
+      "previousAriaLabel": null,
+      "resultsAriaLabel": null,
+      "searching": null,
+      "wholeWord": null,
+      "total": null,
+      "totalTruncated": null
+    },
+    "headings": {
+      "noHeadings": null
+    },
+    "openAriaLabel": null,
+    "openTitle": null,
+    "tabs": {
+      "find": null,
+      "headings": null
+    },
+    "title": null
+  },
+  "contentControl": {
+    "formFill": "Mode isi formulir",
+    "group": "Kontrol konten",
+    "inspector": "Properti kontrol konten",
+    "inspectorPanel": {
+      "alias": "Judul",
+      "bound": "Terikat data",
+      "boundNote": "Kontrol ini terikat ke data eksternal. Pengeditan ditolak.",
+      "empty": "—",
+      "lock": "Kunci",
+      "lockedNote": "Pengeditan konten dikunci pada kontrol ini.",
+      "no": "Tidak",
+      "placeholder": "Placeholder",
+      "tag": "Tag",
+      "title": "Kontrol konten",
+      "type": "Jenis",
+      "yes": "Ya"
+    },
+    "lock": {
+      "contentLocked": "Konten terkunci",
+      "sdtContentLocked": "Kontrol konten dan konten terkunci",
+      "sdtLocked": "Kontrol konten terkunci",
+      "unlocked": "Tidak terkunci"
+    },
+    "noControl": "Letakkan kursor di dalam kontrol konten",
+    "remove": "Hapus kontrol konten",
+    "showAll": "Tampilkan batas kontrol konten",
+    "types": {
+      "checkbox": "Kotak centang",
+      "comboBox": "Kotak kombo",
+      "date": "Tanggal",
+      "dropdown": "Daftar drop-down",
+      "picture": "Gambar",
+      "plainText": "Teks biasa",
+      "repeatingSection": "Bagian berulang",
+      "richText": "Teks kaya"
     }
   },
-  "toc": {
-    "updatePrompt": null
+  "notes": {
+    "editingBanner": "Mengedit catatan",
+    "closeNote": "Tutup catatan",
+    "delete": "Hapus catatan",
+    "convertToEndnote": "Konversi ke catatan akhir",
+    "convertToFootnote": "Konversi ke catatan kaki",
+    "scope": "Terapkan ke",
+    "scopeDocument": "Seluruh dokumen",
+    "scopeSection": "Bagian ini",
+    "previewFallback": "Catatan kaki",
+    "chromeAriaLabel": "Pengeditan catatan",
+    "editingRegion": "{kind} {number}",
+    "footnoteKind": "Catatan kaki",
+    "endnoteKind": "Catatan akhir",
+    "convertAllFootnotes": "Konversi semua catatan kaki ke catatan akhir",
+    "convertAllEndnotes": "Konversi semua catatan akhir ke catatan kaki",
+    "inheritedValue": "(diwarisi)"
+  },
+  "review": {
+    "accept": null,
+    "ariaLabel": null,
+    "commentRefused": null,
+    "deleted": null,
+    "empty": null,
+    "inserted": null,
+    "movedFrom": null,
+    "movedTo": null,
+    "reject": null,
+    "replaced": null,
+    "replacedWith": null,
+    "reply": null,
+    "replyRefused": null,
+    "showPane": null,
+    "structural": null,
+    "deleteComment": null,
+    "discardChange": null
+  },
+  "imageAltText": {
+    "description": null,
+    "panelTitle": null,
+    "title": null
+  },
+  "imageInsert": {
+    "errors": {
+      "emptyFile": null,
+      "invalidSignature": null,
+      "oversize": null,
+      "refused": null,
+      "unsupportedFormat": null
+    }
+  },
+  "imageProperties": {
+    "crop": null,
+    "cropBottom": null,
+    "cropLeft": null,
+    "cropRight": null,
+    "cropTop": null,
+    "errors": {
+      "invalidCrop": null,
+      "invalidDimensions": null,
+      "refused": null,
+      "invalidPosition": null
+    },
+    "hyperlink": null,
+    "nonPictureHint": null,
+    "resetNaturalSize": null,
+    "units": {
+      "points": null
+    },
+    "horizontalOffset": null,
+    "position": null,
+    "positionLocked": null,
+    "positionUnavailable": null,
+    "relativeToHorizontal": null,
+    "relativeToVertical": null,
+    "verticalOffset": null
   }
 }

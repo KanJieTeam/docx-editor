@@ -8,7 +8,7 @@
  * everything ships in `community`.
  *
  * Status axes:
- * - editing:   can the user (or an agent) change it in the editor?
+ * - editing:   can the user (or code driving the editor) change it in the editor?
  * - rendering: does it display like Microsoft Word renders it?
  * - roundTrip: does it survive open -> save unchanged?
  *
@@ -93,7 +93,8 @@ export const wordFeatures: WordFeature[] = [
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
-    notes: 'Custom fonts registered via the fonts prop; theme fonts resolved from the OOXML theme.',
+    notes:
+      'Custom fonts registered via the fonts prop (loadFonts fetches and hash-verifies app-specified URLs); theme fonts resolved from the OOXML theme. Word-accurate wrap and pagination need font bytes for shaped measurement — the optional @docx-editor.dev/fonts package supplies metric-compatible substitutes for the Word defaults (Carlito, Caladea, Liberation). The fonts prop also accepts a resolver called once per load with the families a document declares, so an app can opt into loading only those; googleFonts() serves them from a pinned, hash-checked catalog.',
   },
   {
     id: 'text.embedded-fonts',
@@ -104,7 +105,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'preserved',
     tier: 'community',
     notes:
-      'Fonts embedded in the file (word/fonts) are de-obfuscated, rendered, and selectable in the toolbar under a Document fonts group. The embedded binaries round-trip on save; the editor does not add new embedded fonts.',
+      'Fonts embedded in the file (word/fonts) are de-obfuscated and wired into shaped text measurement automatically on load — no configuration or network. The embedded binaries round-trip on save; the editor does not add new embedded fonts.',
   },
   {
     id: 'text.color',
@@ -148,6 +149,17 @@ export const wordFeatures: WordFeature[] = [
       'w:outline, w:shadow, w:emboss, w:imprint and w:em render and round-trip; not settable from the toolbar. w14 glow and gradient text fill are not supported.',
   },
   {
+    id: 'text.hidden',
+    name: 'Hidden text (vanish)',
+    category: 'text',
+    editing: 'none',
+    rendering: 'full',
+    roundTrip: 'full',
+    tier: 'community',
+    notes:
+      'w:vanish runs are not drawn and take no space, so pages break where Word breaks them; the text survives a round trip. There is no "show hidden text" view option, and a paragraph whose MARK is vanished still occupies a line.',
+  },
+  {
     id: 'text.math',
     name: 'Math equations (OMML)',
     category: 'text',
@@ -188,6 +200,8 @@ export const wordFeatures: WordFeature[] = [
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
+    notes:
+      'Space before/after and line spacing (single, multiple, exactly, at least) all reach pagination, so a 1.5- or double-spaced document breaks pages where Word breaks them. Font external leading is excluded from line boxes, and trailing auto-spacing may cross the bottom text margin when the glyphs fit, matching Word’s vertical pagination. The paragraph mark’s w:sz participates in the last line’s metrics, matching Word when a cover-page mark is taller than the visible runs. Contextual spacing drops the gap between same-style neighbours, the way Word’s List Paragraph style intends.',
   },
   {
     id: 'paragraphs.indentation',
@@ -197,6 +211,8 @@ export const wordFeatures: WordFeature[] = [
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
+    notes:
+      'Left, right, first-line and hanging indents all reach line geometry, so an indented first line starts where Word starts it and wraps with the room it actually has. Increase/Decrease Indent is on the toolbar and on Tab / Ctrl+M; inside a list it changes the level, so the marker changes with it.',
   },
   {
     id: 'paragraphs.styles',
@@ -213,10 +229,12 @@ export const wordFeatures: WordFeature[] = [
     id: 'paragraphs.borders',
     name: 'Paragraph borders & fills',
     category: 'paragraphs',
-    editing: 'full',
+    editing: 'partial',
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
+    notes:
+      'Paragraph shading (w:shd) is editable. Borders render common ST_Border line styles (single, double, dashed, dotted, and CSS approximations for thick/3-D/inset/outset); decorative art borders paint as a solid rule. Thin doubles inflate to a visible compound band in layout, matching table borders. Borders round-trip but cannot be added, changed or removed from the editor yet.',
   },
   {
     id: 'paragraphs.tabs',
@@ -227,7 +245,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Existing tab stops render (incl. right-tabs and dotted leaders in TOCs); a tab-stop editing UI is not built yet.',
+      "Existing tab stops render, including right/decimal tabs and dot, hyphen and underscore leaders. Positional tabs (w:ptab) render too, so a table-of-contents line reads as one: entry left, leader dots between, page number flush right. The document's own w:defaultTabStop is honoured, so a metric-locale grid lands where Word puts it, in headers and footers as well as the body. A tab-stop editing UI is not built yet.",
   },
   {
     id: 'paragraphs.frames',
@@ -260,6 +278,8 @@ export const wordFeatures: WordFeature[] = [
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
+    notes:
+      'Toolbar toggle creates the definition on first use, numbering.xml included, so a document that has never carried a list can start one. Tab and the indent buttons change the level, and the marker changes with it.',
   },
   {
     id: 'lists.numbered',
@@ -319,25 +339,29 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Resize commits Word-compatible twip widths. Agent-API table mutation is read-only for now.',
+      'Core store and React paginated editor: hover row/column insertion, adjacent divider and outer-right resize, and seven table context-menu structural actions. Vue toolbar and context-menu value UI remain deferred; Vue inherits shared command types only. Tables remain read-only in the automation object model.',
   },
   {
     id: 'tables.borders-shading',
     name: 'Cell borders & shading',
     category: 'tables',
-    editing: 'full',
+    editing: 'partial',
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
+    notes:
+      'Selected-cell borders and fill through React contextual toolbar controls (allowlisted styles, nullable clear fill). Vue value chrome deferred. Existing table/cell borders and table-style shading still render and round-trip.',
   },
   {
     id: 'tables.merge',
     name: 'Merged cells (horizontal & vertical)',
     category: 'tables',
-    editing: 'full',
+    editing: 'none',
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
+    notes:
+      'Authored merges render and round-trip. Merge and split commands are declared but refused; column insert/delete/resize on merged tables shows the engine reason.',
   },
   {
     id: 'tables.page-break',
@@ -354,10 +378,12 @@ export const wordFeatures: WordFeature[] = [
     id: 'tables.nested',
     name: 'Nested tables',
     category: 'tables',
-    editing: 'full',
+    editing: 'partial',
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
+    notes:
+      'Innermost nested table owns resize furniture, structural edits, and selected-cell borders/fill in the React editor; outer tables stay isolated through save/reopen. Vue table chrome deferred.',
   },
   {
     id: 'tables.conditional-formatting',
@@ -368,7 +394,18 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'cnfStyle conditional formatting renders and round-trips; switching table styles from the UI is not built yet.',
+      'Table styles resolve through their basedOn chain: borders, cell margins, shading and the paragraph/run formatting a conditional format carries (so a header row comes out bold and centred) all come from styles.xml, gated by w:tblLook, with an explicit w:cnfStyle taking precedence. Conditional cell margins and switching table styles from the UI are not built yet.',
+  },
+  {
+    id: 'tables.floating',
+    name: 'Floating tables (tblpPr anchored position)',
+    category: 'tables',
+    editing: 'none',
+    rendering: 'partial',
+    roundTrip: 'full',
+    tier: 'community',
+    notes:
+      'An anchored table lands where Word puts it across the page: tblpXSpec/tblpX against the text, margin or page box, plus a tblpY offset from the text anchor. Text does not yet wrap beside it, and page- or margin-anchored vertical positions keep their place in the flow.',
   },
   {
     id: 'tables.text-direction',
@@ -387,72 +424,96 @@ export const wordFeatures: WordFeature[] = [
     id: 'images.inline',
     name: 'Inline images (paste, drag-drop, resize)',
     category: 'images',
-    editing: 'full',
+    editing: 'partial',
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
+    docsLink: '/docs/1.x/guides/images',
+    notes:
+      'Engine layout and paint for embedded PNG/JPEG/GIF at authored wp:extent; React insert/overlay authoring (toolbar, properties, keyboard resize). Vue authoring UI deferred to vue-drawing-authoring-parity — shared engine commands only.',
   },
   {
     id: 'images.anchored',
     name: 'Floating images & wrap modes (square, topAndBottom...)',
     category: 'images',
-    editing: 'full',
+    editing: 'partial',
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
+    docsLink: '/docs/1.x/guides/images',
     notes:
-      'Drag-to-reposition and edge resize with Word-style handles; text reflows around float zones.',
+      'Nine wrap choices, exclusion reflow, z-order, and anchored drag/resize in React. Vue wrap/alt/properties chrome deferred; engine setImageWrapType and toolbarCommandState are shared.',
+  },
+  {
+    id: 'images.svg',
+    name: 'SVG images',
+    category: 'images',
+    editing: 'none',
+    rendering: 'full',
+    roundTrip: 'full',
+    tier: 'community',
+    docsLink: '/docs/1.x/guides/images',
+    notes:
+      'Embedded SVG paints at the authored size. Rendered in the browser secure static mode, so scripts and external references inside the file stay inert. Inserting a new SVG is not supported yet.',
   },
   {
     id: 'images.wmf',
     name: 'WMF / EMF legacy vector images',
     category: 'images',
     editing: 'none',
-    rendering: 'planned',
+    rendering: 'partial',
     roundTrip: 'full',
     tier: 'community',
-    notes: 'Round-trip without loss; not rendered yet.',
+    docsLink: '/docs/1.x/guides/images',
+    notes:
+      'Authored extent reserved; labelled placeholder instead of decode. No converter in this release.',
   },
   {
     id: 'images.tracked',
     name: 'Tracked image insert/delete',
     category: 'images',
-    editing: 'full',
-    rendering: 'full',
-    roundTrip: 'full',
+    editing: 'none',
+    rendering: 'preserved',
+    roundTrip: 'preserved',
     tier: 'community',
+    notes:
+      'Revision wrappers preserved inertly; accept/reject and suggesting-mode delete owned by typed-revisions-and-comments.',
   },
   {
     id: 'images.textboxes',
     name: 'Text boxes',
     category: 'images',
-    editing: 'partial',
-    rendering: 'full',
-    roundTrip: 'full',
+    editing: 'none',
+    rendering: 'partial',
+    roundTrip: 'preserved',
     tier: 'community',
+    docsLink: '/docs/1.x/guides/images',
     notes:
-      'Anchored text boxes render (incl. page-anchored letterhead shapes in headers) and round-trip. Inner text is editable; move and resize handles for the box are not built yet.',
+      'Non-picture DrawingML payloads reserve extent and paint a labelled placeholder; inner stories are not editable. Distinct from typed text-box story work.',
   },
   {
     id: 'images.shapes',
     name: 'Drawing shapes & geometry',
     category: 'images',
     editing: 'none',
-    rendering: 'none',
-    roundTrip: 'partial',
+    rendering: 'partial',
+    roundTrip: 'preserved',
     tier: 'community',
+    docsLink: '/docs/1.x/guides/images',
     notes:
-      'Round-trip but are not painted yet. Custom geometry is reduced to its bounding rectangle on save.',
+      'Charts, groups, canvases, and custom geometry reserve extent with placeholders; unsupported payloads stay generic in the canonical tree.',
   },
   {
     id: 'images.crop',
     name: 'Picture cropping (srcRect)',
     category: 'images',
-    editing: 'none',
+    editing: 'partial',
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
-    notes: 'Crop renders and round-trips; cropping from the UI is not built.',
+    docsLink: '/docs/1.x/guides/images',
+    notes:
+      'Crop renders and round-trips; React properties dialog edits crop in UI percent. Vue deferred.',
   },
   {
     id: 'images.adjustments',
@@ -480,20 +541,23 @@ export const wordFeatures: WordFeature[] = [
     name: 'Charts (DrawingML)',
     category: 'images',
     editing: 'none',
-    rendering: 'none',
-    roundTrip: 'none',
+    rendering: 'partial',
+    roundTrip: 'preserved',
     tier: 'community',
-    notes: 'Not parsed; dropped on save.',
+    docsLink: '/docs/1.x/guides/images',
+    notes:
+      'Extent reserved with labelled placeholder; chart payload preserved generically, not semantically edited.',
   },
   {
     id: 'images.smartart',
     name: 'SmartArt & diagrams',
     category: 'images',
     editing: 'none',
-    rendering: 'none',
-    roundTrip: 'none',
+    rendering: 'partial',
+    roundTrip: 'preserved',
     tier: 'community',
-    notes: 'Not parsed; dropped on save.',
+    docsLink: '/docs/1.x/guides/images',
+    notes: 'Same placeholder policy as charts; payload preserved inertly.',
   },
   {
     id: 'images.ink',
@@ -516,7 +580,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'The layout engine paginates like Word: page breaks, keep rules, split paragraphs marked across pages.',
+      'The layout engine paginates like Word: page breaks, keep rules, split paragraphs marked across pages. Hard page breaks are insertable and write `w:br w:type="page"`.',
   },
   {
     id: 'layout.sections',
@@ -527,51 +591,53 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Margins editable; mid-body sectPr (section breaks) render and round-trip. Inserting new sections from the UI is not built yet.',
+      'Page size, orientation and margins editable per section or whole document (Page Setup dialog, ruler drags); each section paginates against its own geometry, so mixed portrait/landscape documents render as Word shows them. Section breaks insertable. Even/odd-page break parity (the blank page Word inserts to reach the right parity) and per-section columns are not modelled yet.',
   },
   {
     id: 'layout.headers-footers',
     name: 'Headers & footers (edit in place)',
     category: 'layout',
-    editing: 'full',
+    editing: 'partial',
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Same editing model as the body: tracked changes, fields, images and tables work inside headers/footers.',
+      'React: typed scoped header/footer editing (enter/exit story, create/remove, link/unlink to previous, title-page and even/odd options) with PAGE/NUMPAGES/SECTIONPAGES insert chrome. `editHeaderFooter` accepts `variant` / `evenPage` / `firstPage` on the shared Editor contract. Per-section first/even/default variants paint like Word. Vue chrome deferred; Vue can still call the shared commands. Tracked changes, watermark/drawing authoring, and structural table ops inside furniture are not claimed.',
     docsLink: '/docs/1.x/guides/headers-footers',
   },
   {
     id: 'layout.watermarks',
     name: 'Watermarks (text & image)',
     category: 'layout',
-    editing: 'full',
-    rendering: 'full',
-    roundTrip: 'full',
+    editing: 'none',
+    rendering: 'planned',
+    roundTrip: 'preserved',
     tier: 'community',
+    notes:
+      'Watermarks live as VML/drawings inside header parts. Typing, layout, and editing are deferred to the drawings lane; Editor.getWatermark() is a stub. Structural markup may survive in the header part but is not a supported watermark feature.',
     docsLink: '/docs/1.x/guides/headers-footers',
   },
   {
     id: 'layout.footnotes',
     name: 'Footnotes & endnotes',
     category: 'layout',
-    editing: 'full',
-    rendering: 'full',
+    editing: 'partial',
+    rendering: 'partial',
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Editable note bodies with auto-numbering; tracked changes work inside notes; note references inside tables paginate correctly.',
+      'React: typed note model, layout (pageBottom/beneathText/sectEnd/docEnd), scoped note editing, insert/delete/convert, chrome slots. Vue deferred. Tracked note inserts and notes-in-HF layout out of scope.',
   },
   {
     id: 'layout.columns',
     name: 'Multi-column layout',
     category: 'layout',
     editing: 'none',
-    rendering: 'full',
+    rendering: 'partial',
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Text flows into newspaper columns with balancing and separators; column count is not editable from the UI.',
+      "Section w:cols count, gap, separator and equal/unequal widths paginate into columns; explicit column breaks leave the break paragraph's empty remainder at the top of the next column. Balancing continuous multi-column sections is supported. Column editing chrome is not exposed.",
   },
   {
     id: 'layout.page-borders',
@@ -602,7 +668,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'First, even, and default variants are selected per page and editable in place. The section setting that enables different even and odd pages has no UI.',
+      "First, even, and default variants are selected by the page's number in the document (so the alternation carries across section breaks) and editable in an open furniture scope. Programmatic `editHeaderFooter({ variant: 'even' })` (or `evenPage: true`) creates/opens the even story and enables `w:evenAndOddHeaders` in one undo unit. React header/footer chrome can toggle different even and odd pages; Vue chrome deferred.",
   },
   {
     id: 'layout.vertical-align',
@@ -629,11 +695,11 @@ export const wordFeatures: WordFeature[] = [
     name: 'Page number format (pgNumType)',
     category: 'layout',
     editing: 'none',
-    rendering: 'none',
+    rendering: 'partial',
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Section numbering start, format, chapter style, and chapter separator parse and serialize. PAGE field display still renders as decimal rather than applying pgNumType formatting.',
+      'Section numbering start, format, chapter style, and chapter separator parse and serialize. Allowlisted PAGE fields in headers/footers honour authored start and fmt (e.g. lowerRoman); NUMPAGES/SECTIONPAGES stay decimal. There is no pgNumType authoring UI yet.',
   },
 
   // --- Review ---------------------------------------------------------------
@@ -658,7 +724,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Per-change and bulk accept/reject in the sidebar; headless acceptChangeById/rejectChangeById. Deliberately not exposed as agent tools: humans decide.',
+      'Per-change and bulk accept/reject in the sidebar; headless acceptChangeById/rejectChangeById, and revision.accept()/reject() through the automation object model.',
     docsLink: '/docs/1.x/guides/tracked-changes',
   },
   {
@@ -673,15 +739,15 @@ export const wordFeatures: WordFeature[] = [
   },
   {
     id: 'review.ai-redlining',
-    name: 'AI redlining (agent-proposed tracked changes)',
+    name: 'Programmatic redlining (code-proposed tracked changes)',
     category: 'review',
     editing: 'full',
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Agents propose Word-native tracked changes via suggest_change; live in the editor, headless via DocxReviewer, or over MCP.',
-    docsLink: '/docs/1.x/agents/redlining',
+      'Word-native tracked changes written through the automation object model, against DOCX bytes on a server or an editor open in a page.',
+    docsLink: '/docs/1.x/editor-api',
   },
   {
     id: 'review.moves',
@@ -703,26 +769,33 @@ export const wordFeatures: WordFeature[] = [
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
+    notes:
+      'Insert, edit and remove with Ctrl/Cmd+K or the toolbar. Targets are allowlisted ' +
+      '(http(s), mailto, tel, ftp); anything else renders inert and still round-trips. ' +
+      'Opening a document never requests a link target — activation is an explicit gesture.',
   },
   {
     id: 'fields.bookmarks',
     name: 'Bookmarks & internal links',
     category: 'fields',
-    editing: 'none',
-    rendering: 'partial',
-    roundTrip: 'full',
-    tier: 'community',
-    notes: 'Parsed and preserved losslessly; bookmark editing UI is deferred.',
-  },
-  {
-    id: 'fields.page-numbers',
-    name: 'PAGE / NUMPAGES fields',
-    category: 'fields',
-    editing: 'full',
+    editing: 'partial',
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
-    notes: 'Insertable in headers/footers; values recompute as the layout paginates.',
+    notes:
+      'Internal links jump to their bookmark and move the caret, including targets on ' +
+      'pages that have not been painted yet. Creating and renaming bookmarks is deferred.',
+  },
+  {
+    id: 'fields.page-numbers',
+    name: 'PAGE / NUMPAGES / SECTIONPAGES fields',
+    category: 'fields',
+    editing: 'partial',
+    rendering: 'full',
+    roundTrip: 'full',
+    tier: 'community',
+    notes:
+      'Allowlisted complex PAGE, NUMPAGES, and SECTIONPAGES project in headers/footers at layout time (PAGE respects section pgNumType start/fmt). Insertable from React header/footer chrome (including Page X of Y). PAGE fields hosted inside drawing text boxes remain deferred with text-box story rendering. Other field instructions stay inert; body field evaluation is deferred.',
   },
   {
     id: 'fields.toc',
@@ -733,7 +806,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'TOCs can be inserted and stale or empty TOCs regenerated from document headings, with tab leaders, page numbers, and working links.',
+      'Body TOCs can be inserted from the shared Insert menu and refreshed from document headings, including page-numbers-only updates, tab leaders, section-formatted page numbers, and bookmark links. Generated rows are read-only navigation links.',
   },
   {
     id: 'fields.other-codes',
@@ -778,7 +851,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Discover, create, fill, and remove by tag/id/alias from the headless API and the editor (inline controls in table cells, headers and footers included). Content is editable; control properties (tag, alias, lock) are not UI-editable, and a block control inside a table cell or text box is not modeled.',
+      'Block, inline, row and cell controls are typed and addressable in every story (table cells, headers, footers and note bodies included); a control around a table row or cell lays out as that row or cell, keeping its grid column, span and row semantics. Discover, create, fill and remove them by tag, title or file id from the document object model; content is editable, and tag, title and lock are writable through the API but have no toolbar chrome. All four `w:lock` modes are enforced against what an edit would actually change — including the characters inside an inline control, a tracked-change decision, and a hyperlink write — an enclosing control’s lock wins over an inner one, and text typed at a control’s leading edge counts as inside it, because that is where Word puts it. A write addressed at one control is resolved against every control it would actually land in, so filling in an outer control cannot put text inside a locked or bound control nested at its edge — including an empty paragraph such a control holds, where the write has to create the run it lands in. Replacing a control’s whole value, or deleting a control together with its content, is refused when it would destroy a locked or bound control nested inside it; removing the wrapper while keeping the content leaves those controls untouched and is allowed. A control’s lock protects the control and its content, not the document: page setup, section furniture and note numbering stay editable beside a locked field. Under `w:documentProtection w:edit="forms"` only control content is editable, resolved from what an edit addresses — so an inline field can be filled in while the sentence around it stays read-only. Picture and repeating-section controls, custom-XML-bound controls and docPart galleries are preserved as they were rather than typed; every edit inside a bound control is refused instead of desynchronising it from its part, while removing the control is allowed and takes the binding with it.',
     docsLink: '/docs/1.x/guides/content-controls',
   },
   {
@@ -789,7 +862,8 @@ export const wordFeatures: WordFeature[] = [
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
-    notes: 'Add and remove items from the editor; the section configuration itself is read-only.',
+    notes:
+      'Add and remove items from the editor; the section configuration itself is read-only. A repeating section is not typed as a content control in the document object model — it is preserved as authored, so a script reaches the controls inside it rather than the section itself.',
     docsLink: '/docs/1.x/guides/content-controls',
   },
   {
@@ -800,6 +874,8 @@ export const wordFeatures: WordFeature[] = [
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
+    notes:
+      'Each control takes the value its own type accepts: a dropdown must name an item it declares, a combo box also takes free text, a date validates an ISO instant and writes both `w:fullDate` and the formatted text, and a checkbox writes its declared glyph and state together. A literal prompt is replaced whole on the first write; without a durable prompt source, clearing the value later leaves the control empty. A `w:temporary` control removes its own wrapper on the first edit and leaves the content.',
     docsLink: '/docs/1.x/guides/content-controls',
   },
   {
@@ -837,12 +913,12 @@ export const wordFeatures: WordFeature[] = [
     id: 'structure.protection',
     name: 'Document protection & editing restrictions',
     category: 'structure',
-    editing: 'none',
+    editing: 'partial',
     rendering: 'none',
     roundTrip: 'preserved',
     tier: 'community',
     notes:
-      'Protection settings round-trip but are not enforced; inline permission ranges may be dropped.',
+      'Protection settings round-trip. Forms protection is enforced: only addressed content-control content remains editable, while the surrounding document stays read-only. Other protection modes are not enforced, and inline permission ranges may be dropped.',
   },
 
   // --- Collaboration, i18n & editing UX ---------------------------------------
@@ -897,14 +973,15 @@ export const wordFeatures: WordFeature[] = [
   },
   {
     id: 'collab.agent-tools',
-    name: 'AI agent toolkit (14 tools, 3 transports)',
+    name: 'Document automation object model',
     category: 'collaboration',
     editing: 'full',
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
-    notes: 'Live editor bridge, headless DocxReviewer, MCP server; Word-JS-API-shaped.',
-    docsLink: '/docs/1.x/agents',
+    notes:
+      'Batching object model shaped after a documented subset of the Word JavaScript API; server entry over bytes, browser entry over an open editor. No model integration, tool catalog or MCP transport ships with it.',
+    docsLink: '/docs/1.x/editor-api',
   },
 ];
 

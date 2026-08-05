@@ -1,7 +1,7 @@
 ---
 title: 'Next.js'
 description: 'Set up a Next.js DOCX editor in the App Router. Dynamic import with ssr: false, the window is not defined fix, file upload, and saving back to .docx.'
-category: 'Frameworks'
+category: "Frameworks"
 seoTitle: 'Next.js DOCX editor setup'
 ---
 
@@ -10,7 +10,7 @@ By the end of this page you have an App Router route that opens a `.docx` from d
 ## Install
 
 ```bash
-npm install @docx-editor.dev/react
+npm install @docx-editor.dev/react @docx-editor.dev/core
 ```
 
 ## Mount the editor
@@ -39,7 +39,7 @@ export default function Page() {
 
 import { useRef, useState } from 'react';
 import { DocxEditor, type DocxEditorRef } from '@docx-editor.dev/react';
-import '@docx-editor.dev/react/styles.css';
+import '@docx-editor.dev/core/styles/editor.css';
 
 export function Editor() {
   const editorRef = useRef<DocxEditorRef>(null);
@@ -73,19 +73,21 @@ export function Editor() {
         <input type="file" accept=".docx" onChange={onFileSelect} />
         <button onClick={onSave}>Save .docx</button>
       </div>
-      <DocxEditor ref={editorRef} documentBuffer={buffer} showToolbar />
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <DocxEditor ref={editorRef} document={buffer ?? undefined} />
+      </div>
     </div>
   );
 }
 ```
 
-`documentBuffer={null}` mounts an empty document until the user picks a file. The stylesheet import is required once.
+Leaving `document` undefined mounts an empty editor until the user picks a file. The stylesheet import is required once, and the editor fills its parent so it needs a box with a real height.
 
 ## Why this pattern
 
 The editor reads the DOM and measures text at mount, so it cannot run during server rendering. If you import `DocxEditor` directly in a route, `next build` fails during prerender with:
 
-```
+```text
 ReferenceError: window is not defined
 ```
 
@@ -109,7 +111,7 @@ bun run dev:nextjs   # http://localhost:3000
 
 ## Next steps
 
-- [Quickstart](/docs/1.x/quickstart): the load, edit, save flow in detail
-- [Loading and saving](/docs/1.x/guides/loading-and-saving): URLs, autosave, upload to your API
+- [Quickstart](/docs/2.x/quickstart): the load, edit, save flow in detail
+- [Loading and saving](/docs/2.x/guides/loading-and-saving): URLs, autosave, upload to your API
 - [Next.js DOCX editor guide](/blog/nextjs-docx-editor): the long-form walkthrough
 - [Next.js example on GitHub](https://github.com/eigenpal/docx-editor/tree/main/examples/nextjs)

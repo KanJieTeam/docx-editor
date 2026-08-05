@@ -73,7 +73,7 @@ jobs:
         run: bun run i18n:validate
 
       - name: Run tests
-        run: bun test
+        run: bun run test
 
       - name: Build packages
         run: bun run build:packages
@@ -83,8 +83,9 @@ jobs:
       - name: API report check
         run: bun run api:check
 
-      - name: Parity contract check
-        run: bun run check:parity-contract
+      # Parity contract check is disabled here for the same reason as in ci.yml:
+      # @docx-editor.dev/vue is WIP, unpublished, and off `build:packages`, so its API
+      # Extractor snapshot is no longer regenerated. Restore alongside the ci.yml step.
 
       - name: i18n per-locale bundle size check
         run: bun run check:i18n-bundle-size

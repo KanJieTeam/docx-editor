@@ -8,7 +8,7 @@ name: Release
 #    changesets (they were drained by `changeset version`), and instead
 #    publishes the new versions to npm.
 #
-# The heavy gate (lint, format, typecheck, tests, build, Playwright, parity)
+# The heavy gate (lint, format, typecheck, tests, build, parity)
 # only guards the PUBLISH path (mode 2). On the PR-update path (mode 1) those
 # steps are skipped: `changeset version` just rewrites versions + CHANGELOGs,
 # needs no build, and the work is already validated by each contributing PR's
@@ -109,7 +109,7 @@ jobs:
 
       - name: Run tests
         if: ${{ steps.pending.outputs.publishing == 'true' }}
-        run: bun test
+        run: bun run test
 
       - name: Build packages (publish reuses the dist/)
         if: ${{ steps.pending.outputs.publishing == 'true' }}
@@ -119,42 +119,33 @@ jobs:
           # core's 67 entries OOM under the default 1.5 GB heap.
           NODE_OPTIONS: --max-old-space-size=8192
 
-      # Restore the browser binaries from cache so the common path skips the
-      # download from cdn.playwright.dev. Keyed on the lockfile so a
-      # @playwright/test bump invalidates it; a miss falls through to a fresh
-      # download.
-      - name: Cache Playwright browsers
-        if: ${{ steps.pending.outputs.publishing == 'true' }}
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-
-      # `--with-deps` shells out to apt-get; a post-install needrestart prompt
-      # can hang it, so NEEDRESTART_MODE=a + noninteractive suppress it.
-      # timeout-minutes turns any remaining hang into a fast failure.
-      #
-      # NB: Playwright < 1.60.0 deadlocks here on Node >= 24.16 — a vendored
-      # yauzl regression hangs extraction *after* the download hits 100%
-      # (microsoft/playwright#40724). `setup-node` pins Node 24, whose runner
-      # default crossed 24.16, so every publish-path run hung until the job
-      # timeout. The fix is the >=1.60.0 bump in package.json, not a longer
-      # timeout. Keep this pinned at >=1.60.0.
-      - name: Install Playwright browsers for parity gate
-        if: ${{ steps.pending.outputs.publishing == 'true' }}
-        timeout-minutes: 10
-        run: npx playwright install --with-deps chromium
-        env:
-          DEBIAN_FRONTEND: noninteractive
-          NEEDRESTART_MODE: a
-
       - name: Parity prepublish gate
         if: ${{ steps.pending.outputs.publishing == 'true' }}
         run: bun run parity:prepublish
 
+      # Emit `packages/<pkg>/THIRD_PARTY_NOTICES.md` from the build that is about
+      # to be packed. The published bundles inline third-party source (the
+      # private core package drags fast-xml-parser, fflate and prosemirror-* in
+      # with it), and MIT/Apache-2.0 both require the copyright and permission
+      # notice to travel with the copy — minified `dist/` carries neither.
+      #
+      # Must sit AFTER the last build step and BEFORE the changesets action:
+      # the generator reads `dist/metafile-*.json`, and the files it writes are
+      # gitignored, so they exist only for the duration of this job and are
+      # picked up by `changeset publish` through each package's `files` list.
+      # The step hard-fails on a bundled dependency with no license text, which
+      # aborts the job before anything reaches npm.
+      - name: Generate third-party notices
+        if: ${{ steps.pending.outputs.publishing == 'true' }}
+        run: bun run notices:generate
+
       # The single step that does both PR-management and publishing.
       # - If `.changeset/*.md` are pending: opens / updates a "chore: release X.Y.Z" PR
       #   that runs `version` (drains changesets, bumps versions, writes CHANGELOG).
+      #   `version-packages` also regenerates the Office.js conformance fixture:
+      #   `compat/generated/docxeditor.shape.json` stamps editor-api's version, and a
+      #   test asserts it equals a fresh regeneration — so a bump without this leaves
+      #   the release PR red on a file only the bump changed.
       # - If no pending changesets and current package.json versions aren't on npm yet:
       #   runs `publish` and creates per-package git tags.
       - name: Release PR or Publish

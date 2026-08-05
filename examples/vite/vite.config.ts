@@ -1,4 +1,5 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
+import { readFile } from 'node:fs/promises';
 import react from '@vitejs/plugin-react';
 import tailwindcss from 'tailwindcss';
 import autoprefixer from 'autoprefixer';
@@ -15,6 +16,72 @@ async function fetchGitHubStars(): Promise<number | null> {
   return null;
 }
 
+/**
+ * Serve the canonical comprehensive fixture from ONE byte source (task M6D.1).
+ *
+ * The demo's bare `/` must load `e2e/fixtures/comprehensive-word-element-test.docx`.
+ * Copying it into `examples/vite/public/` would create a second DOCX that silently
+ * drifts from the fixture the e2e suite asserts against — the task explicitly calls
+ * for an asset mapping or an automated byte-identical copy instead. This maps the URL
+ * onto the real file at request time, so there is exactly one source of bytes and it
+ * cannot go stale.
+ *
+ * `build` copies it once into the output, so the deployed demo serves the same bytes
+ * rather than depending on a dev-only route.
+ */
+function canonicalFixturePlugin(): Plugin {
+  const fixtures = new Map([
+    [
+      '/comprehensive-word-element-test.docx',
+      path.join(monorepoRoot, 'e2e/fixtures/comprehensive-word-element-test.docx'),
+    ],
+    [
+      '/harfbuzz-text-fidelity.docx',
+      path.join(monorepoRoot, 'e2e/fixtures/harfbuzz-text-fidelity.docx'),
+    ],
+  ]);
+  return {
+    name: 'docx-editor-canonical-fixture',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = req.url ? req.url.split('?')[0]! : '';
+        // The named entries above are what BUILD emits. In dev, any fixture is reachable by
+        // name so `?fixture=<name>.docx` can point at one without editing this file — the
+        // name is sanitized to a bare filename and resolved inside `e2e/fixtures/`, so a
+        // crafted URL cannot walk out of it.
+        const devFixture =
+          fixtures.get(url) ??
+          (/^\/[\w.-]+\.docx$/.test(url)
+            ? path.join(monorepoRoot, 'e2e/fixtures', path.basename(url))
+            : undefined);
+        const source = devFixture;
+        if (!source) return next();
+        readFile(source)
+          .then((bytes) => {
+            res.setHeader(
+              'Content-Type',
+              'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            );
+            res.end(bytes);
+          })
+          // Not a fixture name (the demo's own `public/sample.docx` is the common case):
+          // fall through so vite serves it statically. Forwarding the error instead would
+          // turn every non-fixture `.docx` request into a 500.
+          .catch(() => next());
+      });
+    },
+    async generateBundle() {
+      for (const [url, source] of fixtures) {
+        this.emitFile({
+          type: 'asset',
+          fileName: url.slice(1),
+          source: await readFile(source),
+        });
+      }
+    },
+  };
+}
+
 export default defineConfig(async () => {
   const stars = await fetchGitHubStars();
   // `@docx-editor.dev/core` lives in a separate repo and is consumed from npm,
@@ -28,11 +95,17 @@ export default defineConfig(async () => {
 
   return {
     base: process.env.VITE_BASE_PATH ?? '/',
-    plugins: [react()],
+    plugins: [react(), canonicalFixturePlugin()],
     root: __dirname,
     resolve: {
       alias: usePublished
-        ? [{ find: '@', replacement: path.join(monorepoRoot, 'packages/react/src') }]
+        ? [
+            {
+              find: /^@docx-editor\.dev\/react$/,
+              replacement: path.join(monorepoRoot, 'packages/react/dist/index.mjs'),
+            },
+            { find: '@', replacement: path.join(monorepoRoot, 'packages/react/src') },
+          ]
         : [
             // Resolve package imports to source for live development
             // Order matters: more-specific prefixes before less-specific ones
@@ -41,22 +114,47 @@ export default defineConfig(async () => {
               replacement: path.join(monorepoRoot, 'packages/react/src/index.ts'),
             },
             {
+              find: '@docx-editor.dev/core/editor',
+              replacement: path.join(monorepoRoot, 'packages/core/src/editor/index.ts'),
+            },
+            // The remaining core lane subpaths, one rule. `@docx-editor.dev/react`
+            // above resolves to package SOURCE, so the whole `packages/react/src` graph is
+            // compiled here and its own bare specifiers resolve through these aliases too.
+            // `editor` and the `contracts/*` single-file entries are matched above / by the
+            // capture.
+            {
+              find: /^@docx-editor\.dev\/core\/(binding|layout|output|store|sync|clients|server)$/,
+              replacement: path.join(monorepoRoot, 'packages/core/src/$1/index.ts'),
+            },
+            {
+              find: /^@docx-editor\.dev\/core\/contracts\/(.+)$/,
+              replacement: path.join(monorepoRoot, 'packages/core/src/contracts/$1.ts'),
+            },
+            {
+              find: '@docx-editor.dev/pro/react',
+              replacement: path.join(monorepoRoot, 'packages/pro/src/react/index.ts'),
+            },
+            {
+              find: '@docx-editor.dev/pro',
+              replacement: path.join(monorepoRoot, 'packages/pro/src/index.ts'),
+            },
+            {
+              find: '@docx-editor.dev/fonts/google',
+              replacement: path.join(monorepoRoot, 'packages/fonts/src/google-fonts.ts'),
+            },
+            // Every package points its export map at `dist/`, so a specifier missing from
+            // this list resolves through node_modules to a build instead of to source.
+            // That is the whole reason the list exists, and `pro` and `fonts` were simply
+            // never added to it: the demo built anyway on any machine that had run
+            // `build:packages`, and only failed on the CI job that had not.
+            {
+              find: '@docx-editor.dev/fonts',
+              replacement: path.join(monorepoRoot, 'packages/fonts/src/index.ts'),
+            },
+            {
               find: '@docx-editor.dev/i18n',
               replacement: path.join(monorepoRoot, 'packages/i18n/src/index.ts'),
             },
-            {
-              find: '@docx-editor.dev/agents/react',
-              replacement: path.join(monorepoRoot, 'packages/agents/src/react.ts'),
-            },
-            {
-              find: '@docx-editor.dev/agents/server',
-              replacement: path.join(monorepoRoot, 'packages/agents/src/server.ts'),
-            },
-            {
-              find: /^@docx-editor\.dev\/agents$/,
-              replacement: path.join(monorepoRoot, 'packages/agents/src/index.ts'),
-            },
-            { find: '@', replacement: path.join(monorepoRoot, 'packages/react/src') },
           ],
     },
     css: {

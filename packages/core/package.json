@@ -1,34 +1,109 @@
 {
-  "name": "@docx-editor.dev/core-contract",
-  "version": "0.0.1",
-  "private": true,
-  "description": "Contract-only declaration of the @docx-editor.dev/core public API. Not the implementation; never published.",
+  "name": "@docx-editor.dev/core",
+  "version": "1.0.0",
+  "description": "Framework-agnostic core for docx-editor.dev: OOXML parse/serialize, the canonical document tree, layout and paint, and the Editor contract the adapters render.",
   "type": "module",
   "exports": {
     ".": {
-      "types": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./automation": {
+      "types": "./dist/automation.d.ts",
+      "import": "./dist/automation.js",
+      "require": "./dist/automation.cjs"
+    },
+    "./binding": {
+      "types": "./dist/binding.d.ts",
+      "import": "./dist/binding.js",
+      "require": "./dist/binding.cjs"
+    },
+    "./contracts/editor": {
+      "types": "./dist/contracts/editor.d.ts",
+      "import": "./dist/contracts/editor.js",
+      "require": "./dist/contracts/editor.cjs"
+    },
+    "./contracts/document": {
+      "types": "./dist/contracts/document.d.ts",
+      "import": "./dist/contracts/document.js",
+      "require": "./dist/contracts/document.cjs"
+    },
+    "./contracts/interaction": {
+      "types": "./dist/contracts/interaction.d.ts",
+      "import": "./dist/contracts/interaction.js",
+      "require": "./dist/contracts/interaction.cjs"
+    },
+    "./contracts/modules": {
+      "types": "./dist/contracts/modules.d.ts",
+      "import": "./dist/contracts/modules.js",
+      "require": "./dist/contracts/modules.cjs"
+    },
+    "./contracts/types": {
+      "types": "./dist/contracts/types.d.ts",
+      "import": "./dist/contracts/types.js",
+      "require": "./dist/contracts/types.cjs"
+    },
+    "./layout": {
+      "types": "./dist/layout.d.ts",
+      "import": "./dist/layout.js",
+      "require": "./dist/layout.cjs"
+    },
+    "./output": {
+      "types": "./dist/output.d.ts",
+      "import": "./dist/output.js",
+      "require": "./dist/output.cjs"
+    },
+    "./store": {
+      "types": "./dist/store.d.ts",
+      "import": "./dist/store.js",
+      "require": "./dist/store.cjs"
     },
     "./editor": {
-      "types": "./src/editor.ts"
+      "types": "./dist/editor.d.ts",
+      "import": "./dist/editor.js",
+      "require": "./dist/editor.cjs"
     },
-    "./geometry": {
-      "types": "./src/geometry.ts"
-    },
-    "./plugin": {
-      "types": "./src/plugin.ts"
-    },
-    "./mcp": {
-      "types": "./src/mcp.ts"
-    },
-    "./types": {
-      "types": "./src/types-barrel.ts"
-    }
+    "./styles/editor.css": "./dist/editor.css",
+    "./package.json": "./package.json"
   },
   "scripts": {
+    "build": "tsup && node ../../scripts/copy-core-styles.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "typescript": "^5.3.3"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@docx-editor.dev/i18n": "^1.0.0",
+    "bidi-js": "1.0.3",
+    "emf-converter": "2.0.2",
+    "fast-xml-parser": "^4.5.0",
+    "fflate": "^0.8.2",
+    "harfbuzzjs": "1.4.0",
+    "prosemirror-commands": "^1.7.1",
+    "prosemirror-keymap": "^1.2.3",
+    "prosemirror-model": "^1.25.4",
+    "prosemirror-state": "^1.4.4",
+    "prosemirror-view": "^1.41.8"
+  },
+  "peerDependencies": {
+    "pdf-lib": "^1.17.1",
+    "yjs": "^13.6.0"
+  },
+  "peerDependenciesMeta": {
+    "pdf-lib": {
+      "optional": true
+    },
+    "yjs": {
+      "optional": true
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/metafile-*.json",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
+  ]
 }
