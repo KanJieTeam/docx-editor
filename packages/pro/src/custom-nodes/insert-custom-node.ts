@@ -11,7 +11,12 @@ Production use requires a commercial agreement: licensing@eigenpal.com
 
 import type { Editor } from '@docx-editor.dev/core/contracts/editor';
 import type { PaginatedSurface } from '@docx-editor.dev/core/editor';
-import type { CustomNodePayloadWrite, CustomNodeWriteResult } from '@docx-editor.dev/core/store';
+import {
+  parseNoteScopeId,
+  type CustomNodePayloadWrite,
+  type CustomNodeWriteResult,
+  type StoryScope,
+} from '@docx-editor.dev/core/store';
 import type { AnyCustomNodeDefinition, CustomNodeDefinition } from './define-custom-node.ts';
 import type { InferSchemaInput, StandardSchemaV1 } from './data-schema.ts';
 import { encodeCustomNodeTag } from './tag-codec.ts';
@@ -214,6 +219,65 @@ export function projectionOf(
 }
 
 /**
+ * Refuse a write while the document is open for VIEWING.
+ *
+ * `session.applyTreeOps` is the store's path, below the surface's editing-mode gate, so a
+ * write routed through it edited a read-only document — the context menu's Remove row
+ * deleted a chip in a viewing document and reported success. Every write in this file asks
+ * first rather than relying on a gate it does not pass through.
+ */
+export function viewingRefusal(editor: Editor): CustomNodeWriteOutcome | null {
+  return editor.getEditingMode() === 'viewing'
+    ? { ok: false, code: 'locked', reason: 'the document is open for viewing' }
+    : null;
+}
+
+/**
+ * The story the reader has open, in the vocabulary `applyTreeOps` takes.
+ *
+ * A chip lives wherever it was inserted, and a header is an ordinary place to put one.
+ * Writes default to the body, so the scope has to travel with them.
+ */
+export function storyScopeOfEditor(editor: Editor): StoryScope {
+  const scope = editor.getActiveScope();
+  if (scope.kind === 'headerFooter') return { kind: 'headerFooter', rId: scope.rId };
+  if (scope.kind === 'note') {
+    const parsed = parseNoteScopeId(scope.id);
+    if (parsed) return { kind: 'notesPart', noteKind: parsed.noteKind };
+  }
+  return { kind: 'body' };
+}
+
+/**
+ * The story a node or paragraph LIVES in, from its own id.
+ *
+ * Ids are part-qualified (`/word/header1.xml#0.0`), so the target answers this itself. The
+ * open scope is only a fallback for an id that names no part: it is where the READER is,
+ * which is a different question and the wrong one whenever a caller addresses a node
+ * somewhere else — passing an explicit body `at` while a header is open used to work and
+ * would otherwise start refusing as `unknown-paragraph`.
+ */
+export function storyScopeOfId(editor: Editor, id: string | undefined): StoryScope {
+  const surface = surfaceOf(editor);
+  const partName = id === undefined ? '' : id.slice(0, id.indexOf('#'));
+  if (!surface || partName.length === 0) return storyScopeOfEditor(editor);
+  if (partName === surface.session.part().name) return { kind: 'body' };
+  for (const section of surface.session.headerFooterResolutionBySection()) {
+    for (const slots of [section.headers, section.footers]) {
+      for (const slot of slots.values()) {
+        if (slot.partName === partName) return { kind: 'headerFooter', rId: slot.rId };
+      }
+    }
+  }
+  for (const noteKind of ['footnote', 'endnote'] as const) {
+    if (surface.session.partFor({ kind: 'notesPart', noteKind })?.name === partName) {
+      return { kind: 'notesPart', noteKind };
+    }
+  }
+  return storyScopeOfEditor(editor);
+}
+
+/**
  * Insert one custom node. Returns the engine's typed result: refusals carry the engine's own
  * reason (tag overflow, offset out of range, viewing mode, …), and a payload the schema refused
  * carries the failing fields in `issues`.
@@ -248,19 +312,28 @@ export function insertCustomNode<Schema extends StandardSchemaV1 | undefined = u
       reason: `the encoded tag is ${encoded.length} characters; Word caps w:tag at 64 — move what does not fit into the payload (\`data\`), or shorten the attrs`,
     };
   }
+  const refusal = viewingRefusal(editor);
+  if (refusal) return refusal;
   const at = input.at ?? surface.state().selection.head;
   const lock = input.lock === undefined ? 'contentLocked' : input.lock;
-  const written = surface.session.insertCustomNode({
-    paragraphId: at.paragraphId,
-    offset: at.offset,
-    tag: encoded.tag,
-    text: projected.text,
-    ...(input.alias === undefined ? {} : { alias: input.alias }),
-    ...(lock === false ? {} : { lock }),
-    ...(payload
-      ? { payload: payloadWriteOf(surface, definition, payload.serialized, projected.text) }
-      : {}),
-  });
+  // The story the paragraph is IN. The write defaults to the body, so inserting a chip into
+  // an open header addressed a paragraph the body store has never heard of and was refused
+  // as `unknown-paragraph` — a header is an ordinary place to want one.
+  const scope = storyScopeOfEditor(editor);
+  const written = surface.session.insertCustomNode(
+    {
+      paragraphId: at.paragraphId,
+      offset: at.offset,
+      tag: encoded.tag,
+      text: projected.text,
+      ...(input.alias === undefined ? {} : { alias: input.alias }),
+      ...(lock === false ? {} : { lock }),
+      ...(payload
+        ? { payload: payloadWriteOf(surface, definition, payload.serialized, projected.text) }
+        : {}),
+    },
+    scope
+  );
   if (!written.ok) return refusalOf(written);
   // The control that now exists, not the one passed in: the write replaces the node.
   return {
