@@ -1470,6 +1470,7 @@ export interface NotesLayoutInput {
     // (undocumented)
     readonly documentEndnoteProps: ResolvedEndnoteProperties;
     readonly documentFootnoteProps: ResolvedFootnoteProperties;
+    readonly drawingsForPart?: (ownerPartName: string) => NoteStoryDrawings | undefined;
     readonly endnotePropsBySection: readonly ResolvedEndnoteProperties[];
     // (undocumented)
     readonly endnotesPart: OoxmlPart | null;
@@ -1486,6 +1487,13 @@ export interface NotesLayoutInput {
 
 // @public
 export function noteStoryBlocks(note: OoxmlNode, displayMode?: RevisionDisplayMode): OoxmlElement[];
+
+// @public
+export interface NoteStoryDrawings {
+    readonly drawingTokenForParagraph?: (paragraph: OoxmlNode) => string;
+    // (undocumented)
+    readonly inlineDrawingLayout: InlineDrawingLayoutContext;
+}
 
 // @public
 export interface NoteStoryLayout {

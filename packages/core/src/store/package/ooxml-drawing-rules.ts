@@ -6,6 +6,7 @@
 import type { OoxmlAttribute, OoxmlElement, OoxmlNode } from './ooxml-tree.ts';
 
 const WML_NAMESPACE_URI = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const WPS_NAMESPACE_URI = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape';
 const DRAWINGML_MAIN_NAMESPACE_URI = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 const WP_NAMESPACE_URI = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
 const PIC_NAMESPACE_URI = 'http://schemas.openxmlformats.org/drawingml/2006/picture';
@@ -1069,15 +1070,50 @@ export function resolveDrawingElementKind(
   return null;
 }
 
-/** Demote every typed drawing kind under a generic parent subtree. */
-export function demoteDrawingKindsInSubtree(children: readonly OoxmlNode[]): readonly OoxmlNode[] {
+/**
+ * Whether a node opens a WML story that a drawing merely HOSTS.
+ *
+ * `w:txbxContent` is not part of the DrawingML grammar around it: it is ordinary body
+ * content — paragraphs, runs, and drawings of their own — that happens to live inside a
+ * shape.
+ */
+/** Just enough of the parent to place a node; the tree node itself may not exist yet. */
+type DemotionParent = { readonly namespaceUri: string; readonly localName: string };
+
+function opensHostedWmlStory(node: OoxmlElement, parent: DemotionParent | undefined): boolean {
+  return (
+    node.namespaceUri === WML_NAMESPACE_URI &&
+    node.localName === 'txbxContent' &&
+    parent?.namespaceUri === WPS_NAMESPACE_URI &&
+    parent.localName === 'txbx'
+  );
+}
+
+/**
+ * Demote every typed drawing kind under a generic parent subtree.
+ *
+ * Stops at a hosted WML story. A text box is a `wps:wsp` under an `a:graphicData` whose uri
+ * is not the picture one, so that graphicData is correctly not a typed `drawingGraphicData`
+ * and demotes — but its story is a separate grammar, and cascading into it stripped the
+ * typed `w:drawing` off a picture INSIDE the box. Nothing then recognized that picture as a
+ * drawing atom: no projection, no resource, nothing painted.
+ *
+ * The carve-out is positional, not name-only: only a `w:txbxContent` directly under a
+ * `wps:txbx` opens a story. A stray element of that name planted anywhere else in a failed
+ * drawing subtree demotes like everything around it.
+ */
+export function demoteDrawingKindsInSubtree(
+  children: readonly OoxmlNode[],
+  parent?: DemotionParent
+): readonly OoxmlNode[] {
   return children.map((child) => {
     if (child.kind === 'textValue') return child;
+    if (opensHostedWmlStory(child, parent)) return child;
     const nextKind = isDrawingKnownKind(child.kind) ? 'generic' : child.kind;
     return {
       ...child,
       kind: nextKind,
-      children: demoteDrawingKindsInSubtree(child.children),
+      children: demoteDrawingKindsInSubtree(child.children, child),
     } as OoxmlElement;
   });
 }

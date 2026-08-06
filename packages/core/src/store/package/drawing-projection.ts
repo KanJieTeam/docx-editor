@@ -1555,10 +1555,23 @@ export function projectRunLevelMcDrawing(
   return projection;
 }
 
+/**
+ * How many text boxes deep the part scan will follow a story.
+ *
+ * A text box inside a text box is legal OOXML, and a hostile file can chain them: each
+ * level is a fresh story root the scan would otherwise descend into unconditionally. The
+ * element budget already bounds total work; this bounds the shape of it, so a deep chain
+ * costs a few levels rather than the whole budget. Word itself stops rendering nested
+ * boxes well before this.
+ */
+const MAX_TEXTBOX_STORY_NESTING = 4;
+
 interface PartCollectFrame {
   readonly node: OoxmlNode;
   readonly namespaceScope: ReadonlyMap<string, string>;
   readonly depth: number;
+  /** Text-box stories entered on the path to this node. */
+  readonly storyDepth: number;
 }
 
 function collectDrawingsInPartBounded(
@@ -1569,9 +1582,38 @@ function collectDrawingsInPartBounded(
   atomIndex?: Map<string, DrawingProjection>
 ): void {
   const stack: PartCollectFrame[] = [
-    { node: root, namespaceScope: emptyNamespaceScope(), depth: 0 },
+    { node: root, namespaceScope: emptyNamespaceScope(), depth: 0, storyDepth: 0 },
   ];
   let visited = 0;
+  // A drawing that hosts a text box is not a leaf: its story is ordinary WML that can hold
+  // pictures of its own, and those need projections (and atom ids) like any other run-level
+  // drawing, or the story lays out with nothing to draw. Descend through the drawing's own
+  // subtree rather than jumping to the story root, so the picture inside is read under the
+  // xmlns bindings its ancestors declare — `a:graphicData` and `wps:wsp` routinely carry them.
+  //
+  // `from` is the node whose subtree actually holds the story. For a plain `w:drawing` that
+  // is the drawing itself; for an `mc:AlternateContent` it is the CHOSEN branch, never the
+  // wrapper — Word emits every anchored text box with a VML fallback carrying a duplicate
+  // `w:txbxContent`, and descending the wrapper would project that dead copy too.
+  const descendIntoTextboxStory = (
+    from: OoxmlNode,
+    frame: PartCollectFrame,
+    scope: ReadonlyMap<string, string>
+  ): void => {
+    if (frame.storyDepth >= MAX_TEXTBOX_STORY_NESTING) return;
+    if (frame.depth >= MAX_XML_DEPTH) return;
+    if (!isElement(from)) return;
+    for (let index = from.children.length - 1; index >= 0; index -= 1) {
+      const child = from.children[index];
+      if (!isElement(child)) continue;
+      stack.push({
+        node: child,
+        namespaceScope: scope,
+        depth: frame.depth + 1,
+        storyDepth: frame.storyDepth + 1,
+      });
+    }
+  };
   while (stack.length > 0) {
     const frame = stack.pop()!;
     if (!isElement(frame.node)) continue;
@@ -1591,6 +1633,7 @@ function collectDrawingsInPartBounded(
         out.push(projected);
         atomIndex?.set(frame.node.id, projected);
       }
+      if (projected?.textboxStory) descendIntoTextboxStory(frame.node, frame, scope);
       continue;
     }
 
@@ -1606,6 +1649,15 @@ function collectDrawingsInPartBounded(
         out.push(projected);
         atomIndex?.set(frame.node.id, projected);
       }
+      if (projected?.textboxStory) {
+        const chosen = resolveRunLevelMcAtom(
+          frame.node,
+          scope,
+          ctx.supportedMcRequires,
+          ctx.limits
+        ).drawing;
+        if (chosen) descendIntoTextboxStory(chosen, frame, scope);
+      }
       continue;
     }
 
@@ -1613,7 +1665,12 @@ function collectDrawingsInPartBounded(
     for (let index = frame.node.children.length - 1; index >= 0; index -= 1) {
       const child = frame.node.children[index];
       if (isElement(child)) {
-        stack.push({ node: child, namespaceScope: scope, depth: frame.depth + 1 });
+        stack.push({
+          node: child,
+          namespaceScope: scope,
+          depth: frame.depth + 1,
+          storyDepth: frame.storyDepth,
+        });
       }
     }
   }
@@ -1672,12 +1729,13 @@ export function projectDrawingsInPackage(
   const projections: DrawingProjection[] = [];
   for (const [partName, part] of pkg.parts) {
     if (!STORY_PART_RE.test(partName)) continue;
-    projections.push(
-      ...projectDrawingsInPart(part, {
-        ...context,
-        resolveRelationship: createDrawingRelationshipResolver(pkg, partName),
-      })
-    );
+    // Appended in a loop rather than spread: the count is file-controlled, and a spread of
+    // several hundred thousand arguments overflows the stack instead of being merely slow.
+    const inPart = projectDrawingsInPart(part, {
+      ...context,
+      resolveRelationship: createDrawingRelationshipResolver(pkg, partName),
+    });
+    for (const projection of inPart) projections.push(projection);
   }
   return Object.freeze(projections.map(freezeDrawingProjection));
 }
