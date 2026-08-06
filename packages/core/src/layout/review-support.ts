@@ -217,7 +217,22 @@ export interface ReviewCustomItem {
   readonly attrs: Readonly<Record<string, string>>;
   /** The SDT's literal content text. Untrusted input. */
   readonly text: string;
-  /** Card title, from the definition's `reviewCard` hook. */
+  /**
+   * The payload the node's control binds to, after the definition validated it.
+   *
+   * Undefined when the node carries none or the payload did not match — see the pro package's
+   * `RecognizedCustomNode.data`, which this is carried from.
+   */
+  readonly data?: unknown;
+  /**
+   * Whether this node asked for a sidebar card.
+   *
+   * False for a definition with no `reviewCard`: the item exists so the chip's own surfaces can
+   * read `attrs`, `text` and `data` off it, and the rail leaves it out. A surface listing cards
+   * filters on this rather than on an empty `title`.
+   */
+  readonly carded: boolean;
+  /** Card title, from the definition's `reviewCard` hook. Empty when `carded` is false. */
   readonly title: string;
   /** Card body, from the definition's `reviewCard` hook. */
   readonly detail?: string;
@@ -252,6 +267,25 @@ export interface ReviewModelInput {
    * `kind: 'custom'` cards for definitions that opted in.
    */
   readonly customNodes?: readonly unknown[] | undefined;
+  /**
+   * The payload each of the story's controls binds to, keyed by the control's node id.
+   *
+   * Resolved by the ENGINE and handed over, because a payload lives in a customXml data part
+   * and a derivation that only receives story parts has no way to reach one. Untrusted file
+   * input on both members; a capability package validates it against whatever shape it
+   * declared before handing it to a host.
+   */
+  /**
+   * Where a capability package reports a node it could not read. Supplied per editor, so a page
+   * with two of them keeps their diagnostics apart.
+   */
+  readonly reportCustomNodeDiagnostic?: ((diagnostic: unknown) => void) | undefined;
+  readonly customNodePayloads?:
+    | ReadonlyMap<
+        string,
+        { readonly nodeId: string; readonly label: string; readonly data: string }
+      >
+    | undefined;
 }
 
 // ── Pure helpers over the vocabulary ───────────────────────────────────────────

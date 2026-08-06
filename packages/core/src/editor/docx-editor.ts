@@ -127,6 +127,10 @@ import {
 } from '@docx-editor.dev/i18n';
 import { execEditorCommand } from './docx-editor-exec.ts';
 import {
+  customNodeDiagnosticReporter,
+  sweepCustomNodePayloadsOnOpen,
+} from './custom-node-wiring.ts';
+import {
   currentPage as currentPageOf,
   pageSetupOf,
   gateCommand,
@@ -265,6 +269,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
    * construction-time and immutable for the instance's lifetime.
    */
   const modules = resolveEditorModules(config.modules);
+  const reportDiagnostic = customNodeDiagnosticReporter(modules);
   const reviewEnabled = modules.review !== null;
   /** Document bytes waiting for a container — set when constructed or loaded detached. */
   let pendingBytes: Uint8Array | null = null;
@@ -520,7 +525,13 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
               collectReviewItems: (input: ReviewModelInput) =>
                 modules.review!.collectReviewItems(
                   modules.customNodes.length > 0
-                    ? { ...input, customNodes: modules.customNodes }
+                    ? {
+                        ...input,
+                        customNodes: modules.customNodes,
+                        ...(modules.customNodeDiagnostics.length > 0
+                          ? { reportCustomNodeDiagnostic: reportDiagnostic }
+                          : {}),
+                      }
                     : input
                 ),
             },
@@ -584,6 +595,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     parseError = null;
     surface = result.surface;
     adoptDocumentTracking();
+    sweepCustomNodePayloadsOnOpen(surface, modules);
     mountGeneration += 1;
     // A surface is rebuilt on load and on the font remount, and it comes up editable. The
     // engine's own guards refuse the WRITE, but the pages layer stays `contenteditable`
@@ -1935,6 +1947,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
 
     getReviewItems: (query?: ReviewItemQuery) => reviewPlacements(query),
     getCustomNodeDefinitions: () => modules.customNodes,
+    reportCustomNodeDiagnostic: reportDiagnostic,
 
     addComment(text: string, author?: string): ExecResult {
       // Comment AUTHORING is the review module's capability, like every other

@@ -35,6 +35,7 @@ import type { RelationshipRecord } from './relationships.ts';
 const CONTENT_TYPES_PART = '/[Content_Types].xml';
 const CONTENT_TYPES_NAMESPACE = 'http://schemas.openxmlformats.org/package/2006/content-types';
 const RELATIONSHIPS_NAMESPACE = 'http://schemas.openxmlformats.org/package/2006/relationships';
+const RELATIONSHIPS_TYPE = 'application/vnd.openxmlformats-package.relationships+xml';
 
 function contentTypesEntryOf(
   partBytes: ReadonlyMap<string, Uint8Array>
@@ -160,10 +161,18 @@ function isReservedAsTree(canonical: string): boolean {
   return partNameKey(canonical) === partNameKey(CONTENT_TYPES_PART);
 }
 
-/** True when the package already holds a part OPC considers the same name. */
+/**
+ * True when the package already holds a part OPC considers the same name.
+ *
+ * `partBytes` as well as `parts`: only parts whose content type resolves to something XML-ish
+ * become trees, so a part declared `image/svg+xml` — or one with no declared type at all —
+ * exists solely as bytes. Creating "a new part" over one of those destroys it on save, because
+ * `writeOoxmlPackage` writes trees over bytes.
+ */
 function hasEquivalentPart(pkg: OoxmlPackage, canonical: string): boolean {
   const key = partNameKey(canonical);
   for (const name of pkg.parts.keys()) if (partNameKey(name) === key) return true;
+  for (const name of pkg.partBytes.keys()) if (partNameKey(name) === key) return true;
   return false;
 }
 
@@ -326,6 +335,125 @@ export function withContentTypeOverride(
   });
 }
 
+/** What {@link withoutPart} answers: `ok: false` leaves the package exactly as it was. */
+export interface WithoutPartResult {
+  readonly pkg: OoxmlPackage;
+  readonly ok: boolean;
+}
+
+/**
+ * Remove a part, its `.rels`, its content-type Override, and every relationship naming it.
+ *
+ * Deleting the tree alone is not deleting the part. The bytes it was loaded from would be
+ * written back out, the Override would still name it in `[Content_Types].xml`, and the owner's
+ * `.rels` would still point at it — so a caller stripping something out of a document for
+ * export would leave three separate records saying it had been there.
+ */
+export function withoutPart(pkg: OoxmlPackage, partName: string): WithoutPartResult {
+  const canonical = normalizePartName(partName);
+  if (!canonical.ok) return { pkg, ok: false };
+  const key = partNameKey(canonical.partName);
+  const relsKey = partNameKey(relsPartNameFor(canonical.partName));
+
+  // Every owner whose relationships name the part, and the ids to drop from each.
+  const removedIds = new Map<string, Set<string>>();
+  for (const [owner, records] of pkg.relationships) {
+    const naming = records.filter((record) => {
+      if (record.targetMode === 'External') return false;
+      const resolved = resolveInternalTarget(owner, record.rawTarget);
+      return resolved.ok && partNameKey(resolved.partName) === key;
+    });
+    if (naming.length > 0) removedIds.set(owner, new Set(naming.map((record) => record.id)));
+  }
+
+  // Refuse rather than half-remove. An owner whose `.rels` was never parsed into a tree —
+  // a package omitting `Default Extension="rels"` still loads that way — has its records here
+  // and its markup only in `partBytes`, which `writeOoxmlPackage` writes back out untouched.
+  // Dropping the record alone leaves the saved file pointing at a part that is gone, and
+  // `validatePackageInvariants` sees a clean model, so nothing anywhere reports it.
+  for (const owner of removedIds.keys()) {
+    if (!pkg.parts.has(relsPartNameFor(owner))) return { pkg, ok: false };
+  }
+
+  const parts = new Map(pkg.parts);
+  const partBytes = new Map(pkg.partBytes);
+  for (const map of [parts, partBytes] as Map<string, unknown>[]) {
+    for (const name of [...map.keys()]) {
+      const named = partNameKey(name);
+      if (named === key || named === relsKey) map.delete(name);
+    }
+  }
+
+  const relationships = new Map(pkg.relationships);
+  relationships.delete(canonical.partName);
+  for (const [owner, ids] of removedIds) {
+    const records = relationships.get(owner) ?? [];
+    relationships.set(
+      owner,
+      records.filter((record) => !ids.has(record.id))
+    );
+    const ownerRels = parts.get(relsPartNameFor(owner));
+    if (!ownerRels) continue;
+    // Remove the matched elements BY ID rather than keeping an allowlist: a `<Relationship>`
+    // the reader could not index — no `Id`, or one it dropped — is not ours to delete because
+    // an unrelated part was removed.
+    const children = ownerRels.root.children.filter((child) => {
+      const id = relationshipIdAttribute(child);
+      return id === undefined || !ids.has(id);
+    });
+    const rewritten = replaceChildren(ownerRels, ownerRels.root.id, children);
+    // The tree is the file. If it cannot be rewritten, the whole removal is off.
+    if (!rewritten.ok) return { pkg, ok: false };
+    parts.set(rewritten.part.name, rewritten.part);
+  }
+
+  // External-target metadata is keyed by owner, so a removed part leaves records naming a part
+  // that no longer exists, and callers branch on those.
+  const externalTargets = pkg.externalTargets.filter(
+    (target) => partNameKey(target.ownerPart) !== key
+  );
+
+  const next: OoxmlPackage = Object.freeze({
+    ...pkg,
+    parts,
+    partBytes,
+    relationships,
+    externalTargets,
+  });
+  return { pkg: withoutContentTypeOverride(next, canonical.partName), ok: true };
+}
+
+/** Drop a part's Override, which otherwise names a part that is no longer in the package. */
+function withoutContentTypeOverride(pkg: OoxmlPackage, partName: string): OoxmlPackage {
+  const overrideKey = partNameKey(partName);
+  if (!pkg.contentTypes.overrides.has(overrideKey)) return pkg;
+  const entry = contentTypesEntryOf(pkg.partBytes);
+  if (entry === null) return pkg;
+  const parsed = readOoxmlPart(new TextDecoder().decode(entry.bytes), {
+    name: CONTENT_TYPES_PART,
+    contentType: 'application/xml',
+  });
+  if (!parsed.ok) return pkg;
+  const children = parsed.part.root.children.filter((child) => {
+    if (child.kind === 'textValue' || child.localName !== 'Override') return true;
+    const named = child.attributes.find((a) => a.localName === 'PartName');
+    return named === undefined || partNameKey(named.value) !== overrideKey;
+  });
+  if (children.length === parsed.part.root.children.length) return pkg;
+  const rewritten = replaceChildren(parsed.part, parsed.part.root.id, children);
+  if (!rewritten.ok) return pkg;
+
+  const overrides = new Map(pkg.contentTypes.overrides);
+  overrides.delete(overrideKey);
+  const partBytes = new Map(pkg.partBytes);
+  partBytes.set(entry.storageKey, new TextEncoder().encode(serializeOoxmlPart(rewritten.part)));
+  return Object.freeze({
+    ...pkg,
+    partBytes,
+    contentTypes: { defaults: pkg.contentTypes.defaults, overrides } satisfies ContentTypeIndex,
+  });
+}
+
 /**
  * Point a relationship from one part at another, minting an unused `rId`.
  *
@@ -368,6 +496,45 @@ export function allocateOwnerRelationshipId(pkg: OoxmlPackage, ownerPart: string
   let next = max + 1;
   while (used.has(`rId${next}`)) next += 1;
   return `rId${next}`;
+}
+
+/**
+ * Give a part an empty `.rels` of its own, so {@link withRelationship} has somewhere to write.
+ *
+ * A part created in this session has no relationships part, and neither primitive can produce
+ * one: `withNewPart` refuses `.rels` names outright (they are not ordinary content), and
+ * `withRelationship` refuses an owner that has none rather than guessing. That leaves a new
+ * part unable to point at anything — which a custom XML store has to do, since its properties
+ * are reachable only through its own relationship.
+ *
+ * Idempotent, and deliberately narrow: it mints the empty `<Relationships/>` tree and nothing
+ * else. The content type comes from `Default Extension="rels"`, which every real package
+ * declares. A package missing that default cannot be helped here — `withContentTypeOverride`
+ * refuses `.rels` names for the same reason `withNewPart` does — so the part ships with no
+ * resolvable type rather than with an override this pretends to add.
+ */
+export function withRelationshipsPartFor(pkg: OoxmlPackage, ownerPart: string): OoxmlPackage {
+  const canonical = normalizePartName(ownerPart);
+  if (!canonical.ok) return pkg;
+  const relsName = relsPartNameFor(canonical.partName);
+  if (pkg.parts.has(relsName)) return pkg;
+  // Held as bytes rather than as a tree — a package whose `rels` content type does not resolve
+  // still loads that way. Minting an empty tree here would be serialized OVER those bytes on
+  // save, destroying relationships `pkg.relationships` still lists, so the model and the file
+  // would disagree with nothing reporting it. Fail closed and let the caller refuse.
+  for (const name of pkg.partBytes.keys()) {
+    if (partNameKey(name) === partNameKey(relsName)) return pkg;
+  }
+  // Bind the namespace to the DEFAULT prefix, as every `.rels` Word writes does. Without the
+  // binding the serializer has no prefix to reach for and invents one, so this part alone would
+  // come out as `<ns1:Relationships xmlns:ns1="…">` while every sibling `.rels` in the same
+  // package is `<Relationships xmlns="…">`. Equivalent to a namespace-aware reader, and a
+  // gratuitous difference on the part type most likely to meet one that is not.
+  const root = element(`${relsName}#root`, RELATIONSHIPS_NAMESPACE, 'Relationships', {}, [
+    { prefix: '', namespaceUri: RELATIONSHIPS_NAMESPACE },
+  ]);
+  const part: OoxmlPart = { id: relsName, name: relsName, contentType: RELATIONSHIPS_TYPE, root };
+  return withPart(pkg, part);
 }
 
 /** Add or replace one relationship on a part, returning a new package. */

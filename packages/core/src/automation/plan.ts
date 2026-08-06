@@ -112,6 +112,13 @@ import {
   contentControlsIn,
 } from '../store/package/content-control-nodes.ts';
 import type { ContentControlValueInput } from '../store/store/tree-op-content-controls.ts';
+import type { InsertCustomNodeWrite } from '../store/store/custom-node-writes.ts';
+import {
+  customNodePayloadOf,
+  customNodePlacement,
+  customNodeRequestRefusal,
+  customNodeWriteOf,
+} from './custom-node-plan.ts';
 import type { OoxmlNode } from '../store/package/ooxml-tree.ts';
 
 /**
@@ -190,6 +197,21 @@ export type PlannedOperation =
         post: AutomationPackageReads,
         commentId: string | undefined
       ) => AutomationValue;
+    }
+  | {
+      readonly ok: true;
+      /**
+       * A custom-node write: the data part, the node inside it, and the bound control.
+       *
+       * See `AutomationDocumentPort.applyCustomNodeWrite`. Its own kind rather than a command
+       * with ops, because the store the binding quotes does not exist until the write runs — a
+       * `TreeDocOp` carrying the `w:storeItemID` would have to be built from an id nothing has
+       * minted yet. Solitary, like a comment write.
+       */
+      readonly kind: 'customNodeWrite';
+      readonly write: InsertCustomNodeWrite;
+      readonly story: AutomationStoryId;
+      readonly answer: (post: AutomationPackageReads) => AutomationValue;
     }
   | { readonly ok: false; readonly error: AutomationError };
 
@@ -2761,6 +2783,31 @@ export function createBatchPlanner(host: BatchPlannerHost): BatchPlanner {
               ...(operation.title === undefined ? {} : { alias: operation.title }),
             },
           ],
+          answer: () => APPLIED,
+        };
+      }
+
+      case 'insertCustomNode': {
+        // Everything that can be judged from the request alone, before a handle is resolved.
+        const shape = customNodeRequestRefusal(operation);
+        if (shape) return refuse('unsupported-content', shape.message, shape.detail);
+        const payload = customNodePayloadOf(operation.payload);
+        if (!payload.ok) {
+          return refuse('unsupported-content', 'that payload cannot be written', payload.field);
+        }
+
+        const placed = customNodePlacement(operation, handles, packageReads);
+        if ('code' in placed) return refuse(placed.code, placed.message, placed.detail);
+        const { start, end } = placed.range;
+        const story = storyReadsOf(placed.range);
+        if (!story) return refuse('invalid-handle', 'that story is not in this document');
+        const conflict = pinWrite(planFor(story));
+        if (conflict) return conflict;
+        return {
+          ok: true,
+          kind: 'customNodeWrite',
+          story: story.story,
+          write: customNodeWriteOf(operation, start, end, payload.value),
           answer: () => APPLIED,
         };
       }

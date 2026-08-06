@@ -37,10 +37,35 @@ export {
   isCustomNodeDefinition,
   recognizeCustomNodes,
   type ActivatedCustomNode,
+  type AnyCustomNodeDefinition,
+  type CustomNode,
   type CustomNodeDefinition,
+  type CustomNodeDiagnostic,
+  type CustomNodePayloadSource,
   type CustomNodesModuleOptions,
+  type RecognizeCustomNodesOptions,
   type RecognizedCustomNode,
 } from './custom-nodes/define-custom-node.ts';
+export { customNodesOf, type CustomNodesOfOptions } from './custom-nodes/read-custom-nodes.ts';
+export {
+  exportCustomNodes,
+  type DocumentDestination,
+  type ExportCustomNodesOptions,
+  type ExportCustomNodesResult,
+} from './custom-nodes/export-custom-nodes.ts';
+export { CUSTOM_NODE_STORE_ROOT, customNodeNamespace } from './custom-nodes/node-payload.ts';
+export {
+  MAX_CUSTOM_NODE_DATA_LENGTH,
+  parseCustomNodeData,
+  serializeCustomNodeData,
+  type CustomNodeDataRejection,
+  type CustomNodeDataResult,
+  type InferSchemaInput,
+  type InferSchemaOutput,
+  type StandardSchemaIssue,
+  type StandardSchemaResult,
+  type StandardSchemaV1,
+} from './custom-nodes/data-schema.ts';
 export {
   decodeCustomNodeTag,
   encodeCustomNodeTag,
@@ -48,17 +73,19 @@ export {
   type DecodedCustomNodeTag,
   type EncodeTagResult,
 } from './custom-nodes/tag-codec.ts';
+export { insertCustomNode, type CustomNodeInput } from './custom-nodes/insert-custom-node.ts';
 export {
-  insertCustomNode,
-  type InsertCustomNodeOptions,
-} from './custom-nodes/insert-custom-node.ts';
+  type CustomNodeIssue,
+  type CustomNodeWriteOutcome,
+} from './custom-nodes/node-write-result.ts';
 export {
   removeCustomNode,
   updateCustomNode,
-  type UpdateCustomNodeOptions,
+  type CustomNodeUpdate,
 } from './custom-nodes/update-custom-node.ts';
 export {
   customNodeXml,
   type CustomNodeXmlOptions,
   type CustomNodeXmlResult,
+  type CustomNodeXmlStore,
 } from './custom-nodes/sdt-xml.ts';

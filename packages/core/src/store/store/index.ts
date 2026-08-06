@@ -57,6 +57,22 @@ export {
   type SetCommentResolvedResult,
 } from './comment-writes.ts';
 export {
+  MAX_CUSTOM_NODE_LABEL_LENGTH,
+  MAX_CUSTOM_NODE_PAYLOAD_LENGTH,
+  customNodePayloadsByControl,
+  customNodePayloadsOf,
+  insertCustomNodeWrite,
+  removeCustomNodeWrite,
+  sweepCustomNodePayloads,
+  type CustomNodePayloadRead,
+  type CustomNodePayloadWrite,
+  type CustomNodeSweepOutcome,
+  type CustomNodeSweepResult,
+  type CustomNodeWriteRejection,
+  type CustomNodeWriteResult,
+  type InsertCustomNodeWrite,
+} from './custom-node-writes.ts';
+export {
   AUTHORABLE_PARAGRAPH_PROPERTIES,
   AUTHORABLE_RUN_PROPERTIES,
   authoredProperties,

@@ -24,9 +24,11 @@ import {
   blocksOf,
   defaultAttrs,
   definitionOf,
-  depthOf,
-  labelFor,
+  iglooText,
+  payloadFor,
   randomSpecimen,
+  surveyOf,
+  textFor,
   type SpecimenAt,
   type SpecimenKind,
 } from './specimens';
@@ -121,12 +123,16 @@ export function SpecimenProvider({ children }: { children: ReactNode }) {
   );
 
   const place = useCallback(
-    (kind: SpecimenKind, attrs: Record<string, string>, label: string, at: SpecimenAt) => {
+    (kind: SpecimenKind, attrs: Record<string, string>, at: SpecimenAt, label?: string) => {
       if (!editor) return;
       const definition = definitionOf(kind);
+      // The berg's `text` derives the words, so its payload is the whole argument. Only the
+      // igloo, which has no schema, needs the words passed in.
+      const data = payloadFor(kind, attrs);
       report(
-        insertCustomNode(editor, definition, attrs, label, {
+        insertCustomNode(editor, definition, {
           alias: definition.label ?? definition.name,
+          ...(data ? { data } : { attrs, text: label ?? iglooText(attrs) }),
           ...(at ? { at } : {}),
         }),
         kind === 'iceberg' ? 'A berg calved into the paragraph.' : 'An igloo went up.'
@@ -137,12 +143,12 @@ export function SpecimenProvider({ children }: { children: ReactNode }) {
 
   const compose = useCallback((kind: SpecimenKind) => {
     const attrs = defaultAttrs(kind);
-    setForm({ mode: 'insert', kind, attrs, label: labelFor(kind, attrs), at: caretRef.current });
+    setForm({ mode: 'insert', kind, attrs, label: textFor(kind, attrs), at: caretRef.current });
   }, []);
 
   const dropRandom = useCallback(() => {
     const picked = randomSpecimen();
-    place(picked.kind, picked.attrs, picked.label, caretRef.current);
+    place(picked.kind, picked.attrs, caretRef.current);
   }, [place]);
 
   const edit = useCallback(
@@ -154,26 +160,39 @@ export function SpecimenProvider({ children }: { children: ReactNode }) {
         return;
       }
       const kind: SpecimenKind = node.name === 'iceberg' ? 'iceberg' : 'igloo';
+      // The berg keeps its record in the payload, so its `attrs` are empty — seeding the form
+      // from them opened every edit blank and saved the blanks back over the survey.
+      const attrs =
+        kind === 'iceberg'
+          ? (({ depth, surveyedBy, notes }) => ({
+              depth: String(depth),
+              surveyedBy,
+              notes,
+            }))(surveyOf(node))
+          : { ...node.attrs };
       setForm({
         mode: 'edit',
         kind,
         nodeId: node.nodeId,
-        attrs: { ...node.attrs },
-        label: node.text ?? labelFor(kind, node.attrs),
+        attrs,
+        label: node.text ?? textFor(kind, attrs),
       });
     },
     [say]
   );
 
-  /**
-   * The chip click. An iceberg surfaces what is under it; an igloo lays another block, which
-   * is a real `updateCustomNode` write — one transaction, one undo step, so the paragraph
-   * label, the rail card and the saved file move together.
-   */
+  /** The chip click: a berg surfaces what is under it, an igloo lays another block. */
   const activate = useCallback(
     (node: ActivatedCustomNode) => {
       if (node.name === 'iceberg') {
-        setProbe({ kind: 'iceberg', rect: node.rect, depth: depthOf(node.attrs) });
+        const survey = surveyOf(node);
+        setProbe({
+          kind: 'iceberg',
+          controlId: node.nodeId,
+          depth: survey.depth,
+          ...(survey.surveyedBy ? { surveyedBy: survey.surveyedBy } : {}),
+          ...(survey.notes ? { notes: survey.notes } : {}),
+        });
         return;
       }
       const blocks = blocksOf(node.attrs) + 1;
@@ -182,19 +201,17 @@ export function SpecimenProvider({ children }: { children: ReactNode }) {
         return;
       }
       const attrs = { blocks: String(blocks) };
-      const result = updateCustomNode(
-        editor,
-        definitionOf('igloo'),
-        node.nodeId,
-        attrs,
-        labelFor('igloo', attrs),
-        { alias: 'Igloo' }
-      );
+      const result = updateCustomNode(editor, definitionOf('igloo'), node.nodeId, {
+        attrs: attrs,
+        text: iglooText(attrs),
+        alias: 'Igloo',
+      });
       if (!result.ok) {
         report(result, '');
         return;
       }
-      setProbe({ kind: 'igloo', rect: node.rect, blocks });
+      // `result.nodeId`, not `node.nodeId`: laying a block replaces the control.
+      setProbe({ kind: 'igloo', controlId: result.nodeId ?? node.nodeId, blocks });
     },
     [editor, report, say]
   );
@@ -219,12 +236,14 @@ export function SpecimenProvider({ children }: { children: ReactNode }) {
       setForm(null);
       if (!editor) return;
       if (next.mode === 'insert') {
-        place(next.kind, next.attrs, next.label, next.at);
+        place(next.kind, next.attrs, next.at, next.label);
       } else {
         const definition = definitionOf(next.kind);
+        const data = payloadFor(next.kind, next.attrs);
         report(
-          updateCustomNode(editor, definition, next.nodeId, next.attrs, next.label, {
+          updateCustomNode(editor, definition, next.nodeId, {
             alias: definition.label ?? definition.name,
+            ...(data ? { data } : { attrs: next.attrs, text: next.label }),
           }),
           'Re-carved.'
         );
@@ -261,7 +280,7 @@ export function SpecimenProvider({ children }: { children: ReactNode }) {
           onClose={closeDialog}
         />
       ) : null}
-      {probe ? <SpecimenPopover probe={probe} onClose={closePopover} /> : null}
+      <SpecimenPopover probe={probe} onClose={closePopover} />
       {/* The live region is PERSISTENT and the notice swaps inside it: a `role="status"`
           element inserted already holding its text is unreliably announced, and this one
           was also remounted per notice to replay the fade. The inner key keeps the replay;

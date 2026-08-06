@@ -2163,6 +2163,8 @@ export interface ReviewCommentItem {
 // @public
 export interface ReviewCustomItem {
     readonly attrs: Readonly<Record<string, string>>;
+    readonly carded: boolean;
+    readonly data?: unknown;
     readonly detail?: string;
     readonly id: string;
     // (undocumented)
@@ -2200,8 +2202,15 @@ export function reviewItemsAt(items: readonly ReviewItem[], position: ReviewPosi
 export interface ReviewModelInput {
     readonly commentsExtendedPart?: OoxmlPart | undefined;
     readonly commentsPart?: OoxmlPart | undefined;
+    // (undocumented)
+    readonly customNodePayloads?: ReadonlyMap<string, {
+        readonly nodeId: string;
+        readonly label: string;
+        readonly data: string;
+    }> | undefined;
     readonly customNodes?: readonly unknown[] | undefined;
     readonly furnitureParts?: readonly OoxmlPart[] | undefined;
+    readonly reportCustomNodeDiagnostic?: ((diagnostic: unknown) => void) | undefined;
     readonly storyPart: OoxmlPart;
 }
 

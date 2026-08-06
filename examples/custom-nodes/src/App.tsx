@@ -6,22 +6,27 @@
  * its text and hands it back untouched. Reopen it here and it is recognized from the same tag.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { DocxEditor, useDocxEditor } from '@docx-editor.dev/react';
 import { customNodesModule, insertCustomNode, updateCustomNode } from '@docx-editor.dev/pro';
 import { CustomNodeChrome, CustomNodeContextMenu } from '@docx-editor.dev/pro/react';
-import { Citation, citationText, type CitationAttrs } from './citation.ts';
+import { Citation } from './citation.ts';
 
 /**
- * Module registration is construction-time, like `mode`. One stable array, built outside
- * render: a fresh array each render rebuilds the editor.
+ * Modules are read once, when the instance is built. Hoisting the array keeps that visible:
+ * one rebuilt inline each render is not re-registered, it is ignored.
  */
 const MODULES = [customNodesModule({ nodes: [Citation] })];
 
 type FormState =
   | { readonly mode: 'closed' }
   | { readonly mode: 'insert' }
-  | { readonly mode: 'edit'; readonly nodeId: string; readonly attrs: CitationAttrs };
+  | {
+      readonly mode: 'edit';
+      readonly nodeId: string;
+      /** The node's payload, so the form starts from what the document says. */
+      readonly data: unknown;
+    };
 
 export function App() {
   const [bytes, setBytes] = useState<Uint8Array>();
@@ -32,7 +37,10 @@ export function App() {
   }, []);
 
   return (
-    <div className="docx-editor" style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div
+      className="docx-editor"
+      style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}
+    >
       <header style={BAR}>
         <input
           type="file"
@@ -63,10 +71,9 @@ export function App() {
                       ? setForm({
                           mode: 'edit',
                           nodeId: node.nodeId,
-                          attrs: {
-                            sourceId: node.attrs['sourceId'] ?? '',
-                            page: node.attrs['page'] ?? '',
-                          },
+                          // `unknown` here: the activation carries every definition's nodes, so
+                          // the form parses it against the schema it knows.
+                          data: node.data,
                         })
                       : undefined
                   }
@@ -74,7 +81,16 @@ export function App() {
               </DocxEditor.ContextMenu>
             </DocxEditor.Viewport>
           </div>
-          <CitationForm state={form} onClose={() => setForm({ mode: 'closed' })} />
+          {/* Keyed and mounted CONDITIONALLY. A form that renders `null` when closed never
+              unmounts, so `useState` keeps the first render's values — every edit opened blank
+              and saved the blanks back over the citation. */}
+          {form.mode !== 'closed' ? (
+            <CitationForm
+              key={form.mode === 'edit' ? form.nodeId : 'insert'}
+              state={form}
+              onClose={() => setForm({ mode: 'closed' })}
+            />
+          ) : null}
         </DocxEditor.Root>
       ) : (
         <p style={{ padding: 24, color: '#64748b' }}>No document open.</p>
@@ -124,27 +140,30 @@ function SaveButton() {
 
 /**
  * The host owns the form. `defineCustomNode` has no schema-driven dialog, so authoring is
- * `insertCustomNode` at the caret and `updateCustomNode` against a node id.
+ * `insertCustomNode` at the caret and `updateCustomNode` against a node id — each one
+ * transaction and one undo step, payload included.
  */
 function CitationForm({ state, onClose }: { state: FormState; onClose: () => void }) {
   const editor = useDocxEditor();
-  const initial = state.mode === 'edit' ? state.attrs : { sourceId: '', page: '' };
+  const initial = (state.mode === 'edit' ? Citation.dataOf(state) : undefined) ?? {
+    sourceId: '',
+    page: '',
+    quote: '',
+  };
   const [sourceId, setSourceId] = useState(initial.sourceId);
   const [page, setPage] = useState(initial.page);
-
-  // Reset the fields whenever the form opens on a different node.
-  const key = useMemo(() => (state.mode === 'edit' ? state.nodeId : state.mode), [state]);
-
-  if (state.mode === 'closed') return null;
+  const [quote, setQuote] = useState(initial.quote);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editor) return;
-    const attrs: CitationAttrs = { sourceId, page };
+    // Only the identity goes in the tag; the record goes in the payload beside it, in the same
+    // transaction, checked against the schema on the way in.
+    const data = { sourceId, page, quote };
     const result =
       state.mode === 'edit'
-        ? updateCustomNode(editor, Citation, state.nodeId, attrs, citationText(attrs))
-        : insertCustomNode(editor, Citation, attrs, citationText(attrs), { alias: 'Citation' });
+        ? updateCustomNode(editor, Citation, state.nodeId, { data })
+        : insertCustomNode(editor, Citation, { data, alias: 'Citation' });
     // Writes report refusal instead of throwing: a locked range, no caret, no document.
     if (!result.ok) {
       console.warn(`citation ${state.mode} refused: ${result.reason}`);
@@ -154,7 +173,7 @@ function CitationForm({ state, onClose }: { state: FormState; onClose: () => voi
   };
 
   return (
-    <form key={key} onSubmit={submit} style={FORM} onMouseDown={(e) => e.stopPropagation()}>
+    <form onSubmit={submit} style={FORM} onMouseDown={(e) => e.stopPropagation()}>
       <strong>{state.mode === 'edit' ? 'Edit citation' : 'Insert citation'}</strong>
       <label style={LABEL}>
         Source
@@ -163,6 +182,11 @@ function CitationForm({ state, onClose }: { state: FormState; onClose: () => voi
       <label style={LABEL}>
         Page
         <input value={page} onChange={(e) => setPage(e.target.value)} />
+      </label>
+      <label style={LABEL}>
+        {/* The field that could never have fitted in a 64-character tag. */}
+        Quoted passage
+        <textarea rows={3} value={quote} onChange={(e) => setQuote(e.target.value)} />
       </label>
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button type="button" onClick={onClose}>

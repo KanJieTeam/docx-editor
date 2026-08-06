@@ -52,7 +52,9 @@ function mountWithChip(): { editor: DocxEditorInstance; nodeId: string } {
   });
   const fragment = editor.surface!.layout().pages[0]!.fragments[0]!;
   if (fragment.kind !== 'paragraph') throw new Error('expected a paragraph');
-  insertCustomNode(editor, citation, { sourceId: 's1', locator: 'p.1' }, 'OLD', {
+  insertCustomNode(editor, citation, {
+    attrs: { sourceId: 's1', locator: 'p.1' },
+    text: 'OLD',
     at: { paragraphId: fragment.paragraphId, offset: 7 },
   });
   const [node] = recognizeCustomNodes(editor.surface!.session.part(), [citation]);
@@ -62,15 +64,12 @@ function mountWithChip(): { editor: DocxEditorInstance; nodeId: string } {
 describe('updateCustomNode', () => {
   test('rewrites attrs and text in place, one undo step', () => {
     const { editor, nodeId } = mountWithChip();
-    const result = updateCustomNode(
-      editor,
-      citation,
-      nodeId,
-      { sourceId: 's2', locator: 'p.9' },
-      'NEW',
-      { alias: 'Citation' }
-    );
-    expect(result).toEqual({ ok: true, changed: true });
+    const result = updateCustomNode(editor, citation, nodeId, {
+      attrs: { sourceId: 's2', locator: 'p.9' },
+      text: 'NEW',
+      alias: 'Citation',
+    });
+    expect(result).toMatchObject({ ok: true, changed: true });
     const [node] = recognizeCustomNodes(editor.surface!.session.part(), [citation]);
     expect(node?.attrs).toEqual({ sourceId: 's2', locator: 'p.9' });
     expect(node?.text).toBe('NEW');
@@ -83,9 +82,21 @@ describe('updateCustomNode', () => {
     expect(restored?.attrs['sourceId']).toBe('s1');
   });
 
+  test('answers the id of the control it authored, which is not the one it replaced', () => {
+    const { editor, nodeId } = mountWithChip();
+    const result = updateCustomNode(editor, citation, nodeId, { text: 'NEW' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The rewrite replaces the control, so anything the host attached to `nodeId` has to
+    // follow this id instead.
+    expect(result.nodeId).toBeDefined();
+    const [node] = recognizeCustomNodes(editor.surface!.session.part(), [citation]);
+    expect(result.nodeId).toBe(node!.nodeId);
+  });
+
   test('an unknown node id is refused, not silently inserted', () => {
     const { editor } = mountWithChip();
-    const result = updateCustomNode(editor, citation, 'no-such-node', {}, 'X');
+    const result = updateCustomNode(editor, citation, 'no-such-node', { text: 'X' });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe('notFound');
   });
@@ -94,7 +105,7 @@ describe('updateCustomNode', () => {
 describe('removeCustomNode', () => {
   test('deletes the node — wrapper and label — as one unit', () => {
     const { editor, nodeId } = mountWithChip();
-    expect(removeCustomNode(editor, nodeId)).toEqual({ ok: true, changed: true });
+    expect(removeCustomNode(editor, nodeId)).toMatchObject({ ok: true, changed: true });
     expect(recognizeCustomNodes(editor.surface!.session.part(), [citation])).toEqual([]);
     expect(editor.surface!.session.bodyText()).toBe('before after');
   });

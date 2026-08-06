@@ -8,6 +8,7 @@
 import type { OoxmlNode, OoxmlParagraphNode, OoxmlPart } from '../package/ooxml-tree.ts';
 import { findNode } from '../package/ooxml-edit.ts';
 import { isValidXmlText } from '../package/sinks.ts';
+import { isAuthorableDataBinding } from '../package/custom-node-payloads.ts';
 import { validateDeleteBlock } from './tree-op-blocks.ts';
 import {
   INSERTABLE_CONTENT_CONTROL_TYPES,
@@ -885,6 +886,9 @@ export function validateTreeOp(part: OoxmlPart, op: TreeDocOp): TreeOpRejection 
       // Inside another control's content the wrapper nests; inside a LINK it is
       // not a shape Word writes — reuse the link-nesting refusal.
       if (rangeTouchesHyperlink(paragraph, op.offset, op.offset)) {
+        return 'invalid-property-value';
+      }
+      if (op.dataBinding !== undefined && !isAuthorableDataBinding(op.dataBinding)) {
         return 'invalid-property-value';
       }
       return null;

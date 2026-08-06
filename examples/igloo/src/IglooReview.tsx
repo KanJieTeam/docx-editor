@@ -12,7 +12,7 @@ import { Stats } from './SpecimenPopover';
 import { useChromeTranslate } from '@docx-editor.dev/react';
 import { ICE_LABELS } from './labels';
 import { IceMelt, IceRefreeze } from './icons/review';
-import { blocksOf, depthOf, insideTemperature, OUTSIDE, tipHeight } from './specimens';
+import { blocksOf, insideTemperature, OUTSIDE, surveyOf, tipHeight } from './specimens';
 
 /**
  * The theme's word for each kind of tracked change.
@@ -140,14 +140,14 @@ function CardFrost() {
   );
 }
 
-/**
- * The demo's own element inside the library's card: a node authored here, recognized by this
- * demo's definition, drawing itself from its own typed attrs. Attrs were clamped at the
- * recognition boundary, so what arrives is already in range.
- */
-function SpecimenPanel({ node }: { node: { name: string; attrs: Readonly<Record<string, string>> } }) {
+/** The demo's own element inside the library's card. The berg reads its payload, the igloo its attrs. */
+function SpecimenPanel({
+  node,
+}: {
+  node: { name: string; attrs: Readonly<Record<string, string>>; data?: unknown };
+}) {
   if (node.name === 'iceberg') {
-    const depth = depthOf(node.attrs);
+    const { depth } = surveyOf(node);
     return (
       <div className="igloo-specimen" data-specimen="iceberg">
         <BergGlyph className="igloo-specimen__art" />

@@ -8,6 +8,7 @@
 export interface ActivatedCustomNode {
     // (undocumented)
     readonly attrs: Readonly<Record<string, string>>;
+    readonly data?: unknown;
     // (undocumented)
     readonly name: string;
     readonly nodeId?: string;
@@ -18,27 +19,104 @@ export interface ActivatedCustomNode {
 }
 
 // @public
-export interface CustomNodeDefinition {
+export type AnyCustomNodeDefinition = CustomNodeDefinition;
+
+// @public
+export const CUSTOM_NODE_STORE_ROOT = "docxEditor";
+
+// @public
+export interface CustomNode<Schema extends StandardSchemaV1 | undefined = any> extends CustomNodeDefinition<Schema> {
+    readonly dataOf: (node: {
+        readonly name?: string;
+        readonly data?: unknown;
+    } | null | undefined) => InferSchemaOutput<Schema> | undefined;
+}
+
+// @public
+export type CustomNodeDataRejection = 'malformed' | 'invalid' | 'async';
+
+// @public
+export type CustomNodeDataResult<Output> = {
+    readonly ok: true;
+    readonly value: Output;
+} | {
+    readonly ok: false;
+    readonly reason: CustomNodeDataRejection;
+    readonly issues: readonly string[];
+};
+
+// @public
+export interface CustomNodeDefinition<Schema extends StandardSchemaV1 | undefined = any> {
     readonly chrome?: {
         readonly color?: string;
     };
     readonly fromDocx?: (input: {
         readonly attrs: Readonly<Record<string, string>>;
         readonly text: string;
+        readonly data?: InferSchemaOutput<Schema>;
     }) => Readonly<Record<string, string>> | null;
     readonly label?: string;
     readonly name: string;
     readonly onClick?: (node: ActivatedCustomNode) => void;
     readonly onEdit?: (node: ActivatedCustomNode) => void;
     readonly onHover?: (node: ActivatedCustomNode) => void;
+    readonly payloadNamespace?: string;
+    readonly preserveOnExport?: boolean | 'text';
     readonly reviewCard?: (node: {
         readonly attrs: Readonly<Record<string, string>>;
         readonly text: string;
+        readonly data?: InferSchemaOutput<Schema>;
     }) => {
         readonly title: string;
         readonly detail?: string;
     } | null;
+    readonly schema?: Schema;
+    readonly tagAttrs?: (data: InferSchemaOutput<Schema>) => Readonly<Record<string, string>>;
     readonly tagPrefix: string;
+    readonly text?: (data: InferSchemaOutput<Schema>) => string;
+}
+
+// @public
+export interface CustomNodeDiagnostic {
+    readonly code: 'payload-invalid' | 'payload-missing';
+    readonly issues: readonly string[];
+    readonly name: string;
+    readonly nodeId: string;
+}
+
+// @public
+export interface CustomNodeInput<Schema extends StandardSchemaV1 | undefined = any> {
+    readonly alias?: string;
+    readonly at?: {
+        readonly paragraphId: string;
+        readonly offset: number;
+    };
+    readonly attrs?: Readonly<Record<string, string>>;
+    readonly data?: InferSchemaInput<Schema>;
+    readonly lock?: false | 'sdtLocked' | 'sdtContentLocked' | 'contentLocked';
+    readonly text?: string;
+}
+
+// @public
+export interface CustomNodeIssue {
+    // (undocumented)
+    readonly message: string;
+    // (undocumented)
+    readonly path: readonly (string | number)[];
+    readonly pointer: string;
+}
+
+// @public
+export function customNodeNamespace(definition: AnyCustomNodeDefinition): string;
+
+// @public
+export interface CustomNodePayloadSource {
+    // (undocumented)
+    readonly data: string;
+    // (undocumented)
+    readonly label: string;
+    // (undocumented)
+    readonly nodeId: string;
 }
 
 // @public
@@ -46,28 +124,78 @@ export function customNodesModule(options: CustomNodesModuleOptions): EditorModu
 
 // @public
 export interface CustomNodesModuleOptions extends ProLicenseOptions {
-    readonly nodes: readonly CustomNodeDefinition[];
+    readonly nodes: readonly AnyCustomNodeDefinition[];
+    readonly onDiagnostic?: (diagnostic: CustomNodeDiagnostic) => void;
 }
 
 // @public
-export function customNodeXml(definition: CustomNodeDefinition, attrs: Readonly<Record<string, string>>, text: string, options?: CustomNodeXmlOptions): CustomNodeXmlResult;
+export function customNodesOf(editor: Editor, options?: CustomNodesOfOptions): readonly RecognizedCustomNode[];
 
 // @public
-export interface CustomNodeXmlOptions {
+export interface CustomNodesOfOptions {
+    readonly nodes?: readonly AnyCustomNodeDefinition[];
+    readonly onDiagnostic?: (diagnostic: CustomNodeDiagnostic) => void;
+}
+
+// @public
+export interface CustomNodeUpdate<Schema extends StandardSchemaV1 | undefined = undefined> extends Omit<CustomNodeInput<Schema>, 'at' | 'data'> {
+    readonly data?: InferSchemaInput<Schema> | null;
+}
+
+// @public
+export type CustomNodeWriteOutcome = (Extract<ExecResult, {
+    ok: true;
+}> & {
+    readonly nodeId?: string;
+}) | (Extract<ExecResult, {
+    ok: false;
+}> & {
+    readonly issues?: readonly CustomNodeIssue[];
+});
+
+// @public
+export function customNodeXml<Schema extends StandardSchemaV1 | undefined = undefined>(definition: CustomNodeDefinition<Schema>, attrs: Readonly<Record<string, string>>, text: string, options?: CustomNodeXmlOptions<Schema>): CustomNodeXmlResult;
+
+// @public
+export interface CustomNodeXmlOptions<Schema extends StandardSchemaV1 | undefined = undefined> {
     readonly alias?: string;
+    readonly data?: InferSchemaInput<Schema>;
     readonly id?: number;
     readonly lock?: false | 'sdtLocked' | 'sdtContentLocked' | 'contentLocked';
+    readonly nodeId?: string;
+    readonly storeIndex?: number;
 }
 
 // @public
 export type CustomNodeXmlResult = {
     readonly ok: true;
     readonly xml: string;
+    readonly store?: CustomNodeXmlStore;
 } | {
     readonly ok: false;
     readonly code: 'invalidArgs';
     readonly reason: string;
 };
+
+// @public
+export interface CustomNodeXmlStore {
+    readonly contentTypeOverride: {
+        readonly partName: string;
+        readonly contentType: string;
+    };
+    readonly itemPartName: string;
+    // (undocumented)
+    readonly itemXml: string;
+    readonly propsPartName: string;
+    // (undocumented)
+    readonly propsXml: string;
+    readonly relationships: readonly {
+        readonly from: string;
+        readonly type: string;
+        readonly target: string;
+    }[];
+    readonly storeItemId: string;
+}
 
 // @public
 export function decodeCustomNodeTag(tag: string): DecodedCustomNodeTag | null;
@@ -80,7 +208,10 @@ export interface DecodedCustomNodeTag {
 }
 
 // @public
-export function defineCustomNode(definition: CustomNodeDefinition): CustomNodeDefinition;
+export function defineCustomNode<Schema extends StandardSchemaV1 | undefined = undefined>(definition: CustomNodeDefinition<Schema>): CustomNode<Schema>;
+
+// @public
+export type DocumentDestination = 'internal' | 'external';
 
 // @public
 export function encodeCustomNodeTag(prefix: string, name: string, attrs: Readonly<Record<string, string>>): EncodeTagResult;
@@ -96,35 +227,63 @@ export type EncodeTagResult = {
 };
 
 // @public
-export function insertCustomNode(editor: Editor, definition: CustomNodeDefinition, attrs: Readonly<Record<string, string>>, text: string, options?: InsertCustomNodeOptions): ExecResult;
+export function exportCustomNodes(bytes: Uint8Array, definitions: readonly AnyCustomNodeDefinition[], options?: ExportCustomNodesOptions): ExportCustomNodesResult;
 
 // @public
-export interface InsertCustomNodeOptions {
-    readonly alias?: string;
-    readonly at?: {
-        readonly paragraphId: string;
-        readonly offset: number;
-    };
-    readonly lock?: false | 'sdtLocked' | 'sdtContentLocked' | 'contentLocked';
+export interface ExportCustomNodesOptions {
+    readonly destination?: DocumentDestination;
 }
 
 // @public
-export function isCustomNodeDefinition(candidate: unknown): candidate is CustomNodeDefinition;
+export type ExportCustomNodesResult = {
+    readonly ok: true;
+    readonly bytes: Uint8Array;
+    readonly unwrapped: number;
+    readonly removed: number;
+} | {
+    readonly ok: false;
+    readonly reason: string;
+};
+
+// @public
+export type InferSchemaInput<Schema> = 0 extends 1 & Schema ? any : Schema extends StandardSchemaV1<infer Input, unknown> ? Input : unknown;
+
+// @public
+export type InferSchemaOutput<Schema> = 0 extends 1 & Schema ? any : Schema extends StandardSchemaV1<unknown, infer Output> ? Output : unknown;
+
+// @public
+export function insertCustomNode<Schema extends StandardSchemaV1 | undefined = undefined>(editor: Editor, definition: CustomNodeDefinition<Schema>, input?: CustomNodeInput<Schema>): CustomNodeWriteOutcome;
+
+// @public
+export function isCustomNodeDefinition(candidate: unknown): candidate is AnyCustomNodeDefinition;
+
+// @public
+export const MAX_CUSTOM_NODE_DATA_LENGTH: number;
 
 // @public
 export const MAX_TAG_LENGTH = 64;
+
+// @public
+export function parseCustomNodeData<Schema extends StandardSchemaV1 | undefined>(schema: Schema, raw: string): CustomNodeDataResult<Schema extends StandardSchemaV1 ? InferSchemaOutput<Schema> : unknown>;
 
 // @public
 export interface ProLicenseOptions {
     readonly licenseKey?: string;
 }
 
+// @public (undocumented)
+export function recognizeCustomNodes(part: OoxmlPart, definitions: readonly AnyCustomNodeDefinition[], options?: RecognizeCustomNodesOptions): RecognizedCustomNode[];
+
 // @public
-export function recognizeCustomNodes(part: OoxmlPart, definitions: readonly CustomNodeDefinition[]): RecognizedCustomNode[];
+export interface RecognizeCustomNodesOptions {
+    readonly onDiagnostic?: (diagnostic: CustomNodeDiagnostic) => void;
+    readonly payloads?: ReadonlyMap<string, CustomNodePayloadSource>;
+}
 
 // @public
 export interface RecognizedCustomNode {
     readonly attrs: Readonly<Record<string, string>>;
+    readonly data?: unknown;
     readonly name: string;
     readonly nodeId: string;
     readonly tag: string;
@@ -132,7 +291,7 @@ export interface RecognizedCustomNode {
 }
 
 // @public
-export function removeCustomNode(editor: Editor, nodeId: string): ExecResult;
+export function removeCustomNode(editor: Editor, nodeId: string): CustomNodeWriteOutcome;
 
 // @public
 export function reviewModule(options?: ReviewModuleOptions): EditorModule;
@@ -142,13 +301,42 @@ export interface ReviewModuleOptions extends ProLicenseOptions {
 }
 
 // @public
-export function updateCustomNode(editor: Editor, definition: CustomNodeDefinition, nodeId: string, attrs: Readonly<Record<string, string>>, text: string, options?: UpdateCustomNodeOptions): ExecResult;
+export function serializeCustomNodeData(value: unknown): CustomNodeDataResult<string>;
 
 // @public
-export interface UpdateCustomNodeOptions {
-    readonly alias?: string;
-    readonly lock?: false | 'sdtLocked' | 'sdtContentLocked' | 'contentLocked';
+export interface StandardSchemaIssue {
+    // (undocumented)
+    readonly message: string;
+    // (undocumented)
+    readonly path?: readonly (PropertyKey | {
+        readonly key: PropertyKey;
+    })[] | undefined;
 }
+
+// @public
+export type StandardSchemaResult<Output> = {
+    readonly value: Output;
+    readonly issues?: undefined;
+} | {
+    readonly issues: readonly StandardSchemaIssue[];
+};
+
+// @public
+export interface StandardSchemaV1<Input = unknown, Output = Input> {
+    // (undocumented)
+    readonly '~standard': {
+        readonly version: 1;
+        readonly vendor: string;
+        readonly validate: (value: unknown) => StandardSchemaResult<Output> | Promise<StandardSchemaResult<Output>>;
+        readonly types?: {
+            readonly input: Input;
+            readonly output: Output;
+        } | undefined;
+    };
+}
+
+// @public
+export function updateCustomNode<Schema extends StandardSchemaV1 | undefined = undefined>(editor: Editor, definition: CustomNodeDefinition<Schema>, nodeId: string, update?: CustomNodeUpdate<Schema>): CustomNodeWriteOutcome;
 
 // (No @packageDocumentation comment for this package)
 

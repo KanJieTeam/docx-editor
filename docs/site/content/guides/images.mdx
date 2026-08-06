@@ -9,12 +9,12 @@ DrawingML pictures (`w:drawing` with `pic:pic`) lay out, paint, and round-trip t
 
 ## Supported formats
 
-| Format                                      | Insert (React)                       | Layout & paint                       | Round-trip                                |
-| ------------------------------------------- | ------------------------------------ | ------------------------------------ | ----------------------------------------- |
-| PNG, JPEG, GIF                              | Yes, `normalizeImageBytes` preflight | Full decode at authored `wp:extent`  | Byte-identical media unless replaced      |
-| SVG                                         | No insert                            | Painted at authored `wp:extent`      | Byte-identical media                      |
-| TIFF, EMF, WMF                              | No insert                            | Converted to a raster and painted    | Preserved; no zero-click fetch            |
-| External `r:link` / `TargetMode="External"` | No auto-load                         | Placeholder + preserved rel          | Preserved; explicit user gesture to embed |
+| Format                                      | Insert (React)                       | Layout & paint                      | Round-trip                                |
+| ------------------------------------------- | ------------------------------------ | ----------------------------------- | ----------------------------------------- |
+| PNG, JPEG, GIF                              | Yes, `normalizeImageBytes` preflight | Full decode at authored `wp:extent` | Byte-identical media unless replaced      |
+| SVG                                         | No insert                            | Painted at authored `wp:extent`     | Byte-identical media                      |
+| TIFF, EMF, WMF                              | No insert                            | Converted to a raster and painted   | Preserved; no zero-click fetch            |
+| External `r:link` / `TargetMode="External"` | No auto-load                         | Placeholder + preserved rel         | Preserved; explicit user gesture to embed |
 
 Insert accepts PNG/JPEG/GIF only. Other payloads stay in the package and participate in pagination through their authored extent.
 

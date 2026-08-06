@@ -818,13 +818,17 @@ export interface DrawingPositionInput {
 
 // @public
 export interface EditorModule {
+    readonly customNodePayloadNamespaces?: readonly string[];
     readonly customNodes?: readonly unknown[];
     readonly id: string;
+    readonly onCustomNodeDiagnostic?: (diagnostic: unknown) => void;
     readonly review?: ReviewModuleContribution;
 }
 
 // @public
 export interface EditorModuleRegistry {
+    readonly customNodeDiagnostics: readonly ((diagnostic: unknown) => void)[];
+    readonly customNodePayloadNamespaces: readonly string[];
     // (undocumented)
     readonly customNodes: readonly unknown[];
     // (undocumented)
@@ -1491,8 +1495,15 @@ export function resolveThemeColorHex(color: Extract<ColorValue, {
 export interface ReviewModelInput {
     readonly commentsExtendedPart?: OoxmlPart | undefined;
     readonly commentsPart?: OoxmlPart | undefined;
+    // (undocumented)
+    readonly customNodePayloads?: ReadonlyMap<string, {
+        readonly nodeId: string;
+        readonly label: string;
+        readonly data: string;
+    }> | undefined;
     readonly customNodes?: readonly unknown[] | undefined;
     readonly furnitureParts?: readonly OoxmlPart[] | undefined;
+    readonly reportCustomNodeDiagnostic?: ((diagnostic: unknown) => void) | undefined;
     readonly storyPart: OoxmlPart;
 }
 

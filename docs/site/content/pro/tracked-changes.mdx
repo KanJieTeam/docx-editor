@@ -162,17 +162,17 @@ function ChangeList() {
 }
 ```
 
-| Member                          | What it does                                                                 |
-| ------------------------------- | ---------------------------------------------------------------------------- |
-| `items`                         | Every pending decision, in reading order.                                    |
+| Member                          | What it does                                                                                                                             |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `items`                         | Every pending decision, in reading order.                                                                                                |
 | `activeKey` / `setActive`       | Which item the caret is in; setting selects its range and scrolls to it, entering or leaving a header/footer story as the item requires. |
-| `accept(item)` / `reject(item)` | Resolve a revision. No-ops on an item whose `readOnly` is true.              |
-| `reply(item, text, author?)`    | Reply to a change. Returns whether it landed.                                |
-| `remove(item)`                  | Delete a comment thread, or discard a suggestion. Returns whether it landed. |
-| `comment(text, author?)`        | Comment on the current selection. Returns whether it landed.                 |
-| `selectionAnchorY`              | Where a comment on the selection would sit, or `null`.                       |
-| `paneOpen` / `setPaneOpen`      | The same toggle the toolbar's comments button runs.                          |
-| `ready`                         | False while no document is loaded.                                           |
+| `accept(item)` / `reject(item)` | Resolve a revision. No-ops on an item whose `readOnly` is true.                                                                          |
+| `reply(item, text, author?)`    | Reply to a change. Returns whether it landed.                                                                                            |
+| `remove(item)`                  | Delete a comment thread, or discard a suggestion. Returns whether it landed.                                                             |
+| `comment(text, author?)`        | Comment on the current selection. Returns whether it landed.                                                                             |
+| `selectionAnchorY`              | Where a comment on the selection would sit, or `null`.                                                                                   |
+| `paneOpen` / `setPaneOpen`      | The same toggle the toolbar's comments button runs.                                                                                      |
+| `ready`                         | False while no document is loaded.                                                                                                       |
 
 Each item carries `key`, `id`, `author`, `initials`, `date`, `text`, `replyIds`, `readOnly`, `anchorY`, `pageIndex`, and `isActive`. Revision items add `kind: 'revision'`, a `revisionKind`, and `replacedText` for replacements, so a card can say _Replaced "x" with "y"_.
 

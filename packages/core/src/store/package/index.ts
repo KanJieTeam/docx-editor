@@ -472,3 +472,40 @@ export {
   type OoxmlStoryKind,
   type OoxmlStoryRoot,
 } from './story-blocks.ts';
+export {
+  CUSTOM_XML_PROPS_REL,
+  CUSTOM_XML_PROPS_TYPE,
+  CUSTOM_XML_REL,
+  DATASTORE_NAMESPACE_URI,
+  customXmlDataParts,
+  datastoreItemIdFor,
+  findCustomXmlDataPart,
+  withCustomXmlDataPart,
+  withoutCustomXmlDataPart,
+  type CustomXmlDataPart,
+  type CustomXmlDataPartResult,
+} from './custom-xml-part.ts';
+export {
+  customXmlLabelXPath,
+  customXmlNodes,
+  customXmlPrefixMappings,
+  readCustomXmlNode,
+  withCustomXmlNode,
+  withoutCustomXmlNode,
+  withoutOrphanCustomXmlNodes,
+  type CustomXmlNode,
+} from './custom-xml-nodes.ts';
+export {
+  CUSTOM_NODE_XPATH_PREFIX,
+  boundCustomXmlNodeIdOf,
+  boundCustomXmlNodeIds,
+  boundCustomXmlNodeIdsInPackage,
+  customNodeBinding,
+  type CustomNodeBinding,
+} from './custom-node-payloads.ts';
+export {
+  withExportedCustomNodes,
+  type CustomNodeExportPolicy,
+  type CustomNodeExportRequest,
+  type CustomNodeExportResult,
+} from './custom-node-export.ts';

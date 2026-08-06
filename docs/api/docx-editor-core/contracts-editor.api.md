@@ -588,6 +588,7 @@ export interface Editor {
         sync?: boolean;
     }): void;
     replyToReviewItem(key: string, text: string, author?: string): ExecResult;
+    reportCustomNodeDiagnostic(diagnostic: unknown): void;
     save(): Promise<ArrayBuffer>;
     // (undocumented)
     scrollToBlock(blockId: string): boolean;
@@ -1433,6 +1434,8 @@ export interface ReviewCommentPlacement extends ReviewItemPlacementBase {
 // @public
 export interface ReviewCustomItem {
     readonly attrs: Readonly<Record<string, string>>;
+    readonly carded: boolean;
+    readonly data?: unknown;
     readonly detail?: string;
     readonly id: string;
     // (undocumented)

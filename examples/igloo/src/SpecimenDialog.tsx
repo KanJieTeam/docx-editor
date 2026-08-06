@@ -1,17 +1,15 @@
-// The authoring form: collect the attrs, then one `insertCustomNode` (or `updateCustomNode`)
-// call authors the locked, tagged control at the captured caret. The form itself is entirely
-// the demo's; nothing here is a library component.
+// The authoring form. Entirely the demo's; nothing here is a library component.
 //
-// Attrs ride in the `w:tag`, which Word caps at 64 characters, so the fields collect one
-// number and a label rather than a payload.
+// It collects one bag of fields; `payloadFor` decides which end up in the berg's payload and
+// which in the igloo's tag.
 
 import { useEffect, useId, useRef, useState } from 'react';
 import {
   blocksOf,
   defaultAttrs,
   depthOf,
-  labelFor,
   randomSpecimen,
+  textFor,
   type SpecimenAt,
   type SpecimenKind,
 } from './specimens';
@@ -99,14 +97,14 @@ export function SpecimenDialog({ form, onCommit, onClose }: SpecimenDialogProps)
     const fresh = defaultAttrs(next);
     setKind(next);
     setAttrs(fresh);
-    setLabel(labelFor(next, fresh));
+    setLabel(textFor(next, fresh));
   };
 
   const surprise = (): void => {
     const picked = randomSpecimen();
     setKind(picked.kind);
     setAttrs(picked.attrs);
-    setLabel(picked.label);
+    setLabel(textFor(picked.kind, picked.attrs));
   };
 
   return (
@@ -131,6 +129,7 @@ export function SpecimenDialog({ form, onCommit, onClose }: SpecimenDialogProps)
           // COMMIT is where it clamps back into range, through the same reads the
           // recognition boundary uses.
           const clamped = {
+            ...attrs,
             [field.key]: String(kind === 'iceberg' ? depthOf(attrs) : blocksOf(attrs)),
           };
           onCommit(
@@ -144,8 +143,9 @@ export function SpecimenDialog({ form, onCommit, onClose }: SpecimenDialogProps)
           {editing ? 'Re-carve it' : 'Carve a specimen'}
         </h2>
         <p className="igloo-dialog__lede">
-          The label is what the paragraph shows, in this editor and in Word. The number rides in the
-          control&rsquo;s tag and comes back typed on the chip, the card and the menu.
+          The igloo&rsquo;s number rides in the control&rsquo;s tag, so its words are yours to type.
+          The berg&rsquo;s record rides in a payload beside the control, and its words are derived
+          from that record. Both come back typed on the chip, the card and the menu.
         </p>
 
         {/* Fixed while editing: swapping the tag would be deleting one node and authoring
@@ -169,33 +169,61 @@ export function SpecimenDialog({ form, onCommit, onClose }: SpecimenDialogProps)
           ))}
         </fieldset>
 
-        <label className="igloo-dialog__field">
-          <span>Label (document text)</span>
-          {/* A modal dialog is the one place initial focus belongs inside; the scrim's
-              Escape handler depends on focus landing here. */}
-          <input
-            autoFocus
-            value={label}
-            onChange={(event) => setLabel(event.target.value)}
-            required
-          />
-        </label>
+        {/* Only the igloo's words are typed. The berg's come from `text(data)`, so offering an
+            input would offer an edit the write path throws away. */}
+        {kind === 'igloo' ? (
+          <label className="igloo-dialog__field">
+            <span>Label (document text)</span>
+            {/* A modal dialog is the one place initial focus belongs inside; the scrim's
+                Escape handler depends on focus landing here. */}
+            <input
+              autoFocus
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+              required
+            />
+          </label>
+        ) : null}
 
         <label className="igloo-dialog__field">
           <span>{field.label}</span>
-          {/* The RAW string, not the clamped read: clamping while someone is still typing
-              turns backspace-to-clear into an instant "90", and the only way to enter a
-              number becomes select-all-overtype. Submit clamps; see onSubmit. */}
+          {/* The RAW string, not the clamped read: clamping mid-typing turns backspace-to-clear
+              into an instant "90". Submit clamps. */}
           <input
             type="number"
             min={1}
             max={field.max}
             required
             value={attrs[field.key] ?? ''}
-            onChange={(event) => setAttrs({ [field.key]: event.target.value })}
+            onChange={(event) => setAttrs({ ...attrs, [field.key]: event.target.value })}
           />
           <small>{field.hint}</small>
         </label>
+
+        {/* The berg's survey record — neither field could ride in a `w:tag`. */}
+        {kind === 'iceberg' ? (
+          <>
+            <label className="igloo-dialog__field">
+              <span>Surveyed by</span>
+              <input
+                value={attrs['surveyedBy'] ?? ''}
+                onChange={(event) => setAttrs({ ...attrs, surveyedBy: event.target.value })}
+              />
+            </label>
+            <label className="igloo-dialog__field">
+              <span>Notes</span>
+              <textarea
+                rows={2}
+                value={attrs['notes'] ?? ''}
+                onChange={(event) => setAttrs({ ...attrs, notes: event.target.value })}
+              />
+              <small>Free text. Kept in the payload, never in the tag.</small>
+            </label>
+            <p className="igloo-dialog__lede">
+              The paragraph will read <strong>{textFor('iceberg', attrs)}</strong>.
+            </p>
+          </>
+        ) : null}
 
         <div className="igloo-dialog__actions">
           {/* The same form, filled from the water instead of by hand. */}

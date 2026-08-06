@@ -853,27 +853,35 @@ a.docx-hyperlink:focus-visible {
   opacity: 0;
 }
 
+/* The label tab, shown only while a control is ACTIVE or OPEN — never on plain hover.
+   An inline control sits in running text with no clearance above it, so the tab lands on the
+   previous line; on hover that means moving the pointer across a paragraph flashes labels over
+   the words being read. Word shows it when you are in the control, and so does this. The ring
+   and shadow are what keep it legible over whatever line it does land on. */
 .docx-content-control-label {
   box-sizing: border-box;
   max-width: 12rem;
   overflow: hidden;
   padding: 1px 6px;
-  border-radius: 3px 3px 0 0;
+  border-radius: 3px;
   background: var(--doc-primary);
   color: var(--doc-on-primary);
   font:
-    500 10px/14px system-ui,
+    500 10px/14px ui-sans-serif,
+    system-ui,
     sans-serif;
+  letter-spacing: 0.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
   display: none;
   pointer-events: none;
+  box-shadow:
+    0 0 0 2px var(--doc-page-bg-rendered),
+    0 1px 4px color-mix(in srgb, var(--doc-primary) 35%, transparent);
 }
 
 .docx-content-control-chrome[data-active] .docx-content-control-label,
-.docx-content-control-chrome[data-open] .docx-content-control-label,
-.docx-content-control-chrome[data-hover] .docx-content-control-label,
-.docx-content-control-chrome:hover .docx-content-control-label {
+.docx-content-control-chrome[data-open] .docx-content-control-label {
   display: block;
 }
 
