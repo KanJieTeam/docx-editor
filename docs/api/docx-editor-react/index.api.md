@@ -376,7 +376,7 @@ export interface DocxEditorContextMenuProps {
 }
 
 // @public
-export function DocxEditorDocumentOutline(props: DocxEditorDocumentOutlineProps): ReactElement;
+export function DocxEditorDocumentOutline(props: DocxEditorDocumentOutlineProps): ReactElement | null;
 
 // @public
 export interface DocxEditorDocumentOutlineProps {
@@ -405,7 +405,7 @@ export interface DocxEditorHeaderFooterChromeProps {
 }
 
 // @public
-export function DocxEditorHorizontalRuler(props: DocxEditorRulerProps): ReactElement;
+export function DocxEditorHorizontalRuler(props: DocxEditorRulerProps): ReactElement | null;
 
 // @public (undocumented)
 export const DocxEditorHyperLink: DocxEditorHyperLinkNamespace;
@@ -833,7 +833,7 @@ export interface DocxEditorToolbarProps {
 }
 
 // @public
-export function DocxEditorVerticalRuler(props: DocxEditorRulerProps): ReactElement;
+export function DocxEditorVerticalRuler(props: DocxEditorRulerProps): ReactElement | null;
 
 // @public
 export function DocxEditorViewport(input: DocxEditorViewportProps): react.JSX.Element;
