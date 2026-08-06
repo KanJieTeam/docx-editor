@@ -76,6 +76,8 @@ import {
   type DocumentTrackingSettings,
 } from '../store/package/tracking-settings.ts';
 import type { StoryScope } from '@docx-editor.dev/core/store';
+import { parseNoteScopeId } from '../store/package/note-nodes.ts';
+import { resolveNotesPart } from '../store/package/note-references.ts';
 import type {
   CanResult,
   ContainerRef,
@@ -1177,8 +1179,53 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
           });
         }
       }
+      // Note stories, on the same terms. Without these a note card came back with
+      // `anchorY: null` and `pageIndex: null`: the rail sorts a null page last, so a
+      // footnote change on page 2 of a long document rendered below the final page's
+      // cards, with no leader line to the text it belongs to.
+      for (const area of [page.footnotes, page.endnotes]) {
+        if (!area) continue;
+        for (const note of area.notes) {
+          for (const fragment of paragraphFragmentsOfBlocks(note.fragments)) {
+            if (index.has(fragment.paragraphId)) continue;
+            index.set(fragment.paragraphId, {
+              pageIndex: page.index,
+              contentY: note.box.y,
+              fragmentY: fragment.box.y,
+              ...(fragment.lines ? { lines: fragment.lines } : {}),
+            });
+          }
+        }
+      }
     }
     anchorIndexCache.set(layout, index);
+    return index;
+  }
+
+  /**
+   * Paragraph id → note scope id, built once per LAYOUT from the painted note stories.
+   *
+   * The layout already states which note each paragraph belongs to (`NoteStoryRecord`
+   * carries `scopeId`), so this is a lookup rather than a search. The first version walked
+   * the notes part per item — O(items x notes x subtree), which measured 91 ms per
+   * `getTrackedChanges()` call on a document with 600 note revisions.
+   */
+  const noteScopeIndexCache = new WeakMap<SemanticLayout, Map<string, string>>();
+  function noteScopeIndexOf(layout: SemanticLayout): Map<string, string> {
+    const cached = noteScopeIndexCache.get(layout);
+    if (cached) return cached;
+    const index = new Map<string, string>();
+    for (const page of layout.pages) {
+      for (const area of [page.footnotes, page.endnotes]) {
+        if (!area) continue;
+        for (const note of area.notes) {
+          for (const fragment of paragraphFragmentsOfBlocks(note.fragments)) {
+            if (!index.has(fragment.paragraphId)) index.set(fragment.paragraphId, note.scopeId);
+          }
+        }
+      }
+    }
+    noteScopeIndexCache.set(layout, index);
     return index;
   }
 
@@ -1204,10 +1251,50 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     return null;
   }
 
+  /**
+   * The note a card's range sits in, as the scope id `enterNote` takes.
+   *
+   * A note is a story like a header, but it is addressed by the NOTE rather than by the
+   * part: one `footnotes.xml` holds every footnote, and entering it means entering one of
+   * them. So the walk is part → note → its paragraphs, and the answer is the note whose
+   * subtree holds the card's paragraph.
+   */
+  function noteHomeOf(item: ReviewItem): string | null {
+    const range = firstReviewRange(item);
+    const layout = surface?.publishedLayout();
+    if (!range || !layout) return null;
+    return noteScopeIndexOf(layout).get(range.start.paragraphId) ?? null;
+  }
+
+  /**
+   * The notes PART a card lives in, for a write that must land there.
+   *
+   * Derived from the part NAME, not from the note: which part a write targets is a
+   * question the range answers by itself, and routing it through the per-note lookup made
+   * it fail whenever that lookup did — a note whose `w:id` the file omits, or one the
+   * layout has not painted. The card was then treated as a body card, so Accept reported
+   * `unknown-revision` on a card the queue itself listed as resolvable.
+   */
+  function noteStoryScopeOf(
+    item: ReviewItem
+  ): { readonly kind: 'notesPart'; readonly noteKind: 'footnote' | 'endnote' } | null {
+    const partName = firstReviewRange(item)?.partName;
+    if (!partName || !surface) return null;
+    // Read from the PACKAGE, never `partFor`: resolving a notes scope opens a story store,
+    // and this runs per item on read paths (`getTrackedChanges`, the review placements).
+    for (const noteKind of ['footnote', 'endnote'] as const) {
+      if (resolveNotesPart(surface.session.currentPackage(), noteKind)?.name === partName) {
+        return { kind: 'notesPart', noteKind };
+      }
+    }
+    return null;
+  }
+
   /** The story a card's range lives in, for a write that must land in that part. */
   function storyScopeOfReviewItem(item: ReviewItem): StoryScope {
     const home = furnitureHomeOf(item);
-    return home === null ? { kind: 'body' } : { kind: 'headerFooter', rId: home.rId };
+    if (home !== null) return { kind: 'headerFooter', rId: home.rId };
+    return noteStoryScopeOf(item) ?? { kind: 'body' };
   }
 
   /**
@@ -1263,12 +1350,82 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     // snapshot read, and a linear scan of a 2432-paragraph document twice per read is the
     // kind of cost that only shows up on the documents that can least afford it.
     const order = paragraphOrderOf(layout);
-    const anchorIndex = order.get(anchor.paragraphId) ?? -1;
-    const headIndex = order.get(head.paragraphId) ?? -1;
+    let anchorIndex = order.get(anchor.paragraphId) ?? -1;
+    let headIndex = order.get(head.paragraphId) ?? -1;
+    if (anchorIndex === -1 || headIndex === -1) {
+      // The body layout order only knows body paragraphs, so a range selected inside a
+      // header, footer or note resolved to nothing: `selectionAnchorY` came back null, the
+      // "comment on this" affordance never appeared, and `addComment` reported that a
+      // comment needs a selected range while one was plainly on screen. The open story
+      // publishes its own order, and that is the ruler for a selection inside it.
+      const scoped = openStoryParagraphOrder();
+      anchorIndex = scoped.get(anchor.paragraphId) ?? -1;
+      headIndex = scoped.get(head.paragraphId) ?? -1;
+    }
     if (anchorIndex === -1 || headIndex === -1) return null;
     const forwards =
       anchorIndex < headIndex || (anchorIndex === headIndex && anchor.offset <= head.offset);
     return forwards ? { from: anchor, to: head } : { from: head, to: anchor };
+  }
+
+  /** The story the reader has open, in the vocabulary the store's writes take. */
+  function openStoryScope(): StoryScope {
+    const scope = surface?.activeScope();
+    if (scope?.kind === 'headerFooter') return { kind: 'headerFooter', rId: scope.rId };
+    if (scope?.kind === 'note') {
+      const parsed = parseNoteScopeId(scope.id);
+      if (parsed) return { kind: 'notesPart', noteKind: parsed.noteKind };
+    }
+    return { kind: 'body' };
+  }
+
+  /**
+   * The story a PARAGRAPH lives in, which is what a write about that paragraph must target.
+   *
+   * The open scope is a near-enough proxy most of the time and wrong exactly when it
+   * matters: nothing binds the selection to it, so a host that sets a body selection while
+   * a header is open got an affordance offering to comment and a write that was then
+   * refused. Paragraph ids are part-qualified, so the range answers this by itself.
+   */
+  function storyScopeOfParagraph(paragraphId: string): StoryScope {
+    if (!surface) return { kind: 'body' };
+    // From the id's own PART NAME. Asking each story for its paragraph list instead would
+    // resolve every scope in turn, and resolving a scope OPENS a story store: one call
+    // opened every header and footer in the document, and the store cap (64) is a
+    // permanent ceiling because a store whose part is still in the package is never
+    // evicted. On a 40-section document that left 18 headers unopenable for the rest of
+    // the session — commenting in a footnote broke header editing.
+    const partName = paragraphId.slice(0, paragraphId.indexOf('#'));
+    if (partName.length === 0 || partName === surface.session.part().name) {
+      return { kind: 'body' };
+    }
+    for (const section of surface.session.headerFooterResolutionBySection()) {
+      for (const slots of [section.headers, section.footers]) {
+        for (const slot of slots.values()) {
+          if (slot.partName === partName) return { kind: 'headerFooter', rId: slot.rId };
+        }
+      }
+    }
+    for (const noteKind of ['footnote', 'endnote'] as const) {
+      if (resolveNotesPart(surface.session.currentPackage(), noteKind)?.name === partName) {
+        return { kind: 'notesPart', noteKind };
+      }
+    }
+    // Unknown to every story: fall back to where the reader is, which is what the write
+    // would have used anyway, and let the store refuse it.
+    return openStoryScope();
+  }
+
+  /** Paragraph order of the story the reader currently has open, empty for the body. */
+  function openStoryParagraphOrder(): ReadonlyMap<string, number> {
+    if (!surface) return new Map();
+    const story = openStoryScope();
+    if (story.kind === 'body') return new Map();
+    const index = new Map<string, number>();
+    for (const [position, id] of surface.session.paragraphIdsIn(story).entries()) {
+      index.set(id, position);
+    }
+    return index;
   }
 
   /**
@@ -1551,8 +1708,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     let applied: { committed: boolean; reason?: unknown } | undefined;
     // A revision in a header/footer resolves against ITS story store, not the body's. The
     // default body scope simply failed to find the address, so an Accept on a header card
-    // reported "refused" over a change the queue itself had listed.
-    const home = furnitureHomeOf(item);
+    // reported "refused" over a change the queue itself had listed. A note is the same
+    // case, now that note revisions reach the queue at all.
     surface?.commitReviewOps(() => {
       applied = surface!.session.applyTreeOps(
         item.addresses.map((revision) =>
@@ -1562,7 +1719,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         ),
         undefined,
         undefined,
-        home === null ? undefined : { kind: 'headerFooter', rId: home.rId }
+        storyScopeOfReviewItem(item)
       );
       return applied;
     });
@@ -1941,7 +2098,9 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
             id: item.id,
             kind: item.kind === 'revision' ? item.revisionKind : 'revision',
             ...(item.kind === 'revision' && item.author ? { author: item.author } : {}),
-            story: home === null ? ('body' as const) : home.kind,
+            // From the PART, so a note whose id the file omits still names its story.
+            story:
+              home !== null ? home.kind : (noteStoryScopeOf(item)?.noteKind ?? ('body' as const)),
           };
         }),
 
@@ -1981,7 +2140,12 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
           },
           text,
           writer,
-          secondsPrecisionNow()
+          secondsPrecisionNow(),
+          // The story the SELECTED PARAGRAPH is in, not the one the reader happens to have
+          // open. Commenting on header or note text wrote against the body store, which has
+          // never heard of that paragraph, so the write was refused — after the affordance
+          // had already invited it.
+          storyScopeOfParagraph(range.from.paragraphId)
         );
         return { committed: created !== null };
       });
@@ -2024,11 +2188,21 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       // reveals the band on the way. Falls THROUGH to the announcement below — returning
       // here left the rail unre-rendered, so the header card never lit up.
       const home = item ? furnitureHomeOf(item) : null;
+      // A note is a story on the same terms — one `footnotes.xml` holds every footnote, so
+      // its scope names the NOTE rather than the part. Without this the note's own
+      // paragraph id went to a body selection, which clamps it to an unrelated position.
+      const note = home === null && item ? noteHomeOf(item) : null;
       if (home !== null) {
         const entered = surface.enterHeaderFooter?.({
           rId: home.rId,
           kind: home.kind,
           position: { paragraphId: range.start.paragraphId, offset: range.start.offset },
+        });
+        if (!entered) return;
+      } else if (note !== null) {
+        const entered = surface.enterNote?.(note, {
+          paragraphId: range.start.paragraphId,
+          offset: range.start.offset,
         });
         if (!entered) return;
       } else {
@@ -2296,15 +2470,29 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
           }))
         : [],
 
-    relayout() {
+    relayout(options?: { sync?: boolean }) {
       // `layout()` flushes any commit the scheduler has not published yet; the surface
-      // repaints from its own publish path, so there is nothing further to trigger.
+      // repaints from its own publish path, so there is nothing further to trigger — which
+      // is what `sync: true` asks for, and the only thing this can do. Read rather than
+      // ignored: a declared parameter that vanishes into nothing is how a caller comes to
+      // believe it changed something.
+      void options?.sync;
       surface?.layout();
     },
 
-    focus() {
+    focus(scope?: EditorScope) {
       if (!surface) {
         return { ok: false, code: 'invalidTarget', reason: 'no document is loaded' };
+      }
+      // The ARGUMENT was declared and ignored, so `focus({kind:'body'})` — the obvious call
+      // for a host trying to leave an open header — reported success and changed nothing.
+      // Refused rather than silently dropped when the scope cannot be opened. `all` is a
+      // reading scope with no caret home, so it is not a thing to focus.
+      if (scope && scope.kind === 'all') {
+        return { ok: false, code: 'invalidTarget', reason: 'the all scope cannot take focus' };
+      }
+      if (scope && !surface.setActiveScope(scope)) {
+        return { ok: false, code: 'invalidTarget', reason: 'that scope cannot be opened' };
       }
       surface.focus();
       return { ok: true, value: undefined };

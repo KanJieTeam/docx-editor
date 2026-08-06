@@ -32,11 +32,13 @@ interface DocxParts {
   readonly comments?: string;
   /** Default-header content; wires the part, its relationship and the section reference. */
   readonly header?: string;
+  /** `w:footnote` elements; wires footnotes.xml, its relationship and content type. */
+  readonly footnotes?: string;
 }
 
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 
-function docx({ body, comments, header }: DocxParts): Uint8Array {
+function docx({ body, comments, header, footnotes }: DocxParts): Uint8Array {
   const files: Record<string, Uint8Array> = {
     '[Content_Types].xml': strToU8(
       `<Types xmlns="${CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
@@ -44,6 +46,9 @@ function docx({ body, comments, header }: DocxParts): Uint8Array {
         (comments ? `<Override PartName="/word/comments.xml" ContentType="${COMMENTS_CT}"/>` : '') +
         (header
           ? `<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>`
+          : '') +
+        (footnotes
+          ? `<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>`
           : '') +
         `</Types>`
     ),
@@ -66,6 +71,12 @@ function docx({ body, comments, header }: DocxParts): Uint8Array {
   if (header) {
     documentRels.push(`<Relationship Id="rIdH" Type="${R}/header" Target="header1.xml"/>`);
     files['word/header1.xml'] = strToU8(`<w:hdr xmlns:w="${W}">${header}</w:hdr>`);
+  }
+  if (footnotes) {
+    documentRels.push(`<Relationship Id="rIdFn" Type="${R}/footnotes" Target="footnotes.xml"/>`);
+    files['word/footnotes.xml'] = strToU8(
+      `<w:footnotes xmlns:w="${W}" xmlns:w15="${W15}">${footnotes}</w:footnotes>`
+    );
   }
   if (documentRels.length > 0) {
     files['word/_rels/document.xml.rels'] = strToU8(
@@ -1508,5 +1519,143 @@ describe('the caret activates the card the rail actually renders', () => {
     editor.setActiveReviewItem(null);
     expect(announced).toBeGreaterThan(afterOpen);
     stop();
+  });
+});
+
+describe('commenting outside the body', () => {
+  test('a range selected in a header offers the comment affordance', () => {
+    // The endpoints were ordered through the BODY's layout order, which cannot see a
+    // header paragraph: the range resolved to nothing, `getSelectionPlacement` returned
+    // null so the affordance never rendered, and `addComment` reported that a comment
+    // needs a selected range while one was plainly on screen.
+    const editor = mount({ body: INSERTION, header: HEADER_INSERTION });
+    const headerCard = editor.getReviewItems().find((c) => c.author === 'Margaret Hamilton')!;
+    editor.setActiveReviewItem(headerCard.key);
+    expect(editor.surface!.activeScope()).toEqual({ kind: 'headerFooter', rId: 'rIdH' });
+
+    const paragraphId = editor.surface!.state().selection.head.paragraphId;
+    editor.surface!.setSelection({
+      anchor: { paragraphId, offset: 0 },
+      head: { paragraphId, offset: 5 },
+    });
+    expect(editor.getSelectionPlacement()).not.toBeNull();
+    expect(editor.addComment('Check this wordmark.')).toEqual({ ok: true, changed: true });
+  });
+});
+
+// A tracked change inside a footnote paints on the page like any other, and the queue
+// walked only the body and the header/footer parts — so it was visible in the document and
+// unreachable from every review surface, while `acceptAllRevisions` refuses as long as it
+// is there.
+const FOOTNOTE_WITH_REVISION =
+  `<w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>` +
+  `<w:footnote w:type="continuationSeparator" w:id="0">` +
+  `<w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>` +
+  `<w:footnote w:id="1"><w:p><w:r><w:footnoteRef/></w:r>` +
+  `<w:ins w:id="21" w:author="Katherine Johnson" w:date="2026-04-05T06:07:08Z">` +
+  `<w:r><w:t>see appendix</w:t></w:r></w:ins></w:p></w:footnote>`;
+
+const BODY_WITH_NOTE_REF = `<w:p><w:r><w:t>alpha</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r></w:p>`;
+
+describe('tracked changes in notes', () => {
+  const noteDoc = () => ({
+    body: BODY_WITH_NOTE_REF + INSERTION,
+    footnotes: FOOTNOTE_WITH_REVISION,
+  });
+
+  test('a footnote revision reaches the queue and names its story', () => {
+    const editor = mount(noteDoc());
+    const card = editor.getReviewItems().find((item) => item.author === 'Katherine Johnson');
+    expect(card).toBeDefined();
+    expect(card!.text).toBe('see appendix');
+    expect(card!.readOnly).toBe(false);
+
+    const stories = editor
+      .getTrackedChanges()
+      .map((change) => change.story)
+      .sort();
+    expect(stories).toEqual(['body', 'footnote']);
+  });
+
+  test('a footnote revision resolves inside its own story', () => {
+    const editor = mount(noteDoc());
+    const card = editor.getReviewItems().find((item) => item.author === 'Katherine Johnson')!;
+    expect(editor.acceptReviewItem(card.key)).toEqual({ ok: true, changed: true });
+    expect(editor.getReviewItems().some((item) => item.author === 'Katherine Johnson')).toBe(false);
+    const noteText = editor.surface!.session.storyText({ kind: 'notesPart', noteKind: 'footnote' });
+    expect(noteText).toContain('see appendix');
+  });
+
+  test('opening a footnote card enters that note, not the body', () => {
+    const editor = mount(noteDoc());
+    const card = editor.getReviewItems().find((item) => item.author === 'Katherine Johnson')!;
+    editor.setActiveReviewItem(card.key);
+    expect(editor.surface!.activeScope()).toEqual({ kind: 'note', id: 'footnote:1' });
+  });
+
+  test('a note card carries geometry, so a rail can place it', () => {
+    // Listed with `anchorY: null` it sorted after every body card and drew no leader line:
+    // a footnote change on page 2 rendered below the last page's cards.
+    const editor = mount(noteDoc());
+    const card = editor.getReviewItems().find((item) => item.author === 'Katherine Johnson')!;
+    expect(card.pageIndex).not.toBeNull();
+    expect(card.anchorY).not.toBeNull();
+  });
+
+  test('a note card becomes ACTIVE, so its reply box can open', () => {
+    // The rail gates the reply box on `isActive`, and the caret resolved items through an
+    // index that did not contain note paragraphs — so a note card could never be the open
+    // one, whatever the reader clicked.
+    const editor = mount(noteDoc());
+    const card = editor.getReviewItems().find((item) => item.author === 'Katherine Johnson')!;
+    editor.setActiveReviewItem(card.key);
+    const active = editor.getReviewItems().find((item) => item.author === 'Katherine Johnson')!;
+    expect(active.isActive).toBe(true);
+  });
+
+  test('a note card can be replied to', () => {
+    // Word writes `w:footnoteRef` as the first run of every footnote, and the comment
+    // offset walk counted that atom as zero characters while the offset model counts one:
+    // every offset at or after it was refused, so no note could be commented on at all.
+    const editor = mount(noteDoc());
+    const card = editor.getReviewItems().find((item) => item.author === 'Katherine Johnson')!;
+    expect(editor.replyToReviewItem(card.key, 'Which appendix?')).toEqual({
+      ok: true,
+      changed: true,
+    });
+    expect(editor.getReviewItems().some((item) => item.text.includes('Which appendix?'))).toBe(
+      true
+    );
+  });
+});
+
+describe('resolving a story never opens one', () => {
+  test('commenting in a note leaves every header still openable', () => {
+    // Asking each scope for its paragraph list to find a paragraph's story RESOLVES that
+    // scope, and resolving one opens a story store. The store cap is a permanent ceiling
+    // — a store whose part is still in the package is never evicted — so one comment in a
+    // footnote burned the budget on every header in the document and left the later ones
+    // unopenable for the rest of the session. The part name is in the paragraph id; no
+    // store needs opening to read it.
+    const editor = mount({
+      body: BODY_WITH_NOTE_REF + INSERTION,
+      header: HEADER_INSERTION,
+      footnotes: FOOTNOTE_WITH_REVISION,
+    });
+
+    const noteCard = editor.getReviewItems().find((i) => i.author === 'Katherine Johnson')!;
+    editor.setActiveReviewItem(noteCard.key);
+    const paragraphId = editor.surface!.state().selection.head.paragraphId;
+    editor.surface!.setSelection({
+      anchor: { paragraphId, offset: 0 },
+      head: { paragraphId, offset: 3 },
+    });
+    expect(editor.addComment('In the note.').ok).toBe(true);
+
+    // The header is still reachable afterwards, with its content intact.
+    expect(editor.surface!.enterHeaderFooter!({ rId: 'rIdH', kind: 'header' })).toBe(true);
+    expect(
+      editor.surface!.session.paragraphIdsIn({ kind: 'headerFooter', rId: 'rIdH' }).length
+    ).toBeGreaterThan(0);
   });
 });

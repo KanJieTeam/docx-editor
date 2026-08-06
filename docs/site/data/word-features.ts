@@ -748,7 +748,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Per-change and bulk accept/reject in the sidebar; headless acceptChangeById/rejectChangeById, and revision.accept()/reject() through the automation object model.',
+      'Per-change accept/reject in the sidebar and through acceptReviewItem/rejectReviewItem, plus revision.accept()/reject() and whole-document revisions.acceptAll()/rejectAll() through the automation object model. The sidebar itself offers no bulk control: resolve the queue with the per-item call over every item.',
     docsLink: '/docs/2.x/guides/tracked-changes',
   },
   {
