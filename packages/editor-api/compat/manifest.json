@@ -417,6 +417,18 @@
   ],
   "divergences": [
     {
+      "uid": "Word.Comment#creationDate",
+      "note": "Office.js declares Date, but OOXML makes w:date optional and untrusted files can contain an invalid lexical value. DocxEditor returns Date | null rather than inventing a timestamp or exposing Invalid Date; strict consumers must narrow null before using Date methods."
+    },
+    {
+      "uid": "Word.CommentReply#creationDate",
+      "note": "Replies inherit the same nullable date getter as comments because they are CT_Comment records with the same optional, file-authored w:date. The compatibility assertion removes only this documented null before comparing with Office.js Date."
+    },
+    {
+      "uid": "Word.Revision#date",
+      "note": "Office.js declares Date, while CT_TrackChange permits an absent w:date and untrusted input can contain an invalid one. DocxEditor returns Date | null and the compatibility assertion verifies that excluding the documented null leaves the upstream Date shape."
+    },
+    {
       "uid": "Word.Revision#type",
       "note": "The type union is declared in full and seven of its members occur: Insert, Delete, Replace, Property, ParagraphProperty, MovedFrom and MovedTo. A change to a table row, a cell, the grid or a section's properties is STRUCTURAL, and the canonical accept/reject ops refuse it \u2014 so reporting it would list a change with an accept() and a reject() that both fail. Such revisions are therefore not reported at all rather than reported and un-actionable; the document's own markup is untouched either way, and a save round-trips it."
     },
@@ -443,7 +455,11 @@
     {
       "uid": "Word.ParagraphCollection#getFirst / #getLast, Word.RangeCollection#getFirst, Word.CommentCollection#getFirst, Word.ListCollection#getFirst and every other item accessor",
       "note": "The object an item accessor answers needs ONE await context.sync() before it can be loaded, written to or passed anywhere — upstream's needs none. Which object the accessor names is the answer to a read, a host handle is DATA in the batch request, and so an operation targeting that object cannot be in the same batch that resolves it. Resolving it in place would mean sending several batches per sync() and giving up 'one sync is one atomic batch', which is the property this runtime exists to guarantee. Source compatibility is unaffected and is held in place by src/runtime/__tests__/runtime-examples.test.ts, which runs a Word sample's own statements and names the extra sync as the only added line; what differs is the number of round trips at runtime. Using the object early is refused (InvalidObjectPath) rather than guessed, and the message names the sync."
+    },
+    {
+      "uid": "OfficeExtension.LoadOption#expand",
+      "note": "The expand query property remains in DocxEditor's public type for source compatibility, but navigation-property expansion is not implemented. Every non-empty value is rejected synchronously as InvalidArgument targeting the loaded object's .expand option; omitted and empty-array values preserve ordinary load behavior. This is explicit rather than accepting a request no model loader consumes."
     }
   ],
-  "$divergencesComment": "Members that ARE selected and DO conform in shape, but whose behaviour differs from upstream in a way a caller can observe. Kept apart from \"omissions\" on purpose: an omission is a member this subset does not publish, and one of these is a member it publishes and answers differently. Nothing in the tooling reads this list; it is the record that each difference was decided."
+  "$divergencesComment": "Members that ARE selected but differ from upstream in a documented source shape or observable behaviour. Kept apart from \"omissions\" on purpose: an omission is a member this subset does not publish, and one of these is a member it publishes and answers differently. The authored compatibility declarations remain the exact upstream reference shape; runtime conformance assertions explicitly account for any listed source-shape divergence."
 }
