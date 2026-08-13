@@ -316,6 +316,13 @@ export type AutomationOperation =
   | { readonly op: 'getNotes'; readonly document: AutomationHandle; readonly noteKind: NoteKind }
   /** One note's story, as a BODY. Two notes in one part are two stories. */
   | { readonly op: 'getNoteBody'; readonly note: AutomationHandle }
+  /**
+   * One note's story as plain text.
+   *
+   * Exactly the same projection as reading `getText` from the body returned by `getNoteBody`,
+   * without requiring that intermediate handle: paragraphs joined by one `\r` paragraph mark.
+   */
+  | { readonly op: 'getNoteText'; readonly note: AutomationHandle }
   /** Whether a note is a footnote or an endnote. */
   | { readonly op: 'getNoteKind'; readonly note: AutomationHandle }
   /**
@@ -504,6 +511,17 @@ export type AutomationOperation =
       readonly mode: AutomationSelectionMode;
     }
   /**
+   * Put the reader's selection on the range a bookmark currently encloses.
+   *
+   * The bookmark is resolved inside the batch so callers do not need a separate round trip to
+   * obtain an addressable range. Requires the `selection` capability, like `selectSpan`.
+   */
+  | {
+      readonly op: 'selectBookmark';
+      readonly bookmark: AutomationHandle;
+      readonly mode: AutomationSelectionMode;
+    }
+  /**
    * The content controls a scope holds, outermost first and in document order.
    *
    * A control INSIDE another is reached through the one that holds it, never listed beside it:
@@ -551,6 +569,13 @@ export type AutomationOperation =
   | { readonly op: 'getContentControlSubtype'; readonly contentControl: AutomationHandle }
   /** The `ST_Lock` in force, INCLUDING what an enclosing control imposes. */
   | { readonly op: 'getContentControlLock'; readonly contentControl: AutomationHandle }
+  /**
+   * Whether the control declares `w:dataBinding`.
+   *
+   * Presence only: no XPath, namespace mapping, store id, or custom XML content crosses this
+   * protocol boundary, and the binding target is never resolved or fetched.
+   */
+  | { readonly op: 'getContentControlIsBound'; readonly contentControl: AutomationHandle }
   /** Whether the control is showing its placeholder rather than a value (`w:showingPlcHdr`). */
   | { readonly op: 'getContentControlPlaceholderShown'; readonly contentControl: AutomationHandle }
   /** Whether the control removes itself on the first edit (`w:temporary`). */
@@ -694,6 +719,7 @@ export const AUTOMATION_QUERY_OPERATIONS = [
   'getFurniture',
   'getNotes',
   'getNoteBody',
+  'getNoteText',
   'getNoteKind',
   'getLists',
   'getListId',
@@ -727,6 +753,7 @@ export const AUTOMATION_QUERY_OPERATIONS = [
   'getContentControlFileId',
   'getContentControlSubtype',
   'getContentControlLock',
+  'getContentControlIsBound',
   'getContentControlPlaceholderShown',
   'getContentControlTemporary',
   'getContentControlText',
@@ -742,6 +769,7 @@ export const AUTOMATION_COMMAND_OPERATIONS = [
   'splitParagraph',
   'deleteParagraph',
   'selectSpan',
+  'selectBookmark',
   'setFont',
   'setParagraphFormat',
   'setStyle',

@@ -16,9 +16,12 @@ import { createServer } from '../../runtime/server.ts';
 import { isDocxEditorError } from '../../runtime/errors.ts';
 import {
   docx,
+  p,
   reopen,
   serverRuntime,
+  WITH_BOOKMARKED_STORIES,
   WITH_FURNITURE,
+  WITH_NOTE_TEXT_CASES,
   WITH_REVIEW_DATE_CASES,
 } from './support/documents.ts';
 
@@ -196,6 +199,94 @@ describe('links and bookmarks are the names a document gives to its own text', (
     });
     expect(found).toEqual({ name: 'Target', text: 'marked' });
   });
+
+  test('a body enumerates an empty bookmark collection without searchable text', async () => {
+    const runtime = await serverRuntime(docx(p('plain')));
+    const found = await runtime.run(async (context) => {
+      const bookmarks = context.document.body.bookmarks;
+      bookmarks.load('items');
+      await context.sync();
+      return bookmarks.items;
+    });
+    expect(found).toEqual([]);
+  });
+
+  test('a body enumerates multiple bookmarks, keeps the first duplicate, and applies load queries', async () => {
+    const runtime = await serverRuntime(WITH_BOOKMARKED_STORIES);
+    const found = await runtime.run(async (context) => {
+      const body = context.document.body;
+      const bookmarks = body.bookmarks;
+      expect(body.bookmarks).toBe(bookmarks);
+      bookmarks.load('items');
+      await context.sync();
+
+      const all = [...bookmarks.items];
+      for (const bookmark of all) bookmark.load('name');
+      await context.sync();
+      const duplicate = all[1]!;
+      const range = duplicate.range;
+      await context.sync();
+      range.load('text');
+      await context.sync();
+
+      bookmarks.load({ select: 'items', skip: 1, top: 1 });
+      await context.sync();
+      const filtered = bookmarks.items[0]!;
+      filtered.load('name');
+      await context.sync();
+      return {
+        names: all.map((bookmark) => bookmark.name),
+        duplicateText: range.text,
+        filtered: filtered.name,
+      };
+    });
+    expect(found).toEqual({
+      names: ['First', 'Duplicate'],
+      duplicateText: 'kept',
+      filtered: 'Duplicate',
+    });
+  });
+
+  test('each body enumerates only the bookmarks in its own story', async () => {
+    const runtime = await serverRuntime(WITH_BOOKMARKED_STORIES);
+    const found = await runtime.run(async (context) => {
+      const main = context.document.body.bookmarks;
+      const sections = context.document.sections;
+      main.load('items');
+      sections.load('items');
+      await context.sync();
+
+      const header = sections.items[0]!.getHeader('Primary');
+      await context.sync();
+      const headerBookmarks = header.bookmarks;
+      headerBookmarks.load('items');
+      await context.sync();
+
+      for (const bookmark of [...main.items, ...headerBookmarks.items]) bookmark.load('name');
+      await context.sync();
+      return {
+        main: main.items.map((bookmark) => bookmark.name),
+        header: headerBookmarks.items.map((bookmark) => bookmark.name),
+      };
+    });
+    expect(found).toEqual({ main: ['First', 'Duplicate'], header: ['Duplicate'] });
+  });
+
+  test('selecting a bookmark without a reader is refused at the call', async () => {
+    const runtime = await serverRuntime(BOOKMARKED);
+    const code = await codeOf(async () =>
+      runtime.run(async (context) => {
+        const whole = context.document.body.search('marked');
+        whole.load('items');
+        await context.sync();
+        const bookmarks = whole.items[0]!.bookmarks;
+        bookmarks.load('items');
+        await context.sync();
+        bookmarks.items[0]!.select();
+      })
+    );
+    expect(code).toBe('NotSupported');
+  });
 });
 
 describe('a section is the page a story is laid out on', () => {
@@ -266,6 +357,74 @@ describe('a section is the page a story is laid out on', () => {
       return { type: note.type, text: body.text, count: notes.items.length };
     });
     expect(found).toEqual({ type: 'Footnote', text: 'in the footnote', count: 1 });
+  });
+
+  test('note text is unloaded until one post-listing load round fills every item', async () => {
+    const runtime = await createServer(WITH_NOTE_TEXT_CASES);
+    const found = await runtime.run(async (context) => {
+      const footnotes = context.document.footnotes;
+      const endnotes = context.document.endnotes;
+      footnotes.load();
+      endnotes.load();
+      await context.sync();
+
+      const notes = [...footnotes.items, ...endnotes.items];
+      for (const note of notes) {
+        expect(() => note.text).toThrowError(
+          expect.objectContaining({
+            code: 'PropertyNotLoaded',
+            target: expect.stringContaining('.text'),
+          })
+        );
+        note.load(['text', 'type']);
+      }
+      await context.sync();
+      return notes.map((note) => ({ type: note.type, text: note.text }));
+    });
+    expect(found).toEqual([
+      { type: 'Footnote', text: '' },
+      { type: 'Footnote', text: 'first\t<unsafe>\nline\rsecond' },
+      { type: 'Endnote', text: 'end note' },
+    ]);
+  });
+
+  test('direct note text is exactly the note body text', async () => {
+    const runtime = await createServer(WITH_NOTE_TEXT_CASES);
+    const found = await runtime.run(async (context) => {
+      const notes = context.document.footnotes;
+      notes.load();
+      await context.sync();
+
+      for (const note of notes.items) {
+        note.load('text');
+        void note.body;
+      }
+      await context.sync();
+      for (const note of notes.items) note.body.load('text');
+      await context.sync();
+      return notes.items.map((note) => [note.text, note.body.text]);
+    });
+    expect(found).toEqual([
+      ['', ''],
+      ['first\t<unsafe>\nline\rsecond', 'first\t<unsafe>\nline\rsecond'],
+    ]);
+  });
+
+  test('a deleted note refuses a later direct text load', async () => {
+    const runtime = await createServer(WITH_NOTE_TEXT_CASES);
+    const code = await codeOf(() =>
+      runtime.run(async (context) => {
+        const notes = context.document.footnotes;
+        notes.load();
+        await context.sync();
+        const note = notes.items[0]!;
+        note.delete();
+        await context.sync();
+        note.load('text');
+        await context.sync();
+      })
+    );
+    expect(code).toBe('InvalidObjectPath');
   });
 });
 

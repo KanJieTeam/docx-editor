@@ -5,10 +5,10 @@
 ```ts
 
 // @public
-export const AUTOMATION_COMMAND_OPERATIONS: readonly ["insertText", "replaceSpan", "insertParagraph", "splitParagraph", "deleteParagraph", "selectSpan", "setFont", "setParagraphFormat", "setStyle", "setPageSetup", "deleteNote", "setListLevel", "insertListParagraph", "setHyperlink", "setCommentResolved", "replyToComment", "acceptRevision", "rejectRevision", "acceptAllRevisions", "rejectAllRevisions", "setContentControlValue", "setContentControlProperties", "deleteContentControl", "insertContentControlText", "insertContentControl", "insertCustomNode"];
+export const AUTOMATION_COMMAND_OPERATIONS: readonly ["insertText", "replaceSpan", "insertParagraph", "splitParagraph", "deleteParagraph", "selectSpan", "selectBookmark", "setFont", "setParagraphFormat", "setStyle", "setPageSetup", "deleteNote", "setListLevel", "insertListParagraph", "setHyperlink", "setCommentResolved", "replyToComment", "acceptRevision", "rejectRevision", "acceptAllRevisions", "rejectAllRevisions", "setContentControlValue", "setContentControlProperties", "deleteContentControl", "insertContentControlText", "insertContentControl", "insertCustomNode"];
 
 // @public
-export const AUTOMATION_QUERY_OPERATIONS: readonly ["getDocument", "getBody", "getParagraphs", "getSpanParagraphs", "getText", "getSpanText", "getParagraphId", "search", "getFont", "getParagraphFormat", "getStyle", "getSections", "getPageSetup", "getFurniture", "getNotes", "getNoteBody", "getNoteKind", "getLists", "getListId", "getListById", "getListParagraphs", "getParagraphList", "getListLevel", "getHyperlink", "getBookmarks", "getBookmarkName", "getBookmarkRange", "getComments", "getCommentReplies", "getCommentId", "getCommentAuthor", "getCommentDate", "getCommentText", "getCommentRange", "getCommentResolved", "getRevisions", "getRevisionType", "getRevisionAuthor", "getRevisionDate", "getRevisionRange", "getContentControls", "getContentControlById", "getContentControlsByTag", "getContentControlsByTitle", "getContentControlTag", "getContentControlTitle", "getContentControlFileId", "getContentControlSubtype", "getContentControlLock", "getContentControlPlaceholderShown", "getContentControlTemporary", "getContentControlText", "getContentControlParagraphs", "getContentControlRange"];
+export const AUTOMATION_QUERY_OPERATIONS: readonly ["getDocument", "getBody", "getParagraphs", "getSpanParagraphs", "getText", "getSpanText", "getParagraphId", "search", "getFont", "getParagraphFormat", "getStyle", "getSections", "getPageSetup", "getFurniture", "getNotes", "getNoteBody", "getNoteText", "getNoteKind", "getLists", "getListId", "getListById", "getListParagraphs", "getParagraphList", "getListLevel", "getHyperlink", "getBookmarks", "getBookmarkName", "getBookmarkRange", "getComments", "getCommentReplies", "getCommentId", "getCommentAuthor", "getCommentDate", "getCommentText", "getCommentRange", "getCommentResolved", "getRevisions", "getRevisionType", "getRevisionAuthor", "getRevisionDate", "getRevisionRange", "getContentControls", "getContentControlById", "getContentControlsByTag", "getContentControlsByTitle", "getContentControlTag", "getContentControlTitle", "getContentControlFileId", "getContentControlSubtype", "getContentControlLock", "getContentControlIsBound", "getContentControlPlaceholderShown", "getContentControlTemporary", "getContentControlText", "getContentControlParagraphs", "getContentControlRange"];
 
 // @public
 export const AUTOMATION_SOLITARY_OPERATIONS: readonly ["deleteNote", "setCommentResolved", "replyToComment", "insertCustomNode"];
@@ -409,6 +409,16 @@ export type AutomationOperation =
     readonly op: 'getNoteBody';
     readonly note: AutomationHandle;
 }
+/**
+* One note's story as plain text.
+*
+* Exactly the same projection as reading `getText` from the body returned by `getNoteBody`,
+* without requiring that intermediate handle: paragraphs joined by one `\r` paragraph mark.
+*/
+| {
+    readonly op: 'getNoteText';
+    readonly note: AutomationHandle;
+}
 /** Whether a note is a footnote or an endnote. */
 | {
     readonly op: 'getNoteKind';
@@ -690,6 +700,17 @@ export type AutomationOperation =
     readonly mode: AutomationSelectionMode;
 }
 /**
+* Put the reader's selection on the range a bookmark currently encloses.
+*
+* The bookmark is resolved inside the batch so callers do not need a separate round trip to
+* obtain an addressable range. Requires the `selection` capability, like `selectSpan`.
+*/
+| {
+    readonly op: 'selectBookmark';
+    readonly bookmark: AutomationHandle;
+    readonly mode: AutomationSelectionMode;
+}
+/**
 * The content controls a scope holds, outermost first and in document order.
 *
 * A control INSIDE another is reached through the one that holds it, never listed beside it:
@@ -753,6 +774,16 @@ export type AutomationOperation =
 /** The `ST_Lock` in force, INCLUDING what an enclosing control imposes. */
 | {
     readonly op: 'getContentControlLock';
+    readonly contentControl: AutomationHandle;
+}
+/**
+* Whether the control declares `w:dataBinding`.
+*
+* Presence only: no XPath, namespace mapping, store id, or custom XML content crosses this
+* protocol boundary, and the binding target is never resolved or fetched.
+*/
+| {
+    readonly op: 'getContentControlIsBound';
     readonly contentControl: AutomationHandle;
 }
 /** Whether the control is showing its placeholder rather than a value (`w:showingPlcHdr`). */

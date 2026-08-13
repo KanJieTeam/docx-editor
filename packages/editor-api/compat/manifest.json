@@ -296,7 +296,7 @@
     },
     {
       "uid": "Word.ContentControl#xmlMapping",
-      "reason": "Custom-XML-bound content control writes are refused until XML mapping is a separate supported lane (per the redesign plan); the mapping object itself is out of scope here."
+      "reason": "Custom-XML-bound content control writes are refused until XML mapping is a separate supported lane (per the redesign plan); the mapping object itself is out of scope here. DocxEditor's own read-only isBound boolean exposes binding presence for advisory preflight without exposing XPath, namespace mappings, store ids, or custom XML content."
     },
     {
       "uid": "Word.Range#start",
@@ -391,6 +391,10 @@
       "reason": "See Word.Comment#text."
     },
     {
+      "uid": "Word.NoteItem#text",
+      "reason": "Implemented by DocxEditor's object model as a read-only shortcut to the exact plain text returned by NoteItem#body.text. Upstream has no such member to select for exact conformance, so it is recorded as a DocxEditor extension rather than added to the reference shape. The body remains available for structured traversal and edits."
+    },
+    {
       "uid": "Word.Body#revisions",
       "reason": "See Word.Document#revisions."
     },
@@ -413,6 +417,10 @@
     {
       "uid": "Word.Body#revisions",
       "reason": "Implemented by DocxEditor's object model \u2014 a header or a footnote can carry tracked changes of its own, and a review pass over one story is the natural way to reach them \u2014 but not selected for exact conformance: upstream declares revisions on Document (selected here), not on Body, so there is no reference shape for the story-scoped accessor. Recorded so the extra member is a decision rather than drift."
+    },
+    {
+      "uid": "Word.Body#bookmarks",
+      "reason": "Implemented by DocxEditor's object model as a story-scoped discovery accessor over the same BookmarkCollection that Word exposes on Range. Upstream has no Body#bookmarks member to select for exact conformance, while putting this collection on Document would falsely imply aggregation across the main body, headers, footers and notes. Each Body answers only the bookmarks declared in that body's own story."
     }
   ],
   "divergences": [
@@ -446,7 +454,7 @@
     },
     {
       "uid": "Word.ContentControlCollection",
-      "note": "getByTag, getByTitle, getFirst, getFirstOrNullObject and ContentControl#setValue are implemented and are NOT in this list's frozen reference fixture, so they are published as DocxEditor's own additions rather than as conformance-checked members. setValue exists because a control's value is not its characters: a dropdown takes a declared item, a date an ISO instant, a checkbox a state, and upstream spreads those over five sibling objects this subset does not ship."
+      "note": "getByTag, getByTitle, getFirst, getFirstOrNullObject, ContentControl#setValue and ContentControl#isBound are implemented and are NOT in this list's frozen reference fixture, so they are published as DocxEditor's own additions rather than as conformance-checked members. setValue exists because a control's value is not its characters: a dropdown takes a declared item, a date an ISO instant, a checkbox a state, and upstream spreads those over five sibling objects this subset does not ship. isBound is a presence-only advisory preflight; sync-time refusal remains authoritative."
     },
     {
       "uid": "Word.Section#getHeader / #getFooter",

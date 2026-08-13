@@ -42,6 +42,24 @@ try {
 }
 ```
 
+To discover bookmarks without first knowing their text, enumerate the story that owns them:
+
+```ts
+await runtime.run(async (context) => {
+  const bookmarks = context.document.body.bookmarks;
+  bookmarks.load('items');
+  await context.sync();
+
+  for (const bookmark of bookmarks.items) bookmark.load('name');
+  await context.sync();
+
+  console.log(bookmarks.items.map(({ name }) => name));
+});
+```
+
+`document.body.bookmarks` covers only the main body story. A header or footer `Body` has its own
+collection; this accessor never combines separate stories into a document-wide answer.
+
 ## In the browser
 
 The browser entry takes an editor the host already created (from `@docx-editor.dev/react` or a plain page) and drives it in place. Edits land in the open document with the reader's undo stack intact, so there is no `save()`: the host saves the way it already did.
@@ -73,6 +91,10 @@ to keep that browser code out of the bundle.
   `run`. To carry one into a later `run`, track it and pass it to
   `runtime.run(object, callback)` for adoption. No proxy survives `dispose()`.
 - `getFirstOrNullObject` and `getLastOrNullObject` answer an object whose `isNullObject` is `true` after the sync, which is the difference between "no such heading" and a crash.
+
+For content-control writes, load `isBound` with the other properties and skip controls where it is
+true. That boolean is safe preflight metadata, not a write guarantee: `sync()` always checks the
+current document again and atomically refuses the batch if a control is bound by then.
 
 ## Capabilities
 
