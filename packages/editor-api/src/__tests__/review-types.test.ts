@@ -7,11 +7,13 @@ import { expectTypeOf, test } from 'bun:test';
 import type {
   Comment as BrowserComment,
   CommentReply as BrowserCommentReply,
+  Range as BrowserRange,
   Revision as BrowserRevision,
 } from '../browser.ts';
 import type {
   Comment as ServerComment,
   CommentReply as ServerCommentReply,
+  Range as ServerRange,
   Revision as ServerRevision,
 } from '../index.ts';
 
@@ -19,9 +21,13 @@ test('both public entries require nullable review dates to be narrowed', () => {
   expectTypeOf<BrowserComment>().toEqualTypeOf<ServerComment>();
   expectTypeOf<BrowserCommentReply>().toEqualTypeOf<ServerCommentReply>();
   expectTypeOf<BrowserRevision>().toEqualTypeOf<ServerRevision>();
+  expectTypeOf<BrowserRange['insertComment']>().toEqualTypeOf<ServerRange['insertComment']>();
+  expectTypeOf<ReturnType<ServerRange['insertComment']>>().toEqualTypeOf<ServerComment>();
   expectTypeOf<ServerComment['creationDate']>().toEqualTypeOf<Date | null>();
   expectTypeOf<ServerCommentReply['creationDate']>().toEqualTypeOf<Date | null>();
   expectTypeOf<ServerRevision['date']>().toEqualTypeOf<Date | null>();
+  expectTypeOf<ServerComment['delete']>().toEqualTypeOf<() => void>();
+  expectTypeOf<ServerCommentReply['delete']>().toEqualTypeOf<() => void>();
 
   const revision = { date: null } as unknown as ServerRevision;
   if (false) {

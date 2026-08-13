@@ -473,6 +473,65 @@ describe('comments and tracked changes are what a document says about itself', (
     expect(dates.revisions[8]!.getTime()).not.toBe(Date.parse('1999-01-01T00:00:00.000Z'));
   });
 
+  test('deleting a reply removes only that reply and makes its proxy stale', async () => {
+    const runtime = await serverRuntime(WITH_REVIEW_DATE_CASES);
+    const stale = await runtime.run(async (context) => {
+      const comments = context.document.comments;
+      comments.load('items');
+      await context.sync();
+      const root = comments.items[0]!;
+      root.replies.load('items');
+      await context.sync();
+      const reply = root.replies.items[0]!;
+      reply.delete();
+      await context.sync();
+      return reply;
+    });
+
+    const remaining = await runtime.run(async (context) => {
+      const comments = context.document.comments;
+      comments.load('items');
+      await context.sync();
+      const root = comments.items[0]!;
+      root.load('id');
+      root.replies.load('items');
+      for (const comment of comments.items) comment.load('id');
+      await context.sync();
+      return {
+        rootIds: comments.items.map((comment) => comment.id),
+        replies: root.replies.items.length,
+      };
+    });
+    expect(remaining).toEqual({ rootIds: ['1', '3', '5', '7'], replies: 0 });
+    await expect(
+      runtime.run(stale, async (context) => {
+        stale.load('id');
+        await context.sync();
+      })
+    ).rejects.toMatchObject({ code: 'InvalidObjectPath' });
+  });
+
+  test('deleting roots is batched atomically and removes their threads', async () => {
+    const runtime = await serverRuntime(WITH_REVIEW_DATE_CASES);
+    await runtime.run(async (context) => {
+      const comments = context.document.comments;
+      comments.load('items');
+      await context.sync();
+      comments.items[0]!.delete();
+      comments.items[1]!.delete();
+      await context.sync();
+    });
+    const remaining = await runtime.run(async (context) => {
+      const comments = context.document.comments;
+      comments.load('items');
+      await context.sync();
+      for (const comment of comments.items) comment.load('id');
+      await context.sync();
+      return comments.items.map((comment) => comment.id);
+    });
+    expect(remaining).toEqual(['5', '7']);
+  });
+
   test('a tracked insertion is a decision a script can read and accept', async () => {
     const runtime = await serverRuntime(TRACKED);
     const before = await runtime.run(async (context) => {
@@ -507,17 +566,44 @@ describe('comments and tracked changes are what a document says about itself', (
   });
 
   test('a runtime with no author refuses to write a comment rather than inventing one', async () => {
-    // Nothing to reply to in this fixture; the refusal is about the runtime, and it happens at the
-    // call rather than at the sync, which is where the mistake was made.
-    const runtime = await serverRuntime(TRACKED);
+    const runtime = await serverRuntime(docx(p('target')));
     const code = await codeOf(async () =>
       runtime.run(async (context) => {
-        const comments = context.document.comments;
-        comments.load('items');
+        const matches = context.document.body.search('target');
+        matches.load('items');
         await context.sync();
-        return comments.items.length;
+        matches.items[0]!.insertComment('needs an author');
       })
     );
-    expect(code).toBe('no-error');
+    expect(code).toBe('NotSupported');
+  });
+
+  test('empty text is invalid, and a range whose paragraph was deleted becomes stale', async () => {
+    const runtime = await createServer(docx(p('target') + p('survivor')), { author: 'Reviewer' });
+    const empty = await codeOf(async () =>
+      runtime.run(async (context) => {
+        const matches = context.document.body.search('target');
+        matches.load('items');
+        await context.sync();
+        matches.items[0]!.insertComment('');
+      })
+    );
+    expect(empty).toBe('InvalidArgument');
+
+    const stale = await codeOf(async () =>
+      runtime.run(async (context) => {
+        const matches = context.document.body.search('target');
+        const paragraphs = context.document.body.paragraphs;
+        matches.load('items');
+        paragraphs.load('items');
+        await context.sync();
+        const range = matches.items[0]!;
+        paragraphs.items[0]!.delete();
+        await context.sync();
+        range.insertComment('too late');
+        await context.sync();
+      })
+    );
+    expect(stale).toBe('InvalidObjectPath');
   });
 });

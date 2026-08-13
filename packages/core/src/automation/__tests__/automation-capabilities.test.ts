@@ -79,7 +79,7 @@ function fixture(
       state.applied += 1;
       return { ok: true, changed: true };
     },
-    applyCommentWrite: () => {
+    applyCommentWrites: () => {
       state.applied += 1;
       return { ok: true, changed: true, commentId: '1' };
     },
@@ -210,8 +210,10 @@ describe('the operation vocabulary declares which operations write', () => {
       'setListLevel',
       'insertListParagraph',
       'setHyperlink',
+      'insertComment',
       'setCommentResolved',
       'replyToComment',
+      'deleteComment',
       'acceptRevision',
       'rejectRevision',
       'acceptAllRevisions',
@@ -226,6 +228,7 @@ describe('the operation vocabulary declares which operations write', () => {
     // And the ones that commit as a PACKAGE transaction, which is why they travel alone.
     expect([...AUTOMATION_SOLITARY_OPERATIONS]).toEqual([
       'deleteNote',
+      'insertComment',
       'setCommentResolved',
       'replyToComment',
       'insertCustomNode',
