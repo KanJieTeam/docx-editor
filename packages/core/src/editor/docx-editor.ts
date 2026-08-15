@@ -4,11 +4,6 @@
 // the document session, semantic layout and painted pages. This is the composition root
 // the framework adapters mount.
 //
-// DELIBERATE PLACEHOLDER SHAPE — the `isActive` precedent, applied to a whole facade.
-//
-// The contract itself blesses honest-empty stubs: a control that shows nothing is better
-// than one that shows a guess. This facade follows that rule everywhere:
-//
 // - REAL: load/save, the exec subset below (marks, mark attributes via `setMarkAttr`,
 //   alignment, indent, line break, undo/redo, semantic setSelection, selection-addressed
 //   insert/delete text), selection formatting, `isActive` for marks and alignment, page
@@ -16,10 +11,6 @@
 //   change/selectionChange/error events, focus, destroy, attach/detach, `query` for
 //   `selectedText` and `selectionFormatting`, and the document catalogs
 //   (`getDocumentFonts`/`getDocumentStyles`, derived from the canonical trees).
-// - HONEST EMPTY: outline, comments, tracked changes, find, image/table
-//   context, watermark and header/footer state. Every member returns its typed empty
-//   value, never an invented one.
-//
 // THE GEOMETRY/INTERACTION CLUSTER IS GONE, not stubbed. `getInteractionFrame`, `hitTest`,
 // `dispatchInteraction`, `resolvePointer`, the caret and selection rect readers and the
 // accessibility observation were all placeholders here, and none of them had a caller. They
@@ -29,12 +20,6 @@
 // so a caller could not tell an unimplemented member from a real answer. `getPageGeometry`
 // is the one survivor and is now REAL — it had the cluster's only consumer, and returning
 // `[]` had silently made both Vue rulers render nothing.
-//
-// The surface still owns caret, selection and hit testing internally, through the browser's
-// own selection and `layout/semantic-hit-test.ts`. Re-exposing any of it on this facade is
-// a small wiring job on the day a host needs it.
-// - The `display` event never fires: the surface paints its own pages into the container
-//   rather than handing the host a render list.
 //
 // Filling any of these in later lights up whichever control reads it, with no change to
 // callers — which is the point of wiring the full contract now.
@@ -146,6 +131,7 @@ import {
   tableContextOf,
   selectedTableOf,
 } from './docx-editor-derive.ts';
+import { setReviewCommentResolved } from './docx-editor-comment-resolution.ts';
 import {
   canContentControlCommand,
   contentControlAtOf,
@@ -2323,6 +2309,21 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
 
     acceptReviewItem: (key: string) => resolveReviewItem(key, 'accept'),
     rejectReviewItem: (key: string) => resolveReviewItem(key, 'reject'),
+
+    setCommentResolved(key: string, resolved: boolean): ExecResult {
+      return setReviewCommentResolved(
+        {
+          reviewEnabled,
+          editingMode,
+          placements: reviewPlacements,
+          surface,
+          proReviewReason: PRO_REVIEW_REASON,
+          bump,
+        },
+        key,
+        resolved
+      );
+    },
 
     deleteReviewItem(key: string): ExecResult {
       if (!reviewEnabled) {
