@@ -9,13 +9,13 @@
 //   - an `exports` target pointing at a file the build never emitted;
 //   - a bundle that resolves at build time and throws on `import` in a plain Node process;
 //   - `require()` of the CJS output returning something a consumer cannot use;
-//   - the font shaper, the editor lane or a Node builtin leaking into the SERVER bundle, which is
-//     the one difference between "importable from a worker" and "importable from Node only".
+//   - the font shaper, the editor lane or a Node builtin leaking into the SERVER bundle;
+//   - a bare import other than the declared core dependency, or core being inlined and creating
+//     a second engine in a page that already has one through an adapter.
 //
 // So this packs the package with `npm pack`, unpacks it into a temporary directory, and drives the
-// unpacked files with a plain `node`. No registry, no install, no network — and nothing to install
-// either: the assertions below require every emitted bundle to carry ZERO bare imports, which is
-// what makes an unpacked-but-uninstalled tarball a fair test of what a consumer gets.
+// unpacked files with a plain `node`. No registry and no network: the unpacked package is linked to
+// the workspace's built core, exactly the one declared runtime dependency a real install provides.
 
 import { spawnSync } from 'node:child_process';
 import {
@@ -25,6 +25,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -33,7 +34,46 @@ import path from 'node:path';
 import { strToU8, zipSync } from 'fflate';
 
 const PACKAGE = path.resolve(import.meta.dirname, '..');
+const CORE_PACKAGE = path.resolve(PACKAGE, '..', 'core');
 const manifest = JSON.parse(readFileSync(path.join(PACKAGE, 'package.json'), 'utf8'));
+const coreManifest = JSON.parse(readFileSync(path.join(CORE_PACKAGE, 'package.json'), 'utf8'));
+
+/** Bare `@docx-editor.dev/core` specifiers a bundle may keep external. */
+function allowedCoreBareSpecifiers(exports) {
+  const allowed = new Set();
+  for (const [subpath, target] of Object.entries(exports)) {
+    if (subpath === './package.json') continue;
+    if (typeof target === 'string') continue;
+    if (typeof target !== 'object') continue;
+    allowed.add(
+      subpath === '.' ? '@docx-editor.dev/core' : `@docx-editor.dev/core${subpath.slice(1)}`
+    );
+  }
+  return allowed;
+}
+
+/** Built output each allowed bare specifier must resolve to. */
+function coreExportTargets(exports) {
+  const targets = new Map();
+  for (const [subpath, target] of Object.entries(exports)) {
+    if (typeof target !== 'object') continue;
+    const bare =
+      subpath === '.' ? '@docx-editor.dev/core' : `@docx-editor.dev/core${subpath.slice(1)}`;
+    targets.set(bare, { import: target.import, require: target.require });
+  }
+  return targets;
+}
+
+const ALLOWED_CORE = allowedCoreBareSpecifiers(coreManifest.exports);
+const CORE_TARGETS = coreExportTargets(coreManifest.exports);
+
+function bareImports(source) {
+  return [
+    ...source.matchAll(
+      /(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"'.][^"']*)["']/g
+    ),
+  ].map((match) => match[1]);
+}
 
 const failures = [];
 function check(ok, message) {
@@ -177,40 +217,64 @@ try {
     'dist/index.mjs imports a Node builtin, so it no longer runs in a worker'
   );
   check(
-    !/@docx-editor\.dev\/core/.test(serverBundle),
-    'dist/index.mjs imports the private contract package, which does not exist on npm'
+    manifest.dependencies?.['@docx-editor.dev/core'],
+    'the package does not declare the external core engine as a dependency'
   );
   check(
-    !/@docx-editor\.dev\/core/.test(browserBundle),
-    'dist/browser.mjs imports the private contract package, which does not exist on npm'
+    serverBundle.includes('@docx-editor.dev/core/automation'),
+    'dist/index.mjs does not import the external automation lane'
   );
-  // And the BROWSER bundle really is the other one. Stated with markers the editor lane owns
-  // rather than with a third-party name: which packages the engine pulls in is the engine's
-  // business and changes, but a bundle that can drive a live editor has to carry the word
-  // `contenteditable` and the editor instance's `surface`, and the server bundle carries neither.
-  for (const marker of ['contenteditable', 'surface']) {
-    check(
-      browserBundle.includes(marker) && !serverBundle.includes(marker),
-      `dist/browser.mjs and dist/index.mjs do not differ on "${marker}": one of the two entries is wrong`
-    );
-  }
+  check(
+    !serverBundle.includes('@docx-editor.dev/core/editor'),
+    'dist/index.mjs reaches the browser-only editor lane'
+  );
+  check(
+    browserBundle.includes('@docx-editor.dev/core/editor'),
+    'dist/browser.mjs does not reach the editor lane'
+  );
 
-  // Zero bare imports, in every emitted format. This is the assertion that makes "no runtime
-  // dependencies" true rather than intended — `harfbuzzjs` is external in the tsup config so the
-  // build can skip resolving the shaper the layout pass loads dynamically, and if that import ever
-  // survived into an output it would be one a consumer cannot resolve. So is anything else.
+  // Core is the only bare runtime dependency. Keeping it external is the one-core invariant:
+  // browser adapters and automation must resolve the same engine copy. Any other bare import is an
+  // undeclared bundle leak, including the font shaper deliberately externalized for resolution.
   for (const name of ['dist/index.mjs', 'dist/index.js', 'dist/browser.mjs', 'dist/browser.js']) {
     const source = readFileSync(path.join(root, name), 'utf8');
-    const bare = [
-      ...source.matchAll(/(?:\bfrom|\bimport|\brequire\s*\()\s*["']([^"'.][^"']*)["']/g),
-    ].map((match) => match[1]);
+    const bare = [...new Set(bareImports(source))];
+    const nonCore = bare.filter((specifier) => !specifier.startsWith('@docx-editor.dev/core'));
     check(
-      bare.length === 0,
-      `${name} imports ${[...new Set(bare)].join(', ')} from outside itself`
+      nonCore.length === 0,
+      `${name} imports ${nonCore.join(', ')} unexpectedly`
     );
+    const coreImports = bare.filter((specifier) => specifier.startsWith('@docx-editor.dev/core'));
+    const disallowedCore = coreImports.filter((specifier) => !ALLOWED_CORE.has(specifier));
+    check(
+      disallowedCore.length === 0,
+      `${name} imports undeclared core subpaths: ${disallowedCore.join(', ')}`
+    );
+    const condition = name.endsWith('.mjs') ? 'import' : 'require';
+    for (const specifier of coreImports) {
+      const target = CORE_TARGETS.get(specifier)?.[condition];
+      check(
+        target,
+        `${name} imports ${specifier}, which has no ${condition} export target in core`
+      );
+      if (!target) continue;
+      check(
+        existsSync(path.join(CORE_PACKAGE, target)),
+        `${name} imports ${specifier}, whose ${condition} target ${target} is not built`
+      );
+    }
   }
 
   // ---- a consumer can import it, both ways -------------------------------------------------
+  const scope = path.join(root, 'node_modules', '@docx-editor.dev');
+  mkdirSync(scope, { recursive: true });
+  check(
+    existsSync(path.join(CORE_PACKAGE, 'dist', 'index.js')),
+    'core is not built; run bun run --filter @docx-editor.dev/core build before pack:smoke'
+  );
+  if (existsSync(path.join(CORE_PACKAGE, 'dist', 'index.js'))) {
+    symlinkSync(CORE_PACKAGE, path.join(scope, 'core'), 'dir');
+  }
   const bytes = Buffer.from(fixtureDocx('packed')).toString('base64');
   writeFileSync(
     path.join(root, 'smoke.mjs'),
