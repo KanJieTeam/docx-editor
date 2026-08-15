@@ -763,6 +763,39 @@ export function mountPaginatedSurface(
     return layout;
   }
 
+  let deferredPublishRender: ReturnType<typeof setTimeout> | null = null;
+
+  function hasPendingBrowserInput(): boolean {
+    const scheduling = (
+      container.ownerDocument.defaultView?.navigator as
+        | (Navigator & {
+            scheduling?: {
+              isInputPending?: (options?: { includeContinuous?: boolean }) => boolean;
+            };
+          })
+        | undefined
+    )?.scheduling;
+    return scheduling?.isInputPending?.({ includeContinuous: true }) ?? false;
+  }
+
+  function renderPublishedLayout(): void {
+    if (!hasPendingBrowserInput()) {
+      if (deferredPublishRender !== null) clearTimeout(deferredPublishRender);
+      deferredPublishRender = null;
+      render();
+      return;
+    }
+    // Layout stays synchronous so the next edit reads current geometry, but paint and DOM
+    // selection do not need to run once per event already waiting in the browser's input
+    // queue. One task catches the view up to the newest published layout; ordinary isolated
+    // edits still render synchronously through the branch above.
+    if (deferredPublishRender !== null) return;
+    deferredPublishRender = setTimeout(() => {
+      deferredPublishRender = null;
+      render();
+    }, 0);
+  }
+
   const scheduler = createLayoutScheduler({
     // The DOCUMENT's geometry, exactly as the first paint uses. Omitting it meant the first
     // paint honoured A4 and the first committed edit silently repaginated onto Letter — every
@@ -779,7 +812,7 @@ export function mountPaginatedSurface(
       // Repaint from HERE, so a commit that never went through this surface — undo, or
       // another editor sharing the store — still reaches the screen. Otherwise the painted
       // pages keep showing a revision the model has already left.
-      render();
+      renderPublishedLayout();
     },
   });
 
@@ -1745,8 +1778,11 @@ export function mountPaginatedSurface(
 
   function applyPageOffsets(extent: SurfaceExtent): void {
     for (const page of currentLayout.pages) {
-      const element = pagesLayer.querySelector<HTMLElement>(`[data-page-index="${page.index}"]`);
-      if (!element) continue;
+      // The painter reconciles page children in record order, including virtual shells.
+      // Indexing that retained list is O(1); a selector here used to make one DOM query for
+      // every page on every keystroke (hundreds of queries in a long document).
+      const element = pagesLayer.children.item(page.index) as HTMLElement | null;
+      if (element?.dataset.pageIndex !== String(page.index)) continue;
       const offsetX = extent.pageOffsetX.get(page.index) ?? 0;
       element.style.left = `${(page.box.x + offsetX) * scale}px`;
     }
@@ -1812,7 +1848,7 @@ export function mountPaginatedSurface(
     // book the paint's own cost to the selection phase.
     lastPaintMs = now() - paintBegan;
     renderOverlay();
-    renderCommentHighlights();
+    renderCommentHighlights(true);
     // The surface may only now have been wrapped in its viewport, so the size watcher
     // re-resolves its target here rather than trusting what existed at mount.
     watchScrollerSize();
@@ -2569,8 +2605,19 @@ export function mountPaginatedSurface(
     return `docx-revision-band docx-revision-band--${kind}${isActive ? ' docx-revision-band--active' : ''}`;
   }
 
-  function renderCommentHighlights(): void {
+  let commentHighlightLayout: SemanticLayout | null = null;
+  let commentHighlightActiveKey: string | null | undefined;
+
+  function renderCommentHighlights(force = false): void {
     const active = activeReviewAtCaret();
+    const activeKey = active ? reviewItemKey(active) : null;
+    if (
+      !force &&
+      commentHighlightLayout === currentLayout &&
+      commentHighlightActiveKey === activeKey
+    ) {
+      return;
+    }
     // Once per paint, not once per rect: a decision spanning many lines asked the same
     // question for every one of them.
     const byKey = new Map<string, ReviewItem>();
@@ -2584,6 +2631,8 @@ export function mountPaginatedSurface(
       scale,
       ...(materializedExtent ? { pageOffsetX: materializedExtent.pageOffsetX } : {}),
     });
+    commentHighlightLayout = currentLayout;
+    commentHighlightActiveKey = activeKey;
   }
 
   /** Draw the selected cells, or clear the layer when nothing is selected that way. */
@@ -3740,6 +3789,7 @@ export function mountPaginatedSurface(
       pointer?.destroy();
       tableInteraction.destroy();
       navigation.destroy();
+      selectionSync.destroy();
       pagesLayer.removeEventListener('contextmenu', onTocContextMenu);
       pagesLayer.removeEventListener('click', onTocRowClick);
       pagesLayer.removeEventListener('pointermove', onTocPointerMove);
@@ -3747,6 +3797,8 @@ export function mountPaginatedSurface(
       // Drop pending layout work and stop listening BEFORE the DOM goes, or a commit from
       // another editor sharing this store would paint into a detached container.
       scheduler.cancel();
+      if (deferredPublishRender !== null) clearTimeout(deferredPublishRender);
+      deferredPublishRender = null;
       drawingBundle.dispose();
       detachDrawingUrlRegistry(pagesLayer);
       caret.destroy();
@@ -3894,6 +3946,12 @@ export function mountPaginatedSurface(
       }
       // Nothing structural goes, so the range start is still there to collapse onto.
       return { ops, collapseTo: orderedStart() };
+    }
+    if (
+      selection.anchor.paragraphId === selection.head.paragraphId &&
+      selection.anchor.offset === selection.head.offset
+    ) {
+      return { ops: [], collapseTo: selection.head };
     }
     const { from, to } = orderedRange();
     return planRangeDeletion(

@@ -14,7 +14,7 @@
 
 import { baselineShiftPtOf, TAB_LEADER_GLYPH } from '@docx-editor.dev/core/layout';
 import { DEFAULT_CANVAS_FONT_STACK } from '../layout/canvas-measurer.ts';
-import { authorSlotsOf, revisionPresentationOf } from './revision-presentation.ts';
+import { revisionPresentationOf } from './revision-presentation.ts';
 import { formatRevisionOf, type RevisionAttribution } from '@docx-editor.dev/core/layout';
 import type {
   ContentControlBoundaryRecord,
@@ -93,13 +93,6 @@ export interface PaintContext {
    * a live link there would be the one thing in the furniture that answers a gesture.
    */
   readonly inertLinks?: boolean;
-  /**
-   * Author to colour slot, by order of first appearance across the whole document.
-   *
-   * Resolved once per paint rather than per span: the order is a property of the document, and
-   * deriving it per page would give the same author different colours on different sheets.
-   */
-  readonly authorSlots?: ReadonlyMap<string, number>;
   /** Localized drawing refusal labels (defaults to English fallbacks). */
   readonly drawingStrings?: DrawingPaintStrings;
   /** Host port for ready-image blob URLs; omitted means ready images paint as placeholders. */
@@ -793,17 +786,13 @@ function applyFieldShading(element: HTMLElement, span: StyleSpanRecord, ctx: Pai
   }
 }
 
-function applyRevisionPresentation(
-  element: HTMLElement,
-  span: StyleSpanRecord,
-  ctx: PaintContext
-): void {
+function applyRevisionPresentation(element: HTMLElement, span: StyleSpanRecord): void {
   // A tracked FORMAT change alters no characters, so it has no strike or underline of its own
   // to wear. It still has to be visible: the reader is looking at text whose appearance is
   // itself a pending decision. A dashed rule and a tint say "this changed" without claiming
   // the words were added or removed.
   const format = formatRevisionOf(span.props);
-  const presentation = revisionPresentationOf(span.revisions, ctx.authorSlots);
+  const presentation = revisionPresentationOf(span.revisions);
   if (!presentation && !format) return;
 
   if (presentation) {
@@ -1007,7 +996,7 @@ function paintSpan(
   }
   applyRunFaceStyle(element, span.style, ctx);
   applyFieldShading(element, span, ctx);
-  applyRevisionPresentation(element, span, ctx);
+  applyRevisionPresentation(element, span);
   // Layout owns advances that the browser cannot reconstruct: horizontal scaling (transform
   // does not reserve space) and OOXML tab stops (`\t` would otherwise paint as a narrow
   // native tab). Both must take the published box width so following runs start where
@@ -2447,7 +2436,6 @@ export function paintSemanticLayout(
     ...(options.defaultFontFamily ? { defaultFontFamily: options.defaultFontFamily } : {}),
     ...(options.fieldShading ? { fieldShading: options.fieldShading } : {}),
     ...(options.shadeFormFields !== undefined ? { shadeFormFields: options.shadeFormFields } : {}),
-    authorSlots: authorSlotsOf(layout),
     ...(options.imageUrlPort ? { imageUrlPort: options.imageUrlPort } : {}),
     ...(options.activeHeaderFooterRId
       ? { activeHeaderFooterRId: options.activeHeaderFooterRId }

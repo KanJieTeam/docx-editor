@@ -192,7 +192,7 @@ export interface CaretGeometry {
     readonly y: number;
 }
 
-// @public
+// @public (undocumented)
 export function caretStops(layout: SemanticLayout, measurer?: TextMeasurer): CaretGeometry[];
 
 // @public
@@ -1159,6 +1159,7 @@ export interface LayoutSession {
     notePageBottomReserves: ReadonlyMap<number, number> | null;
     // @internal
     previous: SemanticLayout | null;
+    startLineCounter: number;
     // (undocumented)
     stats: LayoutSessionStats;
 }

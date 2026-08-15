@@ -8,10 +8,10 @@ The sidebar derives from the STORE and the page derives from LAYOUT. Both were r
 
 Nothing in that path inspects the field kind, so it was never about the form fields the reported file happened to contain. An attribution-coverage sweep over the fixture corpus found **47 unattributed revisions across two fixtures**, none of them form fields:
 
-| Fixture | Revision | Tree says | Page painted |
-| --- | --- | --- | --- |
-| `list-pagination-break.docx` ×46 | `insert:430` (`REF … \w \h`) | `"3(sed)."` | *(unattributed)* |
-| `issue-319-sections.docx` `footer1` | `delete:198` (`PAGE`/`NUMPAGES`) | `"Page 1 of 2"` | `"Page  of "` |
+| Fixture                             | Revision                         | Tree says       | Page painted     |
+| ----------------------------------- | -------------------------------- | --------------- | ---------------- |
+| `list-pagination-break.docx` ×46    | `insert:430` (`REF … \w \h`)     | `"3(sed)."`     | _(unattributed)_ |
+| `issue-319-sections.docx` `footer1` | `delete:198` (`PAGE`/`NUMPAGES`) | `"Page 1 of 2"` | `"Page  of "`    |
 
 The insert side is the worse half: an inserted cross-reference painted with neither underline nor author colour, so it read as text everyone had already agreed to.
 

@@ -60,6 +60,7 @@ import {
   type ToolbarTranslate,
 } from '@docx-editor.dev/react';
 import { cloneReviewCard, partitionReviewChildren } from './review-composition';
+import { useReviewSlotSizing } from './use-review-slot-sizing';
 import { useReview, type ReviewItemView } from './useReview';
 
 /**
@@ -432,25 +433,7 @@ function ReviewRoot({
   // no longer was. The visible symptom was a band of empty rail under a card that had just
   // collapsed. A key keeps its last height when virtualization unmounts its card, which is
   // deliberate: dropping it would collapse the run and jump every card on screen.
-  const slotSizes = useRef(new WeakMap<Element, string>());
-  const sizeObserver = useRef<ResizeObserver | null>(null);
-  const observeSlot = useCallback(
-    (node: HTMLElement | null, key: string) => {
-      if (!node || typeof ResizeObserver === 'undefined') return;
-      measure(key, node.offsetHeight);
-      sizeObserver.current ??= new ResizeObserver((entries) => {
-        for (const entry of entries) {
-          const owner = slotSizes.current.get(entry.target);
-          if (owner) measure(owner, (entry.target as HTMLElement).offsetHeight);
-        }
-      });
-      if (slotSizes.current.get(node) === key) return;
-      slotSizes.current.set(node, key);
-      sizeObserver.current.observe(node);
-    },
-    [measure]
-  );
-  useEffect(() => () => sizeObserver.current?.disconnect(), []);
+  const observeSlot = useReviewSlotSizing(measure);
 
   // Where the rail sits, measured from the PAINTED SURFACE rather than from the viewport.
   //

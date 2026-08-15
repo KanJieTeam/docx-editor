@@ -46,6 +46,7 @@ function offsetWithin(identity: SpanIdentity, within: number): number {
 
 /** Node ids are `part#path`, and the part name comes from the document. */
 const PARAGRAPH_ID = /^[^\s]{1,512}$/;
+const CSS_STRING_UNSAFE = /["\\\u0000-\u001f\u007f]/;
 
 function identityOf(element: Element): SpanIdentity | null {
   const paragraphId = (element as HTMLElement).dataset?.paragraphId;
@@ -66,6 +67,20 @@ function identityOf(element: Element): SpanIdentity | null {
       ? Number(rawEnd)
       : start + ((element as HTMLElement).textContent?.length ?? 0);
   return { paragraphId, start, end };
+}
+
+function paragraphElements(
+  root: Element,
+  paragraphId: string,
+  suffix: string
+): NodeListOf<Element> {
+  // The id came from the model but still crosses a CSS parser here. Ordinary node ids have
+  // no string delimiters or controls and can use the browser's indexed attribute lookup;
+  // an unusual/forged id falls back to the validated scan rather than being interpolated.
+  if (CSS_STRING_UNSAFE.test(paragraphId)) {
+    return root.querySelectorAll(`[data-paragraph-id]${suffix}`);
+  }
+  return root.querySelectorAll(`[data-paragraph-id="${paragraphId}"]${suffix}`);
 }
 
 /** The nearest ancestor (or self) that is a painted span. */
@@ -290,9 +305,8 @@ function domPointFromPositionIn(
   searchRoot: Element,
   position: SemanticPosition
 ): { node: Node; offset: number } | null {
-  const spans = searchRoot.querySelectorAll('[data-paragraph-id][data-start]');
+  const spans = paragraphElements(searchRoot, position.paragraphId, '[data-start]');
   let fallback: { node: Node; offset: number } | null = null;
-  let emptyLine: Element | null = null;
   for (const span of spans) {
     const identity = identityOf(span);
     if (!identity || identity.paragraphId !== position.paragraphId) continue;
@@ -323,7 +337,7 @@ function domPointFromPositionIn(
   // yet it still has exactly one caret position. Without this the caret vanished after every
   // Enter, and Select All drew no highlight at all on a document ending in a blank
   // paragraph, which is nearly every document Word writes.
-  emptyLine = lineOfParagraph(searchRoot, position.paragraphId);
+  const emptyLine = lineOfParagraph(searchRoot, position.paragraphId);
   return emptyLine ? { node: emptyLine, offset: 0 } : null;
 }
 
@@ -344,7 +358,7 @@ function textNodeOf(span: Element): Node | null {
 /** The painted line belonging to a paragraph, whether or not it holds any runs. */
 function lineOfParagraph(root: Element, paragraphId: string): Element | null {
   let fragment: Element | null = null;
-  for (const line of root.querySelectorAll('[data-paragraph-id]')) {
+  for (const line of paragraphElements(root, paragraphId, '')) {
     if ((line as HTMLElement).dataset?.paragraphId !== paragraphId) continue;
     if ((line as HTMLElement).dataset?.start !== undefined) continue;
     // The paragraph FRAGMENT carries the same identity as its line. The line is the caret

@@ -6,11 +6,19 @@ declare global {
 
 import type { Editor, EditorCommand } from '@docx-editor.dev/core/contracts/editor';
 import type { DocxEditorInstance } from '@docx-editor.dev/core/editor';
+import type {
+  PaginatedSurfacePerf,
+  SurfaceEditingMode,
+} from '../../../../packages/core/src/editor/paginated-surface-contract.ts';
 import {
   findTableInteractionAt,
   tableInteractionIndex,
 } from '../../../../packages/core/src/layout/semantic-table-interaction.ts';
-import { type SemanticLayout, type TableFragmentRecord } from '@docx-editor.dev/core/layout';
+import {
+  paragraphTextFromLayout,
+  type SemanticLayout,
+  type TableFragmentRecord,
+} from '@docx-editor.dev/core/layout';
 import {
   canonicalOoxmlFingerprint,
   diffSemanticDigests,
@@ -56,6 +64,29 @@ export interface DocxEditorE2EHook {
   outerTableIsolationEqual(bytes: Uint8Array): boolean;
   scrollToParagraph(needle: string): boolean;
   layoutRevision(): number | null;
+  fontMeasurer(): 'fixed' | 'shaped' | null;
+  prepareEditBenchmark(
+    fraction: number,
+    mode: SurfaceEditingMode,
+    offsetFraction?: number
+  ): {
+    paragraphId: string;
+    offset: number;
+    textLength: number;
+    revision: number;
+    pageCount: number;
+  } | null;
+  benchmarkPerf(): PaginatedSurfacePerf | null;
+  benchmarkSelection(): {
+    readonly anchor: { readonly paragraphId: string; readonly offset: number };
+    readonly head: { readonly paragraphId: string; readonly offset: number };
+  } | null;
+  benchmarkParagraphText(paragraphId: string): string | null;
+  prepareClipboardBenchmark(
+    startFraction: number,
+    endFraction: number
+  ): { readonly expectedText: string; readonly pageCount: number } | null;
+  undoBenchmarkEdit(): boolean;
   innerTableId(): string | null;
   outerTableId(): string | null;
   tableEdgePoint(
@@ -274,6 +305,72 @@ export function createDocxEditorE2EHook(getEditor: () => Editor | null): DocxEdi
     },
     layoutRevision() {
       return surface(getEditor())?.layout().revision ?? null;
+    },
+    fontMeasurer() {
+      const editor = getEditor() as DocxEditorInstance | null;
+      return editor?.fontMeasurement().measurer ?? null;
+    },
+    prepareEditBenchmark(fraction, mode, offsetFraction = 0) {
+      const currentSurface = surface(getEditor());
+      const pages = document.querySelector<HTMLElement>('.docx-pages');
+      if (!currentSurface || !pages) return null;
+      const paragraphIds = currentSurface.session.paragraphIds();
+      if (paragraphIds.length === 0) return null;
+      const bounded = Math.min(1, Math.max(0, fraction));
+      const paragraphId = paragraphIds[Math.floor((paragraphIds.length - 1) * bounded)]!;
+      const textLength = paragraphTextFromLayout(currentSurface.layout(), paragraphId).length;
+      const offset = Math.round(textLength * Math.min(1, Math.max(0, offsetFraction)));
+      const position = { paragraphId, offset };
+      currentSurface.setEditingMode(mode);
+      currentSurface.setSelection({ anchor: position, head: position });
+      currentSurface.revealPosition(position, { block: 'center' });
+      pages.focus({ preventScroll: true });
+      const state = currentSurface.state();
+      return {
+        paragraphId,
+        offset,
+        textLength,
+        revision: state.revision,
+        pageCount: state.pageCount,
+      };
+    },
+    benchmarkPerf() {
+      return surface(getEditor())?.state().perf ?? null;
+    },
+    benchmarkSelection() {
+      return surface(getEditor())?.state().selection ?? null;
+    },
+    benchmarkParagraphText(paragraphId) {
+      const currentSurface = surface(getEditor());
+      return currentSurface ? paragraphTextFromLayout(currentSurface.layout(), paragraphId) : null;
+    },
+    prepareClipboardBenchmark(startFraction, endFraction) {
+      const currentSurface = surface(getEditor());
+      if (!currentSurface) return null;
+      const ids = currentSurface.session.paragraphIds();
+      if (ids.length === 0) return null;
+      const at = (fraction: number) =>
+        Math.floor((ids.length - 1) * Math.min(1, Math.max(0, fraction)));
+      const startId = ids[Math.min(at(startFraction), at(endFraction))]!;
+      const endId = ids[Math.max(at(startFraction), at(endFraction))]!;
+      currentSurface.setEditingMode('edit');
+      currentSurface.setSelection({
+        anchor: { paragraphId: startId, offset: 0 },
+        head: {
+          paragraphId: endId,
+          offset: paragraphTextFromLayout(currentSurface.layout(), endId).length,
+        },
+      });
+      return {
+        expectedText: currentSurface.selectedText(),
+        pageCount: currentSurface.layout().pages.length,
+      };
+    },
+    undoBenchmarkEdit() {
+      const currentSurface = surface(getEditor());
+      if (!currentSurface?.state().canUndo) return false;
+      currentSurface.undo();
+      return true;
     },
     innerTableId() {
       const part = documentPart(getEditor());

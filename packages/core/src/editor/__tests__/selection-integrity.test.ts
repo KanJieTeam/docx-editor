@@ -433,7 +433,7 @@ describe('a render never discards a gesture the model has not adopted yet', () =
   const long = `<w:p><w:r><w:t>${'word '.repeat(4000)}</w:t></w:r></w:p>`;
 
   /** The surface inside a scroll container, with the viewport happy-dom cannot measure. */
-  function mountScrolled(): {
+  function mountScrolled(options: { pointer?: 'engine' | 'native' } = {}): {
     surface: PaginatedSurface;
     host: HTMLElement;
     scroller: HTMLElement;
@@ -444,9 +444,32 @@ describe('a render never discards a gesture the model has not adopted yet', () =
     scroller.append(host);
     document.body.append(scroller);
     Object.defineProperty(scroller, 'clientHeight', { value: 800, configurable: true });
-    const opened = mountPaginatedSurface(host, docx(long), { scale: 1 });
+    const opened = mountPaginatedSurface(host, docx(long), { scale: 1, ...options });
     if (!opened.ok) throw new Error(opened.reason);
     return { surface: opened.surface, host, scroller };
+  }
+
+  function typeDigit(pages: Element, digit: string): void {
+    pages.dispatchEvent(
+      new InputEvent('beforeinput', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertText',
+        data: digit,
+      })
+    );
+  }
+
+  /** Capture-phase listeners happy-dom keeps on the target, used to prove teardown. */
+  function capturingListeners(target: EventTarget, type: string): EventListener[] {
+    for (const symbol of Object.getOwnPropertySymbols(target)) {
+      const bag = (target as unknown as Record<symbol, unknown>)[symbol];
+      if (!bag || typeof bag !== 'object' || !('capturing' in bag)) continue;
+      const capturing = (bag as { capturing: Map<string, EventListener[]> }).capturing;
+      if (!(capturing instanceof Map)) continue;
+      return [...(capturing.get(type) ?? [])];
+    }
+    return [];
   }
 
   test('a repaint adopts the live browser selection instead of writing the model over it', async () => {
@@ -519,6 +542,323 @@ describe('a render never discards a gesture the model has not adopted yet', () =
       expect(after.head.offset).toBe(1);
     } finally {
       surface.destroy();
+      scroller.remove();
+    }
+  });
+
+  test('stale selection echoes cannot reorder a rapid typing burst before deferred paint', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window.navigator, 'scheduling');
+    Object.defineProperty(window.navigator, 'scheduling', {
+      configurable: true,
+      value: { isInputPending: () => true },
+    });
+    const { surface, host, scroller } = mountScrolled();
+    try {
+      const id = surface.session.paragraphIds()[0]!;
+      surface.setSelection({
+        anchor: { paragraphId: id, offset: 0 },
+        head: { paragraphId: id, offset: 0 },
+      });
+      await Promise.resolve();
+
+      // Paint stays deferred, so the native selection remains at offset zero. A browser can
+      // still deliver the queued echo of that old caret between input tasks; it must not take
+      // ownership back from the model caret that each commit advances.
+      for (const digit of '1234567890') {
+        surface.type(digit);
+        document.dispatchEvent(new Event('selectionchange'));
+      }
+
+      expect(surface.session.bodyText().startsWith('1234567890')).toBe(true);
+      expect(surface.state().selection).toEqual({
+        anchor: { paragraphId: id, offset: 10 },
+        head: { paragraphId: id, offset: 10 },
+      });
+    } finally {
+      surface.destroy();
+      host.remove();
+      scroller.remove();
+      if (descriptor) Object.defineProperty(window.navigator, 'scheduling', descriptor);
+      else delete (window.navigator as Navigator & { scheduling?: unknown }).scheduling;
+    }
+  });
+
+  test('beforeinput does not re-adopt a stale DOM caret during deferred paint', async () => {
+    // THE PATH A KEYSTROKE ACTUALLY TAKES.
+    //
+    // `surface.type()` is not how a browser delivers characters: `beforeinput` first
+    // adopts the live DOM selection so a click that has not yet produced `selectionchange`
+    // still edits the clicked point. While paint is deferred that DOM caret is still the
+    // PRE-edit one, so adopting it between digits used to insert the next character at
+    // offset zero and reverse the burst.
+    const descriptor = Object.getOwnPropertyDescriptor(window.navigator, 'scheduling');
+    Object.defineProperty(window.navigator, 'scheduling', {
+      configurable: true,
+      value: { isInputPending: () => true },
+    });
+    const { surface, host, scroller } = mountScrolled();
+    try {
+      const id = surface.session.paragraphIds()[0]!;
+      surface.setSelection({
+        anchor: { paragraphId: id, offset: 0 },
+        head: { paragraphId: id, offset: 0 },
+      });
+      await Promise.resolve();
+      const pages = host.querySelector('.docx-pages');
+      if (!pages) throw new Error('pages layer missing');
+
+      for (const digit of '1234567890') {
+        pages.dispatchEvent(
+          new InputEvent('beforeinput', {
+            bubbles: true,
+            cancelable: true,
+            inputType: 'insertText',
+            data: digit,
+          })
+        );
+        // The browser also queues `selectionchange` after a caret write. During deferred
+        // paint there is no new write, but a late echo of the last one must not reset the
+        // model caret either — the ordered-type benchmark injects this on purpose.
+        document.dispatchEvent(new Event('selectionchange'));
+      }
+
+      expect(surface.session.bodyText().startsWith('1234567890')).toBe(true);
+      expect(surface.state().selection).toEqual({
+        anchor: { paragraphId: id, offset: 10 },
+        head: { paragraphId: id, offset: 10 },
+      });
+    } finally {
+      surface.destroy();
+      host.remove();
+      scroller.remove();
+      if (descriptor) Object.defineProperty(window.navigator, 'scheduling', descriptor);
+      else delete (window.navigator as Navigator & { scheduling?: unknown }).scheduling;
+    }
+  });
+
+  test('a click during deferred paint still wins the next beforeinput', async () => {
+    // The stale-caret guard must not swallow a genuine gesture. Paint is deferred after
+    // the first character, the user clicks later in the still-painted text, and the next
+    // keystroke has to land there rather than after the unpainted insert.
+    const descriptor = Object.getOwnPropertyDescriptor(window.navigator, 'scheduling');
+    Object.defineProperty(window.navigator, 'scheduling', {
+      configurable: true,
+      value: { isInputPending: () => true },
+    });
+    const { surface, host, scroller } = mountScrolled();
+    try {
+      const id = surface.session.paragraphIds()[0]!;
+      surface.setSelection({
+        anchor: { paragraphId: id, offset: 0 },
+        head: { paragraphId: id, offset: 0 },
+      });
+      await Promise.resolve();
+      const pages = host.querySelector('.docx-pages');
+      if (!pages) throw new Error('pages layer missing');
+      pages.dispatchEvent(
+        new InputEvent('beforeinput', {
+          bubbles: true,
+          cancelable: true,
+          inputType: 'insertText',
+          data: '1',
+        })
+      );
+      expect(surface.state().selection.head.offset).toBe(1);
+
+      const run = host.querySelector('.docx-page[data-page-index="0"] [data-start]')!;
+      const text = textNodeIn(run);
+      const selection = document.getSelection()!;
+      selection.removeAllRanges();
+      const range = document.createRange();
+      range.setStart(text, 4);
+      range.setEnd(text, 4);
+      selection.addRange(range);
+
+      pages.dispatchEvent(
+        new InputEvent('beforeinput', {
+          bubbles: true,
+          cancelable: true,
+          inputType: 'insertText',
+          data: 'Y',
+        })
+      );
+      expect(surface.state().selection.head.offset).toBe(5);
+      expect(surface.session.bodyText().slice(4, 5)).toBe('Y');
+    } finally {
+      surface.destroy();
+      host.remove();
+      scroller.remove();
+      if (descriptor) Object.defineProperty(window.navigator, 'scheduling', descriptor);
+      else delete (window.navigator as Navigator & { scheduling?: unknown }).scheduling;
+    }
+  });
+
+  test('returning to the last mirrored caret during deferred paint still wins the next beforeinput', async () => {
+    // THE EQUALITY CASE THE STALE-ECHO GUARD USED TO SWALLOW.
+    //
+    // `isStaleMirroredCaret` used to treat "DOM caret still equals lastMirroredSelection" as
+    // proof the browser had not moved. A native/touch caret gesture can land on exactly that
+    // pre-edit offset while paint is deferred — the leftover DOM caret and the user's new
+    // caret are the same range. The next character must insert THERE, not at the post-edit
+    // model caret. Provenance is a pointerdown (mouse in native mode, touch in engine mode);
+    // a queued selectionchange echo without one must still be ignored.
+    const descriptor = Object.getOwnPropertyDescriptor(window.navigator, 'scheduling');
+    Object.defineProperty(window.navigator, 'scheduling', {
+      configurable: true,
+      value: { isInputPending: () => true },
+    });
+    const cases: readonly {
+      readonly pointer?: 'engine' | 'native';
+      readonly pointerType: 'mouse' | 'touch';
+    }[] = [{ pointer: 'native', pointerType: 'mouse' }, { pointerType: 'touch' }];
+    try {
+      for (const setup of cases) {
+        const { surface, host, scroller } = mountScrolled(
+          setup.pointer ? { pointer: setup.pointer } : {}
+        );
+        try {
+          const id = surface.session.paragraphIds()[0]!;
+          surface.setSelection({
+            anchor: { paragraphId: id, offset: 0 },
+            head: { paragraphId: id, offset: 0 },
+          });
+          await Promise.resolve();
+          const pages = host.querySelector('.docx-pages');
+          if (!pages) throw new Error('pages layer missing');
+          typeDigit(pages, '1');
+          expect(surface.state().selection.head.offset).toBe(1);
+
+          pages.dispatchEvent(
+            new PointerEvent('pointerdown', {
+              bubbles: true,
+              cancelable: true,
+              button: 0,
+              pointerId: 1,
+              pointerType: setup.pointerType,
+            })
+          );
+          const run = host.querySelector('.docx-page[data-page-index="0"] [data-start]')!;
+          const text = textNodeIn(run);
+          const selection = document.getSelection()!;
+          selection.removeAllRanges();
+          const range = document.createRange();
+          range.setStart(text, 0);
+          range.setEnd(text, 0);
+          selection.addRange(range);
+
+          typeDigit(pages, 'Y');
+          expect(surface.state().selection).toEqual({
+            anchor: { paragraphId: id, offset: 1 },
+            head: { paragraphId: id, offset: 1 },
+          });
+          expect(surface.session.bodyText().slice(0, 2)).toBe('Y1');
+        } finally {
+          surface.destroy();
+          host.remove();
+          scroller.remove();
+        }
+      }
+    } finally {
+      if (descriptor) Object.defineProperty(window.navigator, 'scheduling', descriptor);
+      else delete (window.navigator as Navigator & { scheduling?: unknown }).scheduling;
+    }
+  });
+
+  test('clicking the current caret does not authorize a later stale selection echo', async () => {
+    // ONE-SHOT GESTURE PROVENANCE.
+    //
+    // Clicking the already-current mirrored caret fires pointerdown/selectstart but no
+    // selectionchange, so the DOM and model already agree. That gesture may authorize the
+    // immediate adoption opportunity; it must not stay armed into a later deferred edit.
+    // A leftover flag used to make the next stale echo look like a user move, so the
+    // second character inserted at the pre-edit offset and reordered the burst.
+    const descriptor = Object.getOwnPropertyDescriptor(window.navigator, 'scheduling');
+    Object.defineProperty(window.navigator, 'scheduling', {
+      configurable: true,
+      value: { isInputPending: () => true },
+    });
+    const cases: readonly {
+      readonly pointer?: 'engine' | 'native';
+      readonly pointerType: 'mouse' | 'touch';
+    }[] = [{ pointer: 'native', pointerType: 'mouse' }, { pointerType: 'touch' }];
+    try {
+      for (const setup of cases) {
+        const { surface, host, scroller } = mountScrolled(
+          setup.pointer ? { pointer: setup.pointer } : {}
+        );
+        try {
+          const id = surface.session.paragraphIds()[0]!;
+          surface.setSelection({
+            anchor: { paragraphId: id, offset: 0 },
+            head: { paragraphId: id, offset: 0 },
+          });
+          await Promise.resolve();
+          const pages = host.querySelector('.docx-pages');
+          if (!pages) throw new Error('pages layer missing');
+
+          pages.dispatchEvent(
+            new PointerEvent('pointerdown', {
+              bubbles: true,
+              cancelable: true,
+              button: 0,
+              pointerId: 1,
+              pointerType: setup.pointerType,
+            })
+          );
+          pages.dispatchEvent(new Event('selectstart', { bubbles: true, cancelable: true }));
+
+          typeDigit(pages, '1');
+          expect(surface.state().selection.head.offset).toBe(1);
+
+          document.dispatchEvent(new Event('selectionchange'));
+
+          typeDigit(pages, '2');
+          expect(surface.session.bodyText().slice(0, 2)).toBe('12');
+          expect(surface.state().selection).toEqual({
+            anchor: { paragraphId: id, offset: 2 },
+            head: { paragraphId: id, offset: 2 },
+          });
+        } finally {
+          surface.destroy();
+          host.remove();
+          scroller.remove();
+        }
+      }
+    } finally {
+      if (descriptor) Object.defineProperty(window.navigator, 'scheduling', descriptor);
+      else delete (window.navigator as Navigator & { scheduling?: unknown }).scheduling;
+    }
+  });
+
+  test('destroying the surface drops selection-sync capture listeners', () => {
+    const { surface, host, scroller } = mountScrolled();
+    try {
+      const pages = host.querySelector('.docx-pages');
+      if (!pages) throw new Error('pages layer missing');
+
+      const selectStarts = capturingListeners(pages, 'selectstart');
+      const pointerDowns = capturingListeners(pages, 'pointerdown');
+      expect(selectStarts).toHaveLength(1);
+      expect(pointerDowns.length).toBeGreaterThan(0);
+
+      surface.destroy();
+      expect(capturingListeners(pages, 'selectstart')).toEqual([]);
+      expect(capturingListeners(pages, 'pointerdown')).toEqual([]);
+
+      pages.dispatchEvent(new Event('selectstart', { bubbles: true, cancelable: true }));
+      pages.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          pointerId: 1,
+        })
+      );
+      document.dispatchEvent(new Event('selectionchange'));
+      expect(capturingListeners(pages, 'selectstart')).toEqual([]);
+      expect(capturingListeners(pages, 'pointerdown')).toEqual([]);
+    } finally {
+      host.remove();
       scroller.remove();
     }
   });
