@@ -7,10 +7,13 @@
 // to "what does this document hold", and the two would part company at the first document neither
 // author had in mind.
 //
-// WHAT IS LEFT OUT IS LEFT OUT ON PURPOSE. A structural revision — a row, a cell, a section, the
-// table grid — is one the engine refuses to accept or reject. It is not answered as a decision,
-// because an object whose only operations are refusals is worse than an absence: a caller
-// iterating changes would stall on it forever, and no amount of reading tells them why.
+// WHAT IS LEFT OUT OF THE LISTING IS LEFT OUT ON PURPOSE. A structural revision whose exact Word
+// subtype this protocol cannot name — a row, a cell, a section, the table grid — is omitted from
+// `revisionReads`, because an object whose `type` we cannot publish is worse than an absence.
+// Collection membership is therefore not the collection decision set: `acceptAll` / `rejectAll`
+// still resolve every store-resolvable revision, including a complete tracked row
+// (`revisionKind: structural` and `readOnly: false`), and refuse atomically when any `readOnly`
+// item remains.
 
 import type { OoxmlPackage } from '../store/package/ooxml-package.ts';
 import type { OoxmlPart } from '../store/package/ooxml-tree.ts';
@@ -92,17 +95,22 @@ export interface AutomationRevisionRead {
   readonly item: ReviewRevisionItem;
 }
 
+/** Every tracked-change item that belongs to one story, including unsupported structural ones. */
+export function revisionItemsInStory(reads: AutomationStoryReads): readonly ReviewRevisionItem[] {
+  return Object.freeze(revisionItemsOf(reads.part).filter((item) => inStory(reads, item.ranges)));
+}
+
 /**
  * The decisions of one story, in document order.
  *
- * Filtered to the ones the engine can resolve: `readOnly` is the store lane's own answer to
- * "would accept and reject refuse this", so the filter cannot drift from what the ops do.
+ * Omits `readOnly` items and structural cards whose Word subtype this protocol cannot name.
+ * That listing is not the collection decision set: store-resolvable structural revisions are
+ * still resolved by collection accept/reject.
  */
 export function revisionReads(reads: AutomationStoryReads): readonly AutomationRevisionRead[] {
   const found: AutomationRevisionRead[] = [];
-  for (const item of revisionItemsOf(reads.part)) {
+  for (const item of revisionItemsInStory(reads)) {
     if (item.readOnly || item.revisionKind === 'structural') continue;
-    if (!inStory(reads, item.ranges)) continue;
     const type = REVISION_TYPES[item.revisionKind as keyof typeof REVISION_TYPES];
     if (type === undefined) continue;
     found.push(

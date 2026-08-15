@@ -92,6 +92,7 @@ import { paragraphStyleName, styleIdFor } from './styles.ts';
 import type { StoryScope } from '../store/store/tree-package-store.ts';
 import type { AutomationCommentWrite } from './document-port.ts';
 import { commentReads, revisionReads, type AutomationRevisionRead } from './review.ts';
+import { revisionCollectionOps, revisionDecisionTarget } from './revision-operations.ts';
 import type { ReviewCommentItem } from '../store/store/review-reads.ts';
 import {
   planDeleteComment,
@@ -1962,9 +1963,16 @@ export function createBatchPlanner(host: BatchPlannerHost): BatchPlanner {
             String(operation.noteKind)
           );
         const kind = operation.noteKind;
+        const listing = packageReads.noteIds(kind);
+        if (!listing.ok)
+          return refuse(
+            'ambiguous-document',
+            `${kind} identities are not completely and unambiguously enumerable`,
+            listing.reason === 'duplicates' ? listing.duplicateIds.join(',') : listing.reason
+          );
         return query({
           kind: 'handles',
-          handles: packageReads.noteIds(kind).map((noteId) => handles.note(kind, noteId)),
+          handles: listing.ids.map((noteId) => handles.note(kind, noteId)),
         });
       }
 
@@ -1995,7 +2003,14 @@ export function createBatchPlanner(host: BatchPlannerHost): BatchPlanner {
         const target = handles.resolve(operation.note, 'note');
         if (!target || target.kind !== 'note')
           return refuse('invalid-handle', 'that handle does not name a note', 'note');
-        if (!packageReads.noteIds(target.noteKind).includes(target.noteId))
+        const listing = packageReads.noteIds(target.noteKind);
+        if (!listing.ok)
+          return refuse(
+            'ambiguous-document',
+            `${target.noteKind} identities are not completely and unambiguously enumerable`,
+            listing.reason === 'duplicates' ? listing.duplicateIds.join(',') : listing.reason
+          );
+        if (!listing.ids.includes(target.noteId))
           return refuse('invalid-handle', 'that note is not in this document');
         return planDeleteNote(target.noteKind, target.noteId);
       }
@@ -2394,26 +2409,17 @@ export function createBatchPlanner(host: BatchPlannerHost): BatchPlanner {
 
       case 'acceptAllRevisions':
       case 'rejectAllRevisions': {
-        if (!handles.resolve(operation.document, 'document'))
-          return refuse('invalid-handle', 'that handle does not name a document', 'document');
-        const reads = packageReads.body;
-        if (!reads) return refuse('document-unavailable', 'this host holds no document');
-        const plan = planFor(reads);
+        const target = revisionDecisionTarget(operation, handles, packageReads);
+        if (!target.ok) return refuse(target.code, target.message, target.detail);
+        const plan = planFor(target.reads);
         const conflict = pinWrite(plan);
         if (conflict) return conflict;
-        // The store's own whole-part op, not a loop: one decision, one undo unit. It refuses
-        // outright if the part holds a change the engine cannot resolve, which is the honest
-        // answer — accepting the resolvable ones and silently leaving the rest would report a
-        // document as reviewed while it still carries pending changes.
+        const ops = revisionCollectionOps(operation, target.reads);
         return {
           ok: true,
           kind: 'command',
-          story: reads.story,
-          ops: [
-            operation.op === 'acceptAllRevisions'
-              ? ({ op: 'acceptAllRevisions' } as const)
-              : ({ op: 'rejectAllRevisions' } as const),
-          ],
+          story: target.reads.story,
+          ops,
           answer: () => APPLIED,
         };
       }

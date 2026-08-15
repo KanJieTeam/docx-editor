@@ -503,9 +503,9 @@ export type AutomationOperation =
   /**
    * The tracked changes of a story, in document order.
    *
-   * The ones this engine can RESOLVE. A structural revision — a row, a cell, a section, the table
-   * grid — is refused by accept and reject, so it is not answered here: an object that can only
-   * refuse is not an object a caller can do anything with.
+   * Structural revisions are omitted because this protocol does not publish their exact Word
+   * subtype. Collection accept/reject can still resolve structural revisions the store supports,
+   * such as a complete tracked row.
    */
   | { readonly op: 'getRevisions'; readonly body: AutomationHandle }
   /** Word's name for the kind of change: `Insert`, `Delete`, `Replace`, `Property`, … */
@@ -523,9 +523,29 @@ export type AutomationOperation =
    */
   | { readonly op: 'acceptRevision'; readonly revision: AutomationHandle }
   | { readonly op: 'rejectRevision'; readonly revision: AutomationHandle }
-  /** Accept every change in the main story, as ONE decision and one undo unit. */
-  | { readonly op: 'acceptAllRevisions'; readonly document: AutomationHandle }
-  | { readonly op: 'rejectAllRevisions'; readonly document: AutomationHandle }
+  /**
+   * Accept every change in one story, as ONE decision and one undo unit.
+   *
+   * The document-handle form names the main story. The body-handle form names that story: a
+   * header, footer, or the main body uses the part-wide store op; a note uses one store
+   * all-decision scoped to that exact canonical note root. Both forms agree for the main story.
+   */
+  | {
+      readonly op: 'acceptAllRevisions';
+      readonly body: AutomationHandle;
+    }
+  | {
+      readonly op: 'acceptAllRevisions';
+      readonly document: AutomationHandle;
+    }
+  | {
+      readonly op: 'rejectAllRevisions';
+      readonly body: AutomationHandle;
+    }
+  | {
+      readonly op: 'rejectAllRevisions';
+      readonly document: AutomationHandle;
+    }
   /**
    * Put the reader's selection on a span. Requires the `selection` capability, so a headless
    * host refuses it rather than pretending to have a caret.

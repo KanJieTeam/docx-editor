@@ -31,8 +31,9 @@ import {
 import {
   findNoteById,
   isNormalNote,
+  MAX_NOTES_PER_PART,
   noteIdOf,
-  notesOf,
+  noteKindOf,
   type NoteKind,
 } from '../store/package/note-nodes.ts';
 import { resolveNotesPart } from '../store/package/note-references.ts';
@@ -142,6 +143,13 @@ export interface AutomationFurnitureRead {
   readonly declared: boolean;
 }
 
+/** A note-kind listing, or the boundedness/identity failure that makes it unaddressable. */
+export type AutomationNoteIdsRead =
+  | { readonly ok: true; readonly ids: readonly number[] }
+  | { readonly ok: false; readonly reason: 'truncated' }
+  | { readonly ok: false; readonly reason: 'duplicates'; readonly duplicateIds: readonly number[] }
+  | { readonly ok: false; readonly reason: 'malformed' };
+
 /** Reads over the whole package: its stories, its sections, and what it declares about styles. */
 export interface AutomationPackageReads {
   readonly package: OoxmlPackage | null;
@@ -155,8 +163,13 @@ export interface AutomationPackageReads {
   sections(): readonly AutomationSectionRead[];
   /** The furniture one section declares or inherits, in a stable order. */
   furniture(sectionIndex: number): readonly AutomationFurnitureRead[];
-  /** Every note of one kind, by `w:id`, in the order the notes part writes them. */
-  noteIds(noteKind: NoteKind): readonly number[];
+  /**
+   * Every note of one kind, by `w:id`, or an ambiguity that makes that kind unaddressable.
+   *
+   * `w:id` is the public identity. Two roots carrying one id cannot become two handles without
+   * aliasing, so no note of that kind is addressable until the malformed document is repaired.
+   */
+  noteIds(noteKind: NoteKind): AutomationNoteIdsRead;
   styles(): AutomationStyleIndex;
 }
 
@@ -178,7 +191,7 @@ export const EMPTY_READS: AutomationPackageReads = Object.freeze({
   storyOf: () => null,
   sections: () => NO_SECTIONS,
   furniture: () => NO_FURNITURE,
-  noteIds: () => Object.freeze([]) as readonly number[],
+  noteIds: (): AutomationNoteIdsRead => ({ ok: true, ids: NONE_NUMBERS }),
   styles: () => NO_STYLE_INDEX,
 });
 
@@ -278,6 +291,62 @@ export function documentReads(pkg: OoxmlPackage): AutomationPackageReads {
   let sections: readonly AutomationSectionRead[] | undefined;
 
   const cache = new Map<string, AutomationStoryReads | null>();
+  const noteIdsCache = new Map<NoteKind, AutomationNoteIdsRead>();
+
+  const noteIdsOf = (noteKind: NoteKind): AutomationNoteIdsRead => {
+    const cached = noteIdsCache.get(noteKind);
+    if (cached) return cached;
+    const part = resolveNotesPart(pkg, noteKind);
+    if (!part) {
+      const empty: AutomationNoteIdsRead = { ok: true, ids: NONE_NUMBERS };
+      noteIdsCache.set(noteKind, empty);
+      return empty;
+    }
+    const ids: number[] = [];
+    const seen = new Set<number>();
+    const duplicates = new Set<number>();
+    let candidates = 0;
+    let malformed = false;
+    // This is a COMPLETE direct-child scan, not `notesOf`: that helper deliberately returns a
+    // prefix. Package parsing already bounds the whole XML tree by maxElementCount, so walking
+    // this one children array cannot become an unbounded attacker-controlled traversal.
+    for (const note of part.root.children) {
+      if (noteKindOf(note) !== noteKind) continue;
+      candidates += 1;
+      if (note.kind !== 'note') {
+        malformed = true;
+        continue;
+      }
+      // THE SEPARATORS ARE NOT NOTES. Every notes part Word writes begins with a separator and
+      // a continuation separator (`w:id` -1 and 0); listing them would report a document with two
+      // more footnotes than it has, and hand a caller a story that paints no note anywhere.
+      if (!isNormalNote(note)) continue;
+      const id = noteIdOf(note);
+      if (id === null) {
+        malformed = true;
+        continue;
+      }
+      if (seen.has(id)) duplicates.add(id);
+      else {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+    const result: AutomationNoteIdsRead =
+      candidates > MAX_NOTES_PER_PART
+        ? { ok: false, reason: 'truncated' }
+        : malformed
+          ? { ok: false, reason: 'malformed' }
+          : duplicates.size > 0
+            ? {
+                ok: false,
+                reason: 'duplicates',
+                duplicateIds: Object.freeze([...duplicates]),
+              }
+            : { ok: true, ids: Object.freeze(ids) };
+    noteIdsCache.set(noteKind, result);
+    return result;
+  };
 
   const slotOf = (
     story: Extract<AutomationStoryId, { kind: 'header' | 'footer' }>
@@ -295,6 +364,11 @@ export function documentReads(pkg: OoxmlPackage): AutomationPackageReads {
       return storyReadsOver(story, main, { kind: 'body' }, root, stylesOf);
     }
     if (story.kind === 'note') {
+      const listing = noteIdsOf(story.noteKind);
+      // Fail the WHOLE kind closed. Resolving one duplicate to the first root would alias a
+      // handle, while leaving unrelated ids reachable would let storyOf and held handles observe
+      // a different addressability rule from getNotes.
+      if (!listing.ok || !listing.ids.includes(story.noteId)) return null;
       const notesPart = resolveNotesPart(pkg, story.noteKind);
       if (!notesPart) return null;
       const note = findNoteById(notesPart.root, story.noteId);
@@ -349,27 +423,14 @@ export function documentReads(pkg: OoxmlPackage): AutomationPackageReads {
       }
     }
     for (const noteKind of ['footnote', 'endnote'] as const) {
-      for (const noteId of noteIdsOf(noteKind)) {
+      const listing = noteIdsOf(noteKind);
+      if (!listing.ok) continue;
+      for (const noteId of listing.ids) {
         const id: AutomationStoryId = { kind: 'note', noteKind, noteId };
         if (story(id)?.has(paragraphId)) return id;
       }
     }
     return null;
-  };
-
-  const noteIdsOf = (noteKind: NoteKind): readonly number[] => {
-    const part = resolveNotesPart(pkg, noteKind);
-    if (!part) return NONE_NUMBERS;
-    const ids: number[] = [];
-    for (const note of notesOf(part.root)) {
-      // THE SEPARATORS ARE NOT NOTES. Every notes part Word writes begins with a separator and
-      // a continuation separator (`w:id` -1 and 0); listing them would report a document with two
-      // more footnotes than it has, and hand a caller a story that paints no note anywhere.
-      if (!isNormalNote(note)) continue;
-      const id = noteIdOf(note);
-      if (id !== null) ids.push(id);
-    }
-    return Object.freeze(ids);
   };
 
   return {
