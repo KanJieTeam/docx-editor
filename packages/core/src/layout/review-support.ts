@@ -149,6 +149,15 @@ export interface ReviewRevisionItem {
   /** Every site this decision touches, in document order. */
   readonly ranges: readonly ReviewRange[];
   /**
+   * How deeply this change is NESTED inside other changes, 0 for an unenclosed one.
+   *
+   * `w:ins` wrapping `w:del` is content one reviewer added and another struck. Both stay
+   * pending, so both are cards, over one identical range — and a range then cannot say which
+   * change a caret is in. Word treats the innermost as the operative one, so it wins the caret
+   * and the change enclosing it stays listed and reachable.
+   */
+  readonly nesting: number;
+  /**
    * How many leading `ranges` are the STRUCK half of a replacement.
    *
    * A replacement's card is one decision but its ranges are two colours — red over what is
@@ -376,40 +385,77 @@ function rangeWidth(range: ReviewRange, order: ReadonlyMap<string, number>): num
   return (end - start) * 1_000_000 + (range.end.offset - range.start.offset);
 }
 
-function rangeCovers(
+/**
+ * How firmly a range holds a position. A lower grip holds harder.
+ *
+ * Three grips rather than a boolean, because "covers" on its own cannot order two ranges that
+ * MEET at the caret. Both boundaries of a range count — a caret resting past a range's last
+ * character is visually still on that character, and requiring it to be strictly inside makes
+ * the last character feel dead. But a range that holds the caret properly inside it holds the
+ * same caret harder, and its characters are the ones the reader is looking at.
+ *
+ * Width alone got that backwards. Adjacent tracked edits meet end-to-start by construction, so
+ * a one-character insertion ending at offset 30 covered every click at 30 and WON on width
+ * against the six-character insertion that starts there. A document of neighbouring revisions
+ * therefore activated its earliest narrow card for clicks all over its later ones.
+ */
+/**
+ * A range that covers no characters, sitting exactly at the position: the hardest grip there is.
+ *
+ * FIRST, not last. A zero-width range is a deliberate point anchor, not a degenerate one — a
+ * tracked paragraph mark is anchored at the paragraph end precisely so its card opens when the
+ * caret is at the break that made it (`review-site-locations.ts`), and a comment can be written
+ * over no characters too. Width alone put these first, because zero is the narrowest width
+ * there is. Ranking them behind a toucher took the tracked-Enter card away from the one caret
+ * position that can reach it, and shadowed a point comment with whatever revision surrounds it.
+ */
+const GRIP_POINT = 0;
+const GRIP_INSIDE = 1;
+/** The caret sits at the far end: on the range's last character, not among them. */
+const GRIP_TOUCHING = 2;
+
+function rangeGrip(
   range: ReviewRange,
   position: ReviewPosition,
   order: ReadonlyMap<string, number>
-): boolean {
+): number | null {
   const target = order.get(position.paragraphId);
   const start = order.get(range.start.paragraphId);
   const end = order.get(range.end.paragraphId);
-  if (target === undefined || start === undefined || end === undefined) return false;
-  if (target < start || target > end) return false;
-  // BOTH boundaries count. A caret resting at the end of a range is visually on that range's
-  // last character; requiring it to be strictly inside makes the last character feel dead.
-  if (target === start && position.offset < range.start.offset) return false;
-  if (target === end && position.offset > range.end.offset) return false;
-  return true;
+  if (target === undefined || start === undefined || end === undefined) return null;
+  if (target < start || target > end) return null;
+  if (target === start && position.offset < range.start.offset) return null;
+  if (target === end && position.offset > range.end.offset) return null;
+  // A format change, a paragraph mark, or a marker pair a producer wrote empty decorates no
+  // characters at all. It covers its own offset and nothing else, which is what makes it the
+  // most specific thing a caret at that offset can be pointing at.
+  if (start === end && range.start.offset === range.end.offset) return GRIP_POINT;
+  if (target === end && position.offset === range.end.offset) return GRIP_TOUCHING;
+  return GRIP_INSIDE;
 }
 
 /**
- * The narrowest range of this item that covers the position, or null.
+ * The grip and width of the range of this item that holds the position hardest, or null.
  *
  * EVERY range is asked, not just the first. Sites sharing a triple coalesce into one card, so a
  * revision that touches two paragraphs carries two ranges — checking only the first left the
- * caret in the second paragraph activating nothing.
+ * caret in the second paragraph activating nothing. A card can also both contain the caret in
+ * one range and merely touch it with another (a replacement's two halves meet at the caret),
+ * and the harder grip is the one that speaks for the card.
  */
-function coveringWidth(
+function coveringGrip(
   item: ReviewItem,
   position: ReviewPosition,
   order: ReadonlyMap<string, number>
-): number | null {
-  let best: number | null = null;
+): { readonly grip: number; readonly width: number } | null {
+  let best: { readonly grip: number; readonly width: number } | null = null;
   for (const range of reviewItemRanges(item)) {
-    if (!rangeCovers(range, position, order)) continue;
+    const grip = rangeGrip(range, position, order);
+    if (grip === null) continue;
     const width = rangeWidth(range, order);
-    if (best === null || width < best) best = width;
+    if (best === null || grip < best.grip || (grip === best.grip && width < best.width)) {
+      best = { grip, width };
+    }
   }
   return best;
 }
@@ -433,13 +479,17 @@ export function reviewItemsAt(
   position: ReviewPosition,
   order: ReadonlyMap<string, number>
 ): ReviewItem[] {
-  const covering: { item: ReviewItem; width: number }[] = [];
+  const covering: { item: ReviewItem; grip: number; width: number }[] = [];
   for (const item of items) {
-    const width = coveringWidth(item, position, order);
-    if (width !== null) covering.push({ item, width });
+    const held = coveringGrip(item, position, order);
+    if (held !== null) covering.push({ item, grip: held.grip, width: held.width });
   }
   return covering
     .sort((a, b) => {
+      // GRIP before width. A point anchor at exactly this offset is the most specific thing
+      // there is, and a range holding the caret inside it outranks one that merely ends there
+      // however narrow the toucher is.
+      if (a.grip !== b.grip) return a.grip - b.grip;
       if (a.width !== b.width) return a.width - b.width;
       // At equal width a comment outranks everything (it is a question waiting on the
       // reader), and a custom node outranks a revision (it is the more specific thing
@@ -447,6 +497,16 @@ export function reviewItemsAt(
       // once a third kind existed, leaving custom-vs-revision ties implementation-defined.
       if (a.item.kind !== b.item.kind) {
         return REVIEW_KIND_RANK[a.item.kind] - REVIEW_KIND_RANK[b.item.kind];
+      }
+      // NESTING is the last word, and the only one that separates two changes whose ranges are
+      // identical: `w:ins` wrapping `w:del`, content one reviewer added and another struck.
+      // Word reads the innermost as the operative change — the words are struck on the page
+      // because of the deletion, and accepting the change under them deletes them — so the
+      // deepest wins. Without it the order fell out of the tree walk and sort stability, which
+      // put the WRAPPER first: a click on struck text opened an "Added" card, and the deletion
+      // doing the striking was unreachable from the document.
+      if (a.item.kind === 'revision' && b.item.kind === 'revision') {
+        return b.item.nesting - a.item.nesting;
       }
       return 0;
     })

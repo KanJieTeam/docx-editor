@@ -2295,7 +2295,7 @@ export function mountPaginatedSurface(
     renderOverlay();
     // A dismissal is dismissed for where the caret WAS; any move re-asks the question, which
     // is how the reader reopens an item — by clicking back into its text.
-    dismissedReviewKey = null;
+    dismissedReviewKeys.clear();
     // The caret decides which item is OPEN, so a move re-classifies the bands. The rectangles
     // themselves are cached against the layout and are not recomputed here.
     renderCommentHighlights();
@@ -2425,7 +2425,7 @@ export function mountPaginatedSurface(
     renderOverlay();
     // A dismissal is dismissed for where the caret WAS; any move re-asks the question, which
     // is how the reader reopens an item — by clicking back into its text.
-    dismissedReviewKey = null;
+    dismissedReviewKeys.clear();
     // The caret decides which item is OPEN, so a move re-classes the bands. The rectangles
     // themselves are cached against the layout and are not recomputed here.
     renderCommentHighlights();
@@ -2602,13 +2602,20 @@ export function mountPaginatedSurface(
 
   /** Which comment the caret is in, so its band reads as the open one. */
   /**
-   * A dismissed item, until the caret next moves.
+   * The items dismissed at THIS caret position, until the caret next moves.
    *
    * Lives HERE rather than in a host, because the band and the card must agree: the surface
    * paints one and publishes the other, and a copy of this flag on either side of that line
    * is a copy that can disagree.
+   *
+   * A SET, not one slot. Several cards can cover one position — `w:ins` wrapping `w:del` gives
+   * an insertion and a deletion one identical range — and with a single slot closing the open
+   * one simply promoted its twin: the reader pressed close, the other card opened, pressed
+   * close again, and the first came back. It alternated forever, and the only way out was to
+   * move the caret off the change. Closing a card now closes it, and the next one down is
+   * offered exactly once.
    */
-  let dismissedReviewKey: string | null = null;
+  const dismissedReviewKeys = new Set<string>();
 
   /**
    * Revision kinds the caret must not activate — the host rail's own exclusion filter,
@@ -2616,7 +2623,51 @@ export function mountPaginatedSurface(
    */
   let reviewActivationExclusions: ReadonlySet<ReviewRevisionKind> | null = null;
 
+  /**
+   * The item a host opened BY KEY, with the selection that opening it installed.
+   *
+   * The caret cannot name a card when two cards cover exactly the same characters, and OOXML
+   * writes that shape routinely: `w:ins` wrapping `w:del` is content one reviewer added and
+   * another struck, and the insertion and the deletion share one identical range. Classifying
+   * by position picked whichever the queue listed first, so clicking either card lit up the
+   * same one and the other was unreachable.
+   *
+   * Checked against the LIVE selection rather than cleared by every caret path, so no
+   * selection route has to remember to invalidate it: a pin whose selection has moved on is
+   * stale by inspection, and the caret answers instead.
+   */
+  let activatedReview: {
+    readonly key: string;
+    readonly anchor: SemanticPosition;
+    readonly head: SemanticPosition;
+  } | null = null;
+
+  /** The pinned item, while its own selection is still the live one. */
+  function activatedReviewItem(): ReviewItem | null {
+    const pin = activatedReview;
+    if (!pin || !selection) return null;
+    const same = (a: SemanticPosition, b: SemanticPosition): boolean =>
+      a.paragraphId === b.paragraphId && a.offset === b.offset;
+    if (!same(selection.anchor, pin.anchor) || !same(selection.head, pin.head)) return null;
+    const found = session.reviewItems().find((item) => reviewItemKey(item) === pin.key);
+    if (!found) return null;
+    // The same exclusions the caret path applies. A pin must not open a card the reader
+    // resolved out from under it, nor one the host's rail does not draw.
+    if (found.kind === 'comment' && found.resolved) return null;
+    if (
+      found.kind === 'revision' &&
+      reviewActivationExclusions !== null &&
+      reviewActivationExclusions.has(found.revisionKind)
+    ) {
+      return null;
+    }
+    return found;
+  }
+
   function activeReviewAtCaret(): ReviewItem | null {
+    // An explicit activation outranks the caret's own reading of where it landed.
+    const pinned = activatedReviewItem();
+    if (pinned) return resolveReviewThread(pinned);
     const at = selection?.head;
     if (!at) return null;
     // The covering items, innermost first, minus the one the reader dismissed. Returning
@@ -2625,7 +2676,7 @@ export function mountPaginatedSurface(
     const covering = reviewItemsAt(session.reviewItems(), at, reviewOrderIndex()).filter(
       (item) =>
         !(item.kind === 'comment' && item.resolved) &&
-        reviewItemKey(item) !== dismissedReviewKey &&
+        !dismissedReviewKeys.has(reviewItemKey(item)) &&
         // Kinds the host's rail hides must not become active from a click: the band
         // would light a card nothing on screen renders (see the contract note on
         // `setReviewActivationExclusions`).
@@ -2637,19 +2688,28 @@ export function mountPaginatedSurface(
     );
     const found = covering[0];
     if (!found) return null;
-    // A REPLY resolves to the card it renders inside — the comment it answers, or the tracked
-    // change it answers. It has no card of its own, so returning it opened an item nothing on
-    // screen was drawing: the reply box vanished from the very thing that had just been
-    // replied to. Comment threads survived that by accident (the parent comes first in
-    // `comments.xml` order and won the tie); a revision does not, because a comment outranks
-    // one outright at equal width.
+    return resolveReviewThread(found);
+  }
+
+  /**
+   * A REPLY resolves to the card it renders inside — the comment it answers, or the tracked
+   * change it answers. It has no card of its own, so returning it opened an item nothing on
+   * screen was drawing: the reply box vanished from the very thing that had just been replied
+   * to. Comment threads survived that by accident (the parent comes first in `comments.xml`
+   * order and won the tie); a revision does not, because a comment outranks one outright at
+   * equal width.
+   *
+   * Shared by the caret path and the pinned one: a host can activate a reply's key too, and
+   * resolving it in only one of the two would have opened a card nothing draws.
+   */
+  function resolveReviewThread(found: ReviewItem): ReviewItem | null {
     if (found.kind !== 'comment') return found;
     const root = reviewThreadRootOf(session.reviewItems(), found);
     // A root the reader DISMISSED takes its whole thread with it. Falling back to the reply
     // here painted the band active over a card that is not drawn — a reply renders inside its
     // root, so dismissing the root leaves nothing on screen to be active — and the reader who
     // closed the card watched the text stay highlighted as though it were still open.
-    return reviewItemKey(root) === dismissedReviewKey ? null : root;
+    return dismissedReviewKeys.has(reviewItemKey(root)) ? null : root;
   }
 
   /** The class a band draws in, or null when this range should not be drawn at all. */
@@ -3698,10 +3758,36 @@ export function mountPaginatedSurface(
       const active = activeReviewAtCaret();
       return active ? reviewItemKey(active) : null;
     },
+    activateReview: (key, next) => {
+      // Reopening a card the reader dismissed has to clear the dismissal: activation can leave
+      // the caret exactly where it already was, so nothing else would take it down and the card
+      // would refuse to reopen however many times it was clicked.
+      dismissedReviewKeys.clear();
+      // The pin goes up BEFORE the selection is published, which is why the selection comes
+      // through here rather than in a `setSelection` of the caller's own. Installed the other
+      // way round, `setSelection` repainted the bands and fired `onChange` while the caret was
+      // still the only evidence — so a host saw the WRONG twin reported active for one frame
+      // and then a correction. One publish, one answer.
+      activatedReview = next
+        ? { key, anchor: next.anchor, head: next.head }
+        : { key, anchor: selection.anchor, head: selection.head };
+      if (next) {
+        setSelection(next);
+        return;
+      }
+      renderCommentHighlights();
+      options.onChange?.(currentState());
+    },
+    /** The card {@link activateReview} pinned, while its own selection is still live. */
+    activatedReviewKey: () =>
+      activatedReviewItem() === null ? null : (activatedReview?.key ?? null),
     dismissActiveReview: () => {
       const active = activeReviewAtCaret();
       if (!active) return;
-      dismissedReviewKey = reviewItemKey(active);
+      dismissedReviewKeys.add(reviewItemKey(active));
+      // The pin outranks the caret, so leaving it up meant a dismissed card reopened itself
+      // on the very next read.
+      activatedReview = null;
       renderCommentHighlights();
       options.onChange?.(currentState());
     },
