@@ -125,6 +125,20 @@ function numIdForStyle(styleCascade: StyleCascadeTable, styleId: string): string
 }
 
 /**
+ * Memo keyed on the index object, validated against the cascade. A WeakMap so a disposed
+ * document's index releases its entry, and entered under the LINKED index too: layout
+ * links the raw index once per flush, then hands the linked result back through this
+ * function again, and without the self-entry that second call would clobber the memo
+ * every flush. Level-object identity across edits is NOT this memo's doing —
+ * `resolveNumberingStyleLinks` reuses the delegation target's `levels` maps by reference,
+ * so the per-paragraph `perLevel` caches stay warm even on a miss here.
+ */
+const linkedIndexMemos = new WeakMap<
+  NumberingIndex,
+  { readonly styleCascade: StyleCascadeTable; readonly linked: NumberingIndex }
+>();
+
+/**
  * Resolve `w:numStyleLink` delegation using the document's styles (§17.9.21).
  *
  * Without a style table there is nothing to follow, so the index is returned unchanged —
@@ -135,7 +149,15 @@ export function withNumberingStyleLinks(
   styleCascade: StyleCascadeTable | undefined
 ): NumberingIndex {
   if (!styleCascade) return index;
-  return resolveNumberingStyleLinks(index, (styleId) => numIdForStyle(styleCascade, styleId));
+  const memo = linkedIndexMemos.get(index);
+  if (memo && memo.styleCascade === styleCascade) return memo.linked;
+  const linked = resolveNumberingStyleLinks(index, (styleId) =>
+    numIdForStyle(styleCascade, styleId)
+  );
+  const entry = { styleCascade, linked };
+  linkedIndexMemos.set(index, entry);
+  linkedIndexMemos.set(linked, entry);
+  return linked;
 }
 
 /** Bound a file-derived indent both ways — negative is legal, unbounded is not. */
@@ -269,6 +291,53 @@ export function walkStoryParagraphs(
 }
 
 /**
+ * Per-paragraph prelude for the story walk below, memoized on the paragraph NODE: which
+ * `numPr` a paragraph resolves to — and the cascaded property tiers feeding its indent and
+ * marker face — are pure functions of the immutable paragraph and the cascade table. An
+ * edit republishes only the touched paragraphs, yet the resolver walks the WHOLE story per
+ * keystroke; without this cache every unchanged paragraph re-ran the full style cascade
+ * just to learn (usually) that it has no numbering. Only the counter advance is genuinely
+ * sequential. `perLevel` holds level-derived indent/marker work, keyed on the level object
+ * (identity-stable because `resolveNumberingStyleLinks` reuses the target's `levels` maps
+ * by reference) — a WeakMap, so level objects orphaned by a numbering edit take their
+ * entries with them.
+ */
+interface ParagraphListPrelude {
+  readonly styleCascade: StyleCascadeTable | undefined;
+  readonly numPr: { readonly numId: string; readonly ilvl: number } | null;
+  readonly inheritedParagraphProperties: readonly OoxmlProperty[];
+  readonly directProps: readonly OoxmlProperty[];
+  readonly inheritedMarkProps: readonly OoxmlProperty[];
+  readonly perLevel: WeakMap<
+    object,
+    { indent: NumberingLevelIndent; markerStyle: ResolvedRunStyle }
+  >;
+}
+const paragraphListPreludes = new WeakMap<OoxmlElement, ParagraphListPrelude>();
+
+function paragraphListPrelude(
+  paragraph: OoxmlElement,
+  styleCascade: StyleCascadeTable | undefined
+): ParagraphListPrelude {
+  const cached = paragraphListPreludes.get(paragraph);
+  if (cached && cached.styleCascade === styleCascade) return cached;
+  const pPr = paragraph.children.find((child) => child.kind === 'paragraphProperties');
+  const cascaded = styleCascade ? cascadeParagraphFormatting(styleCascade, pPr) : null;
+  const nodes: readonly OoxmlNode[] = cascaded ? cascaded.paragraphPropertyNodes : pPr ? [pPr] : [];
+  const directMarkRun = pPr && isElement(pPr) ? childNamed(pPr, 'rPr') : undefined;
+  const prelude: ParagraphListPrelude = {
+    styleCascade,
+    numPr: readNumPr(nodes),
+    inheritedParagraphProperties: cascaded?.inheritedParagraphProperties ?? [],
+    directProps: propertiesOf(pPr),
+    inheritedMarkProps: cascaded ? cascaded.markRunProperties : propertiesOf(directMarkRun),
+    perLevel: new WeakMap(),
+  };
+  paragraphListPreludes.set(paragraph, prelude);
+  return prelude;
+}
+
+/**
  * Resolve every list paragraph in a story to a {@link ResolvedListItem}, keyed by node id.
  *
  * Non-list paragraphs are absent from the map. Hostile / missing numbering resolves inertly
@@ -288,36 +357,34 @@ export function resolveStoryListItems(
   const linked = withNumberingStyleLinks(index, styleCascade);
   const counters = createListCounterState(linked);
   for (const paragraph of walkStoryParagraphs(blocks)) {
-    const pPr = paragraph.children.find((child) => child.kind === 'paragraphProperties');
-    const cascaded = styleCascade ? cascadeParagraphFormatting(styleCascade, pPr) : null;
-    const nodes: readonly OoxmlNode[] = cascaded
-      ? cascaded.paragraphPropertyNodes
-      : pPr
-        ? [pPr]
-        : [];
-    const numPr = readNumPr(nodes);
+    const prelude = paragraphListPrelude(paragraph, styleCascade);
+    const numPr = prelude.numPr;
     if (!numPr) continue;
 
     const advanced = counters.advance(numPr.numId, numPr.ilvl);
     if (!advanced) continue;
 
-    // Split, not flattened: the level's indent outranks the STYLE's and is outranked by the
-    // paragraph's OWN `w:pPr`, so the merge needs the two tiers apart.
-    const directProps = propertiesOf(pPr);
-    const indent = mergeListIndent(
-      advanced.level.indent,
-      cascaded?.inheritedParagraphProperties ?? [],
-      directProps
-    );
-    const directMarkRun = pPr && isElement(pPr) ? childNamed(pPr, 'rPr') : undefined;
-    const markOnly = propertiesOf(directMarkRun);
-    const inheritedMarkProps = cascaded ? cascaded.markRunProperties : markOnly;
-    const markerProps = cascadeRunProperties(
-      inheritedMarkProps,
-      advanced.level.runProperties,
-      styleCascade
-    );
-    const markerStyle = resolveRunStyle(markerProps, styleCascade?.themeFonts);
+    let levelDerived = prelude.perLevel.get(advanced.level);
+    if (!levelDerived) {
+      // Split, not flattened: the level's indent outranks the STYLE's and is outranked by
+      // the paragraph's OWN `w:pPr`, so the merge needs the two tiers apart.
+      const indent = mergeListIndent(
+        advanced.level.indent,
+        prelude.inheritedParagraphProperties,
+        prelude.directProps
+      );
+      const markerProps = cascadeRunProperties(
+        prelude.inheritedMarkProps,
+        advanced.level.runProperties,
+        styleCascade
+      );
+      levelDerived = {
+        indent,
+        markerStyle: resolveRunStyle(markerProps, styleCascade?.themeFonts),
+      };
+      prelude.perLevel.set(advanced.level, levelDerived);
+    }
+    const { indent, markerStyle } = levelDerived;
     // Word writes a Symbol/Wingdings bullet as font-byte + 0xF000 (`` = U+F0B7 in
     // Symbol), which is a private-use codepoint no other font can draw. Mapping it here —
     // where the marker's FAMILY is finally known — keeps measurement and paint on the same
@@ -361,6 +428,25 @@ export function resolveStoryListItems(
 }
 
 /**
+ * Memo for {@link withResolvedListItems}, keyed on the blocks array (stable per part via
+ * the `storyBlocks` memo) and validated against the remaining RAW inputs by identity —
+ * the unlinked numbering index, the style cascade, and the font oracle. A WeakMap on the
+ * blocks array so a disposed document's entry dies with its part instead of pinning an
+ * O(document) item map at module scope. A miss on any input recomputes the sequential
+ * full-story counter walk exactly as before.
+ */
+const resolvedListItemsMemos = new WeakMap<
+  readonly OoxmlElement[],
+  {
+    readonly rawIndex: NumberingIndex | undefined;
+    readonly styleCascade: StyleCascadeTable | undefined;
+    readonly isFontAvailable: ((family: string) => boolean) | undefined;
+    readonly linkedIndex: NumberingIndex;
+    readonly listItems: ReadonlyMap<string, ResolvedListItem> | undefined;
+  }
+>();
+
+/**
  * Attach a full-story list-item map to layout options.
  *
  * Resolves once over `blocks` (body story including table cells) so counters continue across
@@ -375,6 +461,10 @@ export function withResolvedListItems<
      * Host oracle for "is this font family really loaded". Supplied, a Symbol/Wingdings
      * bullet keeps the file's own private-use codepoint so the authored typeface draws it;
      * absent, it falls back to the Unicode equivalent rather than a tofu box.
+     *
+     * The resolve is memoized on this function's IDENTITY: a host whose answers change
+     * over time (a font finished loading) must supply a new closure at that point, or the
+     * memo will keep serving marker glyphs computed from the old answers.
      */
     readonly isFontAvailable?: (family: string) => boolean;
   },
@@ -385,6 +475,23 @@ export function withResolvedListItems<
   readonly numberingIndex: NumberingIndex;
   readonly listItems?: ReadonlyMap<string, ResolvedListItem>;
 } {
+  // A caller-supplied item map bypasses the memo: the memo exists for the resolve below,
+  // and a pre-supplied map carries its own provenance.
+  if (options.listItems === undefined) {
+    const memo = resolvedListItemsMemos.get(blocks);
+    if (
+      memo &&
+      memo.rawIndex === options.numberingIndex &&
+      memo.styleCascade === options.styleCascade &&
+      memo.isFontAvailable === options.isFontAvailable
+    ) {
+      return {
+        ...options,
+        numberingIndex: memo.linkedIndex,
+        ...(memo.listItems ? { listItems: memo.listItems } : {}),
+      };
+    }
+  }
   // Published already linked (§17.9.21), so every reader of the index — not just the item
   // map built here — sees the levels a `w:numStyleLink` delegates to.
   const numberingIndex = withNumberingStyleLinks(
@@ -396,6 +503,15 @@ export function withResolvedListItems<
     (numberingIndex.nums.size > 0
       ? resolveStoryListItems(blocks, numberingIndex, options.styleCascade, options.isFontAvailable)
       : undefined);
+  if (options.listItems === undefined) {
+    resolvedListItemsMemos.set(blocks, {
+      rawIndex: options.numberingIndex,
+      styleCascade: options.styleCascade,
+      isFontAvailable: options.isFontAvailable,
+      linkedIndex: numberingIndex,
+      listItems,
+    });
+  }
   return {
     ...options,
     numberingIndex,
