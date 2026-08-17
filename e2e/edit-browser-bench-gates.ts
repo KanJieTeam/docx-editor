@@ -4,12 +4,43 @@ import { type ScenarioReport, type SustainedReport } from './edit-browser-bench-
 import { type BurstReport } from './edit-browser-burst.js';
 
 /** Matches headless `bench:edit` steady-middle-text on the synthetic fixture. */
-const EXPECTED_LAYOUT_WORK = {
+export const EXPECTED_LAYOUT_WORK = {
   placed: 13,
   total: 3200,
   reusedPages: 154,
   fullPasses: 1,
 } as const;
+
+export interface ExpectedLayoutWork {
+  readonly placed: number;
+  readonly total: number;
+  readonly reusedPages: number;
+  readonly fullPasses: number;
+}
+
+/**
+ * Pinned per scenario for the tracked + numbered fixture
+ * (synthetic-tracked-numbered.docx): its page geometry and edit shapes differ
+ * from the plain fixture's, and a wrap insert places more paragraphs than a
+ * single character.
+ */
+export const TRACKED_EXPECTED_LAYOUT_WORK: Record<string, ExpectedLayoutWork> = {
+  'tracked-editing-character': { placed: 3, total: 620, reusedPages: 145, fullPasses: 1 },
+  'tracked-suggesting-character': { placed: 3, total: 620, reusedPages: 145, fullPasses: 1 },
+  // A 100-character tracked insert reflows roughly half the numbered clauses —
+  // the going rate for a wrap in a dense review document, and exactly the load
+  // this fixture exists to keep honest.
+  'tracked-suggesting-wrap': { placed: 311, total: 620, reusedPages: 72, fullPasses: 1 },
+};
+
+/** Pinned for the ~1,000-page stress fixture (synthetic-huge-tracked.docx). */
+export const HUGE_EXPECTED_LAYOUT_WORK: Record<string, ExpectedLayoutWork> = {
+  'huge-suggesting-character': { placed: 2, total: 4250, reusedPages: 995, fullPasses: 1 },
+  'huge-suggesting-wrap': { placed: 6, total: 4250, reusedPages: 994, fullPasses: 1 },
+  // A 50k-character paste re-places 2,126 paragraphs and reflows half the
+  // thousand pages — the standing tough case this fixture exists to watch.
+  'huge-paste-50k': { placed: 2126, total: 4250, reusedPages: 497, fullPasses: 1 },
+};
 
 /** p95 may spike on loaded CI; 3× median plus 50 ms catches sustained regressions without pinning wall clock. */
 const TIMING_P95_FACTOR = 3;
@@ -62,8 +93,11 @@ function assertTimingTail(summary: TimingSummary, label: string): void {
   );
 }
 
-export function assertScenarioLatencyGates(report: ScenarioReport): void {
-  expect(report.work).toMatchObject(EXPECTED_LAYOUT_WORK);
+export function assertScenarioLatencyGates(
+  report: ScenarioReport,
+  expectedWork: ExpectedLayoutWork = EXPECTED_LAYOUT_WORK
+): void {
+  expect(report.work).toMatchObject(expectedWork);
   expect(report.work.staleDiscards).toBeGreaterThanOrEqual(0);
   expect(report.work.cancelledRuns).toBeGreaterThanOrEqual(0);
   expect(report.dom.materializedPages).toBeLessThanOrEqual(8);
@@ -74,14 +108,22 @@ export function assertScenarioLatencyGates(report: ScenarioReport): void {
   assertTimingTail(report.paint, `${report.name} paint`);
   assertTimingTail(report.selection, `${report.name} selection`);
 
-  const engineMedian = report.layout.medianMs + report.paint.medianMs + report.selection.medianMs;
-  expect(
-    engineMedian,
-    `${report.name} engine sub-steps vs inputTask median ${report.inputTask.medianMs} ms`
-  ).toBeLessThanOrEqual(
-    Math.max(report.inputTask.medianMs * ENGINE_TO_INPUT_FACTOR, ENGINE_TO_INPUT_FLOOR_MS)
-  );
+  // Deliberately heavy scenarios exist to REPORT a large engine cost — a 50k
+  // paste reflowing half a thousand-page document is the number, not a bug.
+  // The keystroke-shaped ratio bound stays for everything else.
+  if (!HEAVY_SCENARIOS.has(report.name)) {
+    const engineMedian = report.layout.medianMs + report.paint.medianMs + report.selection.medianMs;
+    expect(
+      engineMedian,
+      `${report.name} engine sub-steps vs inputTask median ${report.inputTask.medianMs} ms`
+    ).toBeLessThanOrEqual(
+      Math.max(report.inputTask.medianMs * ENGINE_TO_INPUT_FACTOR, ENGINE_TO_INPUT_FLOOR_MS)
+    );
+  }
 }
+
+/** Scenarios whose whole point is a large engine cost; the ratio bound above skips them. */
+const HEAVY_SCENARIOS = new Set(['huge-paste-50k']);
 
 export function assertCrossScenarioLatencyGates(reports: readonly ScenarioReport[]): void {
   const character = reports.find((report) => report.name === 'editing-character');

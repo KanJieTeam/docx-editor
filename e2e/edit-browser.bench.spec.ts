@@ -2,14 +2,19 @@ import { expect, test, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { execSync } from 'node:child_process';
 import {
   assertBurstLatencyGates,
   assertCrossScenarioLatencyGates,
   assertScenarioLatencyGates,
   assertSustainedLatencyGates,
+  HUGE_EXPECTED_LAYOUT_WORK,
+  TRACKED_EXPECTED_LAYOUT_WORK,
 } from './edit-browser-bench-gates.js';
 import {
   EDIT_BROWSER_FIXTURE,
+  EDIT_BROWSER_HUGE_FIXTURE,
+  EDIT_BROWSER_TRACKED_FIXTURE,
   REPO_ROOT,
   REVIEW_RAIL_ENABLED,
   loadHarness,
@@ -89,6 +94,9 @@ test('browser editing latency is measurable and structurally stable', async ({
   browserName,
 }) => {
   test.skip(browserName !== 'chromium', 'Event Timing and benchmark baselines use Chromium');
+  // Three fixtures now run in one test (plain + tracked/numbered + the
+  // ~1,000-page stress document); the default 180 s budget was sized for one.
+  test.setTimeout(480_000);
   const runtimeErrors = collectRuntimeErrors(page);
   await loadHarness(page, (benchPage) => installMeasurementProbe(benchPage, INJECTED_DELAY_MS));
 
@@ -100,7 +108,11 @@ test('browser editing latency is measurable and structurally stable', async ({
   ];
   const reports: ScenarioReport[] = [];
 
-  for (const scenario of scenarios) {
+  async function measureScenario(scenario: {
+    name: string;
+    mode: 'edit' | 'suggest';
+    text: string;
+  }): Promise<ScenarioReport> {
     const samples = [];
     const selfTestBaselineSamples = [];
     for (let round = 0; round < WARMUP + RUNS; round += 1) {
@@ -144,7 +156,7 @@ test('browser editing latency is measurable and structurally stable', async ({
             )
           ).medianMs
         : null;
-    reports.push({
+    return {
       name: scenario.name,
       mode: scenario.mode,
       textLength: scenario.text.length,
@@ -171,11 +183,104 @@ test('browser editing latency is measurable and structurally stable', async ({
       ...(baselineInputTask && observedMedianDeltaMs !== null
         ? { selfTest: { baselineInputTask, observedMedianDeltaMs } }
         : {}),
-    });
+    };
   }
+
+  for (const scenario of scenarios) reports.push(await measureScenario(scenario));
 
   for (const report of reports) assertScenarioLatencyGates(report);
   assertCrossScenarioLatencyGates(reports);
+
+  // ---- The tough companion pass: the same measurement over the tracked +
+  // numbered fixture (~170+ pages of numbered clauses, ~310 dense tracked
+  // replacements, review rail loaded). The plain fixture exercises pagination
+  // breadth; this one exercises the paths that dominate real review documents —
+  // list cascade, tracked-run structure, revision cards. Scenario names are
+  // distinct so both sets share one report; work counters are pinned to this
+  // fixture's own values. Skipped in the injected-delay self-test, which
+  // validates the measurement itself, not the document.
+  if (INJECTED_DELAY_MS === 0) {
+    await loadHarness(
+      page,
+      (benchPage) => installMeasurementProbe(benchPage, 0),
+      true,
+      EDIT_BROWSER_TRACKED_FIXTURE
+    );
+    const trackedScenarios = [
+      { name: 'tracked-editing-character', mode: 'edit' as const, text: 'X' },
+      { name: 'tracked-suggesting-character', mode: 'suggest' as const, text: 'X' },
+      { name: 'tracked-suggesting-wrap', mode: 'suggest' as const, text: 'word '.repeat(20) },
+    ];
+    for (const scenario of trackedScenarios) {
+      const report = await measureScenario(scenario);
+      reports.push(report);
+      assertScenarioLatencyGates(report, TRACKED_EXPECTED_LAYOUT_WORK[scenario.name]!);
+    }
+
+    // ---- The stress pass: ~1,000 pages, ~1,060 tracked changes. The fixture
+    // is deterministic but too large to commit, so it regenerates on demand.
+    // Suggest mode only — the review workload is what documents this size are.
+    execSync('bun scripts/create-synthetic-tracked-fixture.mjs --huge', {
+      cwd: REPO_ROOT,
+      stdio: 'inherit',
+    });
+    // Open-to-ready is itself a tough case at this size — parse, first layout
+    // of ~1,000 pages, shaped fonts, first paint — and nothing tracked it.
+    // Two samples: the cold load and one reload.
+    const openSamples: number[] = [];
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const started = Date.now();
+      await loadHarness(
+        page,
+        (benchPage) => installMeasurementProbe(benchPage, 0),
+        true,
+        EDIT_BROWSER_HUGE_FIXTURE
+      );
+      openSamples.push(Date.now() - started);
+    }
+    const openSummary = summarize(openSamples);
+    const emptySummary = summarize([0]);
+    reports.push({
+      name: 'huge-open-to-ready',
+      mode: 'edit',
+      textLength: 0,
+      inputTask: openSummary,
+      frame: openSummary,
+      eventDuration: summarizeOptional([]),
+      eventDelay: summarizeOptional([]),
+      layout: emptySummary,
+      paint: emptySummary,
+      selection: emptySummary,
+      // Reporting-only row: no edit ran, so there are no work counters to pin.
+      work: {
+        placed: 0,
+        total: 4250,
+        reusedPages: 0,
+        fullPasses: 0,
+        staleDiscards: 0,
+        cancelledRuns: 0,
+      },
+      dom: await page.evaluate(() => ({
+        nodes: document.querySelectorAll('*').length,
+        materializedPages: document.querySelectorAll('.docx-page[data-materialized="true"]').length,
+        selectionSpans: 0,
+      })),
+    });
+
+    const hugeScenarios = [
+      { name: 'huge-suggesting-character', mode: 'suggest' as const, text: 'X' },
+      { name: 'huge-suggesting-wrap', mode: 'suggest' as const, text: 'word '.repeat(20) },
+      // A single 50,000-character paste: one giant op batching cannot help,
+      // exercising run splitting, shaping and pagination ripple. Its real cost
+      // reads from the Frame p95 column.
+      { name: 'huge-paste-50k', mode: 'edit' as const, text: 'word '.repeat(10_000) },
+    ];
+    for (const scenario of hugeScenarios) {
+      const report = await measureScenario(scenario);
+      reports.push(report);
+      assertScenarioLatencyGates(report, HUGE_EXPECTED_LAYOUT_WORK[scenario.name]!);
+    }
+  }
 
   const sustained =
     INJECTED_DELAY_MS > 0

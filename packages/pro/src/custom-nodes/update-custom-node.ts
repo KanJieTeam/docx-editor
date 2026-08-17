@@ -121,6 +121,9 @@ export function removeCustomNode(editor: Editor, nodeId: string): CustomNodeWrit
   // payload for a chip that is gone. Against the story the reader is IN: the write defaults
   // to the body, so removing a chip inside an open header addressed a control the body
   // store has never heard of — the menu closed, the chip stayed, and nothing said why.
+  // Below the surface's typing buffer: land queued keystrokes before the
+  // removal shifts offsets in the caret paragraph.
+  surface.flushPendingInput();
   const removed = surface.session.removeCustomNode(nodeId, storyScopeOfId(editor, nodeId));
   if (!removed.ok) return refusalOf(removed);
   return { ok: true, changed: true };
@@ -173,6 +176,11 @@ export function updateCustomNode<Schema extends StandardSchemaV1 | undefined = u
   if (!surface) return { ok: false, code: 'notFound', reason: 'no document is mounted' };
   const refusal = viewingRefusal(editor);
   if (refusal) return refusal;
+  // BEFORE the span capture below, not merely before the write: the chip's
+  // paragraph and offsets are read here and honored verbatim by the session, so
+  // queued typing landing between capture and write would rewrite the chip at a
+  // stale span.
+  surface.flushPendingInput();
   // From the NODE's own id, not the open scope: a caller may address a chip in a story the
   // reader has since left, and the id says which one.
   const scope = storyScopeOfId(editor, nodeId);
