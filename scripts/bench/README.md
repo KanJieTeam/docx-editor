@@ -46,18 +46,28 @@ or exaggerate timing changes; the structural work counters remain deterministic 
 
 ### CI performance-benchmark comment
 
-`.github/workflows/bench.yml` runs `bench:edit --runs 10` on every PR, twice: once on the PR
+`.github/workflows/bench.yml` runs two benchmarks on every PR, each twice: once on the PR
 merge ref (the PR merged into current `main`) and once on the `main` tip that merge ref was
-built against (using that commit's own copy of the script, in a separate worktree), so the
-delta isolates exactly what merging the PR changes. `scripts/bench/edit-bench-comment.mjs`
-renders both reports into a single sticky PR comment — a per-scenario median table with
-deltas, plus any work-counter changes. Comparability is guarded by the fixture SHA-256: if
-the fixture changed on the PR, or the baseline predates the benchmark, the comment degrades
-to head-only numbers.
+built against (using that commit's own copy of the scripts, in a separate worktree), so the
+delta isolates exactly what merging the PR changes:
+
+- the browser typing-latency test from `e2e/edit-browser.bench.spec.ts` — keystroke handler
+  and frame latency through the real adapter, review rail, and paginated DOM: the number a
+  typing user feels;
+- `bench:edit --runs 10` — the headless engine pipeline with deterministic work counters.
+
+`scripts/bench/edit-bench-comment.mjs` renders all reports into a single sticky PR comment —
+the typing-latency table first, the engine table below it, plus any work-counter changes.
+Comparability is guarded per report by the fixture SHA-256: if the fixture changed on the PR,
+or the baseline predates a benchmark, that section degrades to head-only numbers.
 
 Timings in that comment are informational: shared runners are noisy, so the job never fails on
-a wall-clock regression. The hard gate stays in `edit-bench-gates.test.ts`, which pins the
-deterministic work counters inside `bun run test`. Fork PRs cannot receive comments (read-only
+a head-vs-base wall-clock delta, and the single-sample timing tails run warn-only there
+(`EDIT_BROWSER_BENCH_TIMING_TAILS=warn` — one scheduler stall on a shared runner trips a
+max-sample gate). Deterministic gates still apply — `edit-bench-gates.test.ts` pins the engine
+work counters inside `bun run test`, and the browser spec's structural and median-based gates
+fail the job when the HEAD browser run trips them; a failing BASELINE browser run only
+degrades the comment to head-only numbers. Fork PRs cannot receive comments (read-only
 token); their reports are in the `edit-bench-report` workflow artifact.
 
 ### Browser editing benchmark
