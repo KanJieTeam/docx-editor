@@ -18,6 +18,9 @@ export interface AbstractNumDefinition {
 export function activeReviewItem(items: readonly ReviewItem[], position: ReviewPosition, order: ReadonlyMap<string, number>): ReviewItem | null;
 
 // @public
+export function anchorLineY(anchor: ReviewParagraphAnchor, paragraphId: string, offset: number): number;
+
+// @public
 export function appliedSpaceBefore(before: number, previousAfter: number, atTopOfPage: boolean, firstParagraphOfSection: boolean): number;
 
 // @public
@@ -171,7 +174,10 @@ export interface CaretAtOptions {
 }
 
 // @public
-export function caretBoxOnLine(line: LineRecord, offset: number, measurer: TextMeasurer | undefined): {
+export function caretBoxOnLine(line: LineRecord, offset: number, measurer: TextMeasurer | undefined, segment?: {
+    readonly spans: readonly StyleSpanRecord[];
+    readonly drawings: readonly InlineDrawingRecord[];
+} | null): {
     x: number;
     y: number;
     height: number;
@@ -2192,6 +2198,12 @@ export function reviewAnchorIndex<TPage extends {
         readonly box: {
             readonly y: number;
         };
+        readonly spans?: readonly {
+            readonly range: {
+                readonly paragraphId: string;
+                readonly end: number;
+            };
+        }[];
     }[];
 }[]): Map<string, ReviewParagraphAnchor>;
 
@@ -2280,6 +2292,12 @@ export interface ReviewParagraphAnchor {
         readonly box: {
             readonly y: number;
         };
+        readonly spans?: readonly {
+            readonly range: {
+                readonly paragraphId: string;
+                readonly end: number;
+            };
+        }[];
     }[];
     // (undocumented)
     readonly pageIndex: number;
@@ -2314,6 +2332,7 @@ export interface ReviewRevisionItem {
     readonly id: string;
     // (undocumented)
     readonly kind: 'revision';
+    readonly markDirection?: 'insert' | 'delete' | 'moveFrom' | 'moveTo';
     readonly nesting: number;
     readonly pairedWith?: string;
     readonly ranges: readonly ReviewRange[];

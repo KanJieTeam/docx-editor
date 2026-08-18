@@ -482,7 +482,10 @@
   },
   "revisions": {
     "paragraphMarkInserted": "סימן פסקה נוסף",
-    "runPropertiesChanged": "עיצוב הטקסט שונה"
+    "runPropertiesChanged": "עיצוב הטקסט שונה",
+    "paragraphMarkDeleted": null,
+    "paragraphMarkMovedFrom": null,
+    "paragraphMarkMovedTo": null
   },
   "toc": {
     "refresh": "עדכון הטבלה כולה",

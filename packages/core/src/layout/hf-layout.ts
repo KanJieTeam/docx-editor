@@ -28,6 +28,8 @@ import {
 } from './field-projection.ts';
 import type { ParagraphLayoutCache } from './layout-cache.ts';
 import type { PendingLine } from './paragraph-flow.ts';
+import { drawingResourceLayoutToken } from './inline-drawing-source.ts';
+import { DEFAULT_REVISION_DISPLAY_MODE } from './revision-projection.ts';
 import type { RevisionDisplayMode } from './revision-projection.ts';
 import type { AnchoredDrawingRecord } from './drawing-layout.ts';
 import { pageClipRegion, type DrawingAnchorFrameContext } from './drawing-layout.ts';
@@ -165,7 +167,7 @@ export function layoutHeaderFooterStory(
   pageContext?: FieldPageContext,
   maxPageContextEntries: number = DEFAULT_MAX_HF_PAGE_CONTEXT_ENTRIES,
   defaultTabStopPt?: number,
-  displayMode?: RevisionDisplayMode,
+  displayMode: RevisionDisplayMode = DEFAULT_REVISION_DISPLAY_MODE,
   inlineDrawingLayout?: import('./drawing-layout.ts').InlineDrawingLayoutContext,
   drawingTokenForParagraph?: (paragraph: import('@docx-editor.dev/core/store').OoxmlNode) => string,
   drawingLayoutToken?: string,
@@ -174,7 +176,11 @@ export function layoutHeaderFooterStory(
 ): HeaderFooterStoryLayout {
   const needs = detectStoryPageFields(part.root);
   const contextCache = createBoundedContextCache(maxPageContextEntries);
-  const blocks = storyBlocks(part);
+  // WITH the display mode, like every other consumer of this list. The inline flow already
+  // received it — a deleted run vanished from a header in `proposed` — while the block list
+  // did not, so the paragraph a tracked mark merges away kept its own line, and a paragraph a
+  // revision removed entirely kept a blank one. The cache is namespaced by mode below.
+  const blocks = storyBlocks(part, displayMode);
   // Content identity is of the authored part, not of a page-field projection.
   const contentKey = headerFooterContentKey(part);
   let baseline: HeaderFooterStoryLayout | undefined;
@@ -238,12 +244,15 @@ export function layoutHeaderFooterStory(
         flow = flowBlocksInBox(blocks, 0, Math.max(1, contentWidth), 0, 0, {
           measurer,
           cache,
-          producer: producer + token + (displayMode ? `|rev:${displayMode}` : ''),
+          producer:
+            producer +
+            token +
+            (displayMode === DEFAULT_REVISION_DISPLAY_MODE ? '' : `|rev:${displayMode}`),
           nextLineId: () => `hf-${part.name}-line-${lineCounter++}`,
           styleCascade,
           pageContext: effectiveCtx,
           ...(defaultTabStopPt !== undefined ? { defaultTabStopPt } : {}),
-          ...(displayMode ? { displayMode } : {}),
+          displayMode,
           ...(documentProperties ? { documentProperties } : {}),
           inlineDrawingLayout,
           anchorFrameBase,
@@ -254,12 +263,15 @@ export function layoutHeaderFooterStory(
           layoutTextboxStoryFor: (projection) =>
             layoutTextboxStory(projection, {
               measurer,
-              producer: producer + token + (displayMode ? `|rev:${displayMode}` : ''),
+              producer:
+                producer +
+                token +
+                (displayMode === DEFAULT_REVISION_DISPLAY_MODE ? '' : `|rev:${displayMode}`),
               cache,
               styleCascade,
               ...(effectiveCtx ? { pageContext: effectiveCtx } : {}),
               ...(defaultTabStopPt !== undefined ? { defaultTabStopPt } : {}),
-              ...(displayMode ? { displayMode } : {}),
+              displayMode,
               ...(documentProperties ? { documentProperties } : {}),
               inlineDrawingLayout,
               ...(drawingTokenForParagraph ? { drawingTokenForParagraph } : {}),
@@ -308,12 +320,15 @@ export function layoutHeaderFooterStory(
       flow = flowBlocksInBox(blocks, 0, Math.max(1, contentWidth), 0, 0, {
         measurer,
         cache,
-        producer: producer + token + (displayMode ? `|rev:${displayMode}` : ''),
+        producer:
+          producer +
+          token +
+          (displayMode === DEFAULT_REVISION_DISPLAY_MODE ? '' : `|rev:${displayMode}`),
         nextLineId: () => `hf-${part.name}-line-${lineCounter++}`,
         styleCascade,
         pageContext: effectiveCtx,
         ...(defaultTabStopPt !== undefined ? { defaultTabStopPt } : {}),
-        ...(displayMode ? { displayMode } : {}),
+        displayMode,
         ...(documentProperties ? { documentProperties } : {}),
       });
     }
@@ -408,4 +423,39 @@ export function remapPage(page: PageRecord, globalIndex: number, sheetY: number)
     ...(footnotes ? { footnotes } : {}),
     ...(endnotes ? { endnotes } : {}),
   };
+}
+
+/**
+ * Resource identity of every image a header/footer story paints.
+ *
+ * Part of the session context, because the rest of what identifies a story — `contentKey`
+ * and `flowHeight` — describes the AUTHORED part, and neither moves when an image finishes
+ * decoding: the extent is authored, so the story is exactly as tall with a pending picture
+ * as with a ready one. Without this the unchanged-pass early exit finds every key equal and
+ * returns the previous pages BY IDENTITY, furniture included, so a header or footer image
+ * stays a "loading" placeholder for the rest of the session — nothing will invalidate it
+ * again. Body drawings have no such gap; they ride the per-paragraph flow keys.
+ */
+export function storyDrawingResourceToken(story: HeaderFooterStoryLayout): string {
+  const tokens: string[] = [];
+  const visitBlock = (block: BlockFragmentRecord): void => {
+    if (block.kind === 'table') {
+      for (const row of block.rows) {
+        for (const cell of row.cells) for (const inner of cell.blocks) visitBlock(inner);
+      }
+      return;
+    }
+    for (const line of block.lines) {
+      for (const drawing of line.drawings ?? []) {
+        tokens.push(drawingResourceLayoutToken(drawing.resource));
+      }
+    }
+  };
+  for (const drawing of story.anchoredDrawings ?? []) {
+    tokens.push(drawingResourceLayoutToken(drawing.resource));
+  }
+  for (const fragment of story.fragments) visitBlock(fragment);
+  // Empty for the overwhelmingly common story with no pictures, so the context string for a
+  // plain header is byte-for-byte what it was.
+  return tokens.length === 0 ? '' : `!${tokens.join('!')}`;
 }

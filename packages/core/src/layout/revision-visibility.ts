@@ -23,6 +23,7 @@ import {
   MAX_CONTENT_CONTROL_NESTING,
 } from '../store/package/content-control-walk.ts';
 import { MAX_REVISION_DEPTH } from './revision-projection.ts';
+import { WML_NAMESPACE_URI } from '../store/package/ooxml-tree.ts';
 
 /**
  * Matches the layout walk's own container recursion; see `piecesOfParagraph`.
@@ -33,10 +34,19 @@ import { MAX_REVISION_DEPTH } from './revision-projection.ts';
  */
 const MAX_INLINE_DEPTH = MAX_REVISION_DEPTH;
 
-function childNamed(node: OoxmlNode, localName: string): OoxmlNode | undefined {
+/**
+ * A child in the WordprocessingML namespace, by name.
+ *
+ * The namespace is the difference between a revision and a look-alike. A `.docx` is a zip of
+ * XML the sender controls, so an `<x:del/>` sitting in the paragraph mark's `w:rPr` is markup
+ * anyone can author — and matching on the local name alone let it merge two paragraphs in the
+ * default view, a join no decision in the file can produce and no Accept can undo.
+ */
+function wmlChildNamed(node: OoxmlNode, localName: string): OoxmlNode | undefined {
   if (node.kind === 'textValue') return undefined;
   for (const child of node.children) {
-    if (child.kind !== 'textValue' && child.localName === localName) return child;
+    if (child.kind === 'textValue') continue;
+    if (child.namespaceUri === WML_NAMESPACE_URI && child.localName === localName) return child;
   }
   return undefined;
 }
@@ -51,14 +61,15 @@ function childNamed(node: OoxmlNode, localName: string): OoxmlNode | undefined {
  */
 export function paragraphMarkDeleted(paragraph: OoxmlNode): boolean {
   if (paragraph.kind === 'textValue') return false;
-  const properties = childNamed(paragraph, 'paragraphProperties') ?? childNamed(paragraph, 'pPr');
+  const properties =
+    wmlChildNamed(paragraph, 'paragraphProperties') ?? wmlChildNamed(paragraph, 'pPr');
   if (!properties) return false;
   const markRunProperties =
-    childNamed(properties, 'runProperties') ?? childNamed(properties, 'rPr');
+    wmlChildNamed(properties, 'runProperties') ?? wmlChildNamed(properties, 'rPr');
   if (markRunProperties === undefined) return false;
   return (
-    childNamed(markRunProperties, 'del') !== undefined ||
-    childNamed(markRunProperties, 'moveFrom') !== undefined
+    wmlChildNamed(markRunProperties, 'del') !== undefined ||
+    wmlChildNamed(markRunProperties, 'moveFrom') !== undefined
   );
 }
 
@@ -114,6 +125,37 @@ function rendersNoText(node: OoxmlNode, depth: number): boolean {
     return true;
   };
   return walkChildren(node.children, depth);
+}
+
+/**
+ * Does this display mode REMOVE the paragraph's mark, and with it the break it draws?
+ *
+ * A mark records a break that a decision would take away. `proposed` answers what the document
+ * becomes when every decision is accepted, so a deleted or moved-from mark is gone there;
+ * `original` answers what it was before any of them, so an inserted or moved-to mark is gone
+ * there. `all-markup` takes no decision and removes nothing.
+ *
+ * The paragraph then runs into the one after it, which is exactly what `resolveRevisions` does
+ * with the same four elements.
+ */
+export function markRemovedInMode(
+  paragraph: OoxmlNode,
+  displayMode: 'all-markup' | 'proposed' | 'original'
+): boolean {
+  if (displayMode === 'all-markup') return false;
+  if (paragraph.kind === 'textValue') return false;
+  // The namespace at EVERY step. Checking only the innermost element left the containers
+  // spoofable: `<x:rPr><w:del/></x:rPr>` in a `w:pPr` merged two paragraphs from markup any
+  // sender can author, and no Accept could undo the join it produced.
+  const properties =
+    wmlChildNamed(paragraph, 'paragraphProperties') ?? wmlChildNamed(paragraph, 'pPr');
+  if (!properties) return false;
+  const markRunProperties =
+    wmlChildNamed(properties, 'runProperties') ?? wmlChildNamed(properties, 'rPr');
+  if (markRunProperties === undefined) return false;
+  const removedNames =
+    displayMode === 'proposed' ? (['del', 'moveFrom'] as const) : (['ins', 'moveTo'] as const);
+  return removedNames.some((name) => wmlChildNamed(markRunProperties, name) !== undefined);
 }
 
 /**

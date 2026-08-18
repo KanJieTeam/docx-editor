@@ -23,6 +23,7 @@
 
 import { PAGE_BREAK_CHAR } from '../store/package/hard-break.ts';
 import { graphemeBoundaryEpoch, segmentGraphemes } from './grapheme.ts';
+import { lineSegments, type LineSegment } from './line-segments.ts';
 import { baselineShiftPtOf, measureDisplayText } from './run-style.ts';
 import type { CaretGeometry, SemanticPosition } from './semantic-interaction.ts';
 import type {
@@ -560,11 +561,17 @@ function resolveParagraph(
   const line = lineAtY(fragment.lines, point.y);
   if (!line) return null;
   const resolved = offsetOnLine(line, point.x, point.y, context);
-  const position: SemanticPosition = {
-    paragraphId: line.range.paragraphId,
-    offset: resolved.offset,
-  };
-  const box = caretBoxOnLine(line, resolved.offset, context.measurer);
+  // WHICH paragraph the pointer is over, not which one the line is named after. A resolved
+  // display mode merges the paragraphs a tracked decision merges, so one line can carry two,
+  // and the offset the walk just resolved counts in the one under the pointer.
+  const segment = segmentAtX(line, point.x);
+  // The offset comes from a walk over the WHOLE line and the paragraph from the segment under
+  // the pointer, so on a merged line the two are counted in different paragraphs. Clamping
+  // ties them back together: a click past the end of the line lands at the end of the
+  // paragraph the pointer is over, not at an offset that paragraph does not have.
+  const offset = Math.min(Math.max(resolved.offset, segment.start), segment.end);
+  const position: SemanticPosition = { paragraphId: segment.paragraphId, offset };
+  const box = caretBoxOnLine(line, offset, context.measurer, segment);
   return {
     position,
     caret: {
@@ -587,8 +594,7 @@ function resolveParagraph(
       point.y < line.box.y + line.box.height,
     // Filled by {@link hitTestPage} once the point is known; keep null on the inner path.
     contentControlId: null,
-    drawing:
-      resolved.drawing && resolved.withinSpan ? drawingHitIdentity(line, resolved.drawing) : null,
+    drawing: resolved.drawing && resolved.withinSpan ? drawingHitIdentity(resolved.drawing) : null,
   };
 }
 
@@ -632,16 +638,42 @@ interface LineOffset {
   readonly drawing?: InlineDrawingRecord | null;
 }
 
-function drawingHitIdentity(line: LineRecord, drawing: InlineDrawingRecord): SemanticHitDrawing {
+function drawingHitIdentity(drawing: InlineDrawingRecord): SemanticHitDrawing {
   return Object.freeze({
     drawingNodeId: drawing.drawingNodeId,
-    paragraphId: line.range.paragraphId,
+    // The drawing's own paragraph. On a merged line the record names a member, and the line
+    // names whichever member starts it.
+    paragraphId: drawing.paragraphId,
     start: drawing.start,
   });
 }
 
-function drawingAtOffset(line: LineRecord, offset: number): InlineDrawingRecord | null {
-  for (const drawing of line.drawings ?? []) {
+/**
+ * The segment of a line an x falls in.
+ *
+ * Answers the FIRST segment on a line with one, which is every ordinary line. Otherwise the
+ * last segment that begins at or before the point, so a click past the end of the line lands
+ * in the paragraph that ends it rather than the one that starts it.
+ */
+function segmentAtX(line: LineRecord, x: number): LineSegment {
+  const segments = lineSegments(line);
+  let found = segments[0]!;
+  for (const segment of segments) {
+    const first = segment.spans[0];
+    if (first === undefined) continue;
+    const last = segment.spans[segment.spans.length - 1]!;
+    if (x >= first.box.x) found = segment;
+    if (x < last.box.x + last.box.width) break;
+  }
+  return found;
+}
+
+function drawingAtOffset(
+  line: LineRecord,
+  offset: number,
+  only?: readonly InlineDrawingRecord[]
+): InlineDrawingRecord | null {
+  for (const drawing of only ?? line.drawings ?? []) {
     if (drawing.start === offset || drawing.start + 1 === offset) return drawing;
   }
   return null;
@@ -959,9 +991,15 @@ export function spanOffsetX(
 export function caretBoxOnLine(
   line: LineRecord,
   offset: number,
-  measurer: TextMeasurer | undefined
+  measurer: TextMeasurer | undefined,
+  segment?: {
+    readonly spans: readonly StyleSpanRecord[];
+    readonly drawings: readonly InlineDrawingRecord[];
+  } | null
 ): { x: number; y: number; height: number } {
-  const drawing = drawingAtOffset(line, offset);
+  // A merged line carries two paragraphs, and an offset means something in only one of them.
+  // Without a segment the line IS the segment, which is every ordinary line.
+  const drawing = drawingAtOffset(line, offset, segment?.drawings);
   if (drawing) {
     const after = offset > drawing.start;
     return {
@@ -972,7 +1010,7 @@ export function caretBoxOnLine(
       height: drawing.height,
     };
   }
-  const spans = line.spans;
+  const spans = segment ? segment.spans : line.spans;
   if (spans.length === 0) {
     // An empty paragraph paints no run to size the caret against, so the LINE is all there
     // is — but the line box on a spaced paragraph is mostly spacing, and taking it whole

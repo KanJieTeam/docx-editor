@@ -13,11 +13,23 @@
 // Note parts (`w:footnotes` / `w:endnotes`) are NOT story roots: each typed `w:footnote` /
 // `w:endnote` child is its own story via {@link noteStoryBlocks}.
 
-import type { OoxmlElement, OoxmlNode, OoxmlPart } from '@docx-editor.dev/core/store';
-import { collectFlowBlocks } from '../store/package/content-control-walk.ts';
+import type {
+  OoxmlElement,
+  OoxmlNode,
+  OoxmlParagraphNode,
+  OoxmlPart,
+} from '@docx-editor.dev/core/store';
+import {
+  contentControlContentChildren,
+  isContentControl,
+  MAX_CONTENT_CONTROL_NESTING,
+} from '../store/package/content-control-walk.ts';
+import { WML_NAMESPACE_URI } from '../store/package/ooxml-tree.ts';
+import { paragraphOffsetIndex } from '../store/store/tree-op-segments.ts';
+import { piecesOfParagraph } from './field-projection.ts';
 import { createRecentRootCache } from '../store/store/recent-root-cache.ts';
 import type { RevisionDisplayMode } from './revision-projection.ts';
-import { revisionRemovesParagraph } from './revision-visibility.ts';
+import { markRemovedInMode, revisionRemovesParagraph } from './revision-visibility.ts';
 
 export { MAX_CONTENT_CONTROL_NESTING as MAX_SDT_NESTING } from '../store/package/content-control-walk.ts';
 
@@ -43,6 +55,252 @@ function acceptStoryBlock(block: OoxmlElement, displayMode: RevisionDisplayMode)
   // claims a full line box.
   if (block.kind === 'paragraph' && revisionRemovesParagraph(block, displayMode)) return false;
   return true;
+}
+
+/**
+ * The paragraphs a merge group is built from, in order, with the survivor last.
+ *
+ * Published beside the synthetic paragraph rather than derived from it, because the identity
+ * rewrite has to name the member a piece of content came from and a synthetic node has lost
+ * that by construction.
+ */
+export interface ParagraphMergeGroup {
+  /** The node layout lays out: the survivor's properties, every member's content. */
+  readonly merged: OoxmlElement;
+  /** Members in document order. The last one is the survivor whose mark stays. */
+  readonly members: readonly OoxmlElement[];
+}
+
+/** Groups keyed by the synthetic node, so a caller holding one can ask what it came from. */
+const mergeGroups = new WeakMap<OoxmlElement, ParagraphMergeGroup>();
+
+/** The members a laid-out paragraph stands for, or null when it stands for itself. */
+export function paragraphMergeGroupOf(paragraph: OoxmlElement): ParagraphMergeGroup | null {
+  return mergeGroups.get(paragraph) ?? null;
+}
+
+/** One paragraph standing for several: the survivor's properties, every member's content. */
+function mergedParagraph(members: readonly OoxmlElement[], survivor: OoxmlElement): OoxmlElement {
+  const properties = survivor.children.filter((child) => isParagraphProperties(child));
+  const content = members.flatMap((member) =>
+    member.children.filter((child) => !isParagraphProperties(child))
+  );
+  const merged = { ...survivor, children: [...properties, ...content] } as OoxmlElement;
+  mergeGroups.set(merged, { merged, members });
+  return merged;
+}
+
+function isParagraphProperties(node: OoxmlNode): boolean {
+  return (
+    node.kind !== 'textValue' && (node.kind === 'paragraphProperties' || node.localName === 'pPr')
+  );
+}
+
+/**
+ * Fold each run of mark-removed paragraphs into the paragraph that follows it.
+ *
+ * The shape matches `resolveRevisions` exactly: the SURVIVOR's `w:pPr` governs, and every
+ * member's content arrives before it in document order. A trailing member with nothing to
+ * merge into keeps itself, for the same reason the store refuses that case — its runs have no
+ * paragraph to live in.
+ */
+function withMergedParagraphs(
+  parented: readonly ParentedBlock[],
+  displayMode: RevisionDisplayMode
+): OoxmlElement[] {
+  if (displayMode === 'all-markup') return parented.map((entry) => entry.block);
+  const out: OoxmlElement[] = [];
+  let pendingMembers: OoxmlElement[] = [];
+  let pendingParent: string | null = null;
+  const endRun = (): void => {
+    out.push(...mergedTrailingRun(pendingMembers));
+    pendingMembers = [];
+    pendingParent = null;
+  };
+  for (const { block, parentKey } of parented) {
+    // A content control flattens into the flow, so its paragraphs are neighbours on the page
+    // without being siblings in the tree. The store rebuilds one children array at a time and
+    // never merges out of `w:sdtContent`; matching that keeps the two answers the same.
+    if (pendingMembers.length > 0 && parentKey !== pendingParent) endRun();
+    if (block.kind !== 'paragraph') {
+      // A table between two mark-removed paragraphs is a container boundary too.
+      endRun();
+      out.push(block);
+      continue;
+    }
+    const removed = markRemovedInMode(block, displayMode);
+    // Measuring costs a walk of the paragraph, so it is asked ONLY where a merge could happen:
+    // of a paragraph whose mark is removed, and of the survivor a pending run would merge into.
+    // A document with no tracked marks answers `false` to the cheap question and stops, which
+    // is every keystroke in the view the free engine renders by default.
+    if ((removed || pendingMembers.length > 0) && !memberIsAddressable(block, displayMode)) {
+      // Cannot be measured, so cannot be merged INTO either: a survivor whose own offsets do
+      // not line up would take the previous members' characters at the wrong index.
+      endRun();
+      out.push(block);
+      continue;
+    }
+    if (removed) {
+      pendingMembers.push(block);
+      pendingParent = parentKey;
+      continue;
+    }
+    if (pendingMembers.length === 0) {
+      out.push(block);
+      continue;
+    }
+    const members = [...pendingMembers, block];
+    pendingMembers = [];
+    pendingParent = null;
+    out.push(mergedParagraph(members, block));
+  }
+  // A TRAILING run, with no unmarked paragraph after it. Word cannot delete the last mark of a
+  // story, so the last member keeps its own break and the ones before it still merge into it —
+  // which is what `resolveRevisions` does, one member at a time, for the same reason.
+  out.push(...mergedTrailingRun(pendingMembers));
+  return out;
+}
+
+function mergedTrailingRun(members: readonly OoxmlElement[]): readonly OoxmlElement[] {
+  if (members.length < 2) return members;
+  const survivor = members[members.length - 1]!;
+  return [mergedParagraph(members, survivor)];
+}
+
+/**
+ * One container's blocks: flattened through content controls, merged, then filtered.
+ *
+ * MERGE FIRST, then drop. A mark-removed paragraph merges into the paragraph that follows it
+ * IN THE TREE, which is the rule `resolveRevisions` follows; dropping the empty ones first
+ * would hand a member the wrong survivor, and the survivor's properties govern the result.
+ * After the merge the drop has little left to do: an absorbed member is gone already, and what
+ * remains is a mark-removed paragraph with nothing after it to merge into.
+ *
+ * Every story collects its blocks through here — body, note, textbox and table cell — so a
+ * container is a merge boundary by construction: a paragraph can only merge with one that
+ * shares its parent, which is the same rule the store applies.
+ */
+export function mergedFlowBlocks(
+  children: readonly OoxmlNode[],
+  displayMode: RevisionDisplayMode
+): OoxmlElement[] {
+  const merged = withMergedParagraphs(flowBlocksWithParent(children), displayMode);
+  return merged.filter((block) => acceptStoryBlock(block, displayMode));
+}
+
+/** A block, and which children array it actually lives in. */
+interface ParentedBlock {
+  readonly block: OoxmlElement;
+  /** Node id of the enclosing content control, or `''` for the story root's own children. */
+  readonly parentKey: string;
+}
+
+/** The walk `collectFlowBlocks` performs, remembering where each block CAME FROM. */
+function flowBlocksWithParent(children: readonly OoxmlNode[]): readonly ParentedBlock[] {
+  const blocks: ParentedBlock[] = [];
+  const collect = (nodes: readonly OoxmlNode[], nest: number, parentKey: string): void => {
+    for (const child of nodes) {
+      if (child.kind === 'textValue') continue;
+      if (child.kind === 'paragraph' || child.kind === 'table') {
+        blocks.push({ block: child, parentKey });
+        continue;
+      }
+      if (isContentControl(child) && nest < MAX_CONTENT_CONTROL_NESTING) {
+        collect(contentControlContentChildren(child), nest + 1, child.id);
+      }
+    }
+  };
+  collect(children, 0, '');
+  return blocks;
+}
+
+/**
+ * Can this paragraph's content be addressed inside a merged one?
+ *
+ * ASK THE WALK, which is what the design called for. A member's characters are placed in the
+ * merged paragraph at an offset taken from the STORE and read back out of spans the LAYOUT
+ * walk produced, so the two have to agree about how long the member is. They agree for every
+ * ordinary construct and part ways in two places: a field whose `w:fldChar begin` sits in one
+ * member and whose `end` sits in the next — Word writes that for a TOC — closes across the
+ * mark once the members share a paragraph and swallows the second member into one atomic
+ * field; and content past a nesting cap counts differently on each side. Both publish one
+ * member's text at another member's offsets, which is worse than the break this change exists
+ * to remove, so a group that cannot be measured is not merged.
+ *
+ * A refusal is fail-visible, not fail-safe: the reader keeps a break the document says is
+ * gone, and if the refused member carried `w:pPr/w:sectPr` they also keep a section break —
+ * so the pages before it stay at their own paper size, where accepting the change would put
+ * them on the next section's.
+ */
+/**
+ * Memoized on the node, per mode. A paragraph is immutable — a transaction rebuilds the path
+ * to what it edited and leaves every other paragraph object-identical — so the answer holds
+ * until that paragraph itself changes. Without this the walk ran for every candidate on every
+ * flush, and a document with hundreds of tracked marks paid it on each keystroke.
+ */
+const addressableByNode = new WeakMap<OoxmlElement, Map<RevisionDisplayMode, boolean>>();
+
+function memberIsAddressable(member: OoxmlElement, displayMode: RevisionDisplayMode): boolean {
+  const perMode = addressableByNode.get(member);
+  const cached = perMode?.get(displayMode);
+  if (cached !== undefined) return cached;
+  const answer = measureMember(member, displayMode);
+  if (perMode) perMode.set(displayMode, answer);
+  else addressableByNode.set(member, new Map([[displayMode, answer]]));
+  return answer;
+}
+
+function measureMember(member: OoxmlElement, displayMode: RevisionDisplayMode): boolean {
+  if (!fieldCharsBalanced(member)) return false;
+  const pieces = piecesOfParagraph(
+    member,
+    [],
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    displayMode
+  );
+  let published = 0;
+  for (const piece of pieces) published = Math.max(published, piece.end);
+  // Published LESS than the store holds is ordinary: a resolved view hides content it has
+  // resolved away, and the walk still counts those characters in its offsets. Published MORE
+  // is the failure — it means the walk reached content the store cannot address, so a member
+  // placed after it would be read back at offsets that belong to no paragraph.
+  return published <= paragraphOffsetIndex(member as OoxmlParagraphNode).length;
+}
+
+/**
+ * Does every field this paragraph opens also close inside it?
+ *
+ * `w:fldChar begin` in one paragraph and `end` in the next is ordinary Word output — a TOC is
+ * written that way. Two such paragraphs laid out as ONE close the field across the mark, and
+ * the field projection then covers the whole of the second member with a single atomic offset:
+ * every character of it published inside the first member's range, and the paragraph itself
+ * unreachable. Merging is refused rather than made to look right.
+ */
+function fieldCharsBalanced(paragraph: OoxmlElement): boolean {
+  let open = 0;
+  let underflowed = false;
+  const visit = (node: OoxmlNode): void => {
+    if (node.kind === 'textValue') return;
+    if (node.namespaceUri === WML_NAMESPACE_URI && node.localName === 'fldChar') {
+      const type = node.attributes.find(
+        (attribute) => attribute.localName === 'fldCharType'
+      )?.value;
+      if (type === 'begin') open += 1;
+      else if (type === 'end') {
+        open -= 1;
+        // An `end` with no `begin` in this paragraph closes a field that started in an
+        // earlier one. Counting a net would let it cancel a later `begin` and call the
+        // paragraph balanced, which is the case this guard exists to catch.
+        if (open < 0) underflowed = true;
+      }
+    }
+    for (const child of node.children) visit(child);
+  };
+  visit(paragraph);
+  return open === 0 && !underflowed;
 }
 
 /**
@@ -72,9 +330,7 @@ export function storyBlocks(
   const cached = perMode?.[displayMode];
   if (cached) return cached;
   const root = storyRootOf(part);
-  const blocks = root
-    ? collectFlowBlocks(root.children, 0, (block) => acceptStoryBlock(block, displayMode))
-    : [];
+  const blocks = root ? mergedFlowBlocks(root.children, displayMode) : [];
   if (perMode) perMode[displayMode] = blocks;
   else storyBlocksCache.set(part, { [displayMode]: blocks });
   return blocks;
@@ -91,7 +347,7 @@ export function noteStoryBlocks(
   displayMode: RevisionDisplayMode = 'all-markup'
 ): OoxmlElement[] {
   if (note.kind !== 'note') return [];
-  return collectFlowBlocks(note.children, 0, (block) => acceptStoryBlock(block, displayMode));
+  return mergedFlowBlocks(note.children, displayMode);
 }
 
 /**
@@ -106,5 +362,5 @@ export function textboxStoryBlocks(
   displayMode: RevisionDisplayMode = 'all-markup'
 ): OoxmlElement[] {
   if (content.kind === 'textValue') return [];
-  return collectFlowBlocks(content.children, 0, (block) => acceptStoryBlock(block, displayMode));
+  return mergedFlowBlocks(content.children, displayMode);
 }

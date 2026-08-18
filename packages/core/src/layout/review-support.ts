@@ -142,6 +142,14 @@ export interface ReviewRevisionItem {
   /** The words a replacement removes. Empty for every other kind. */
   readonly replacedText: string;
   readonly revisionKind: ReviewRevisionKind;
+  /**
+   * WHICH decision a `paragraphMark` records, absent for every other kind.
+   *
+   * `EG_ParaRPrTrackChanges` is `ins? del? moveFrom? moveTo?`, and the four say opposite
+   * things about one break. Without this a card called a deleted break an inserted one, which
+   * is the reverse of what Accept on that card does.
+   */
+  readonly markDirection?: 'insert' | 'delete' | 'moveFrom' | 'moveTo';
   readonly author: string;
   readonly date?: string;
   /** Text the revision covers, for the card summary. Empty for changes with no characters. */
@@ -265,6 +273,23 @@ export interface ReviewCustomItem {
  * custom-node card. Discriminate on `kind`.
  */
 export type ReviewItem = ReviewRevisionItem | ReviewCommentItem | ReviewCustomItem;
+
+/**
+ * The two declarations of this type must stay identical.
+ *
+ * `store/review-reads.ts` declares it for the reader and this file declares it again for the
+ * layout lane, which may not import the store's. Nothing else catches a field added to one
+ * and not the other: an OPTIONAL field drifts past typecheck, lint, the tests and the parity
+ * contract, and shows up only as an asymmetric `.api.md` diff that a human has to notice.
+ * These two assignments fail to compile the moment either side gains or loses a member.
+ */
+type StoreReviewRevisionItem = import('../store/store/review-reads.ts').ReviewRevisionItem;
+type Assert<T extends true> = T;
+type Identical<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+export type ReviewRevisionItemDeclarationsAgree = Assert<
+  Identical<ReviewRevisionItem, StoreReviewRevisionItem>
+>;
 
 /** What the review queue derivation reads: one story part plus its comment parts. */
 export interface ReviewModelInput {
@@ -592,7 +617,38 @@ export interface ReviewParagraphAnchor {
   readonly lines?: readonly {
     readonly range: { readonly end: number };
     readonly box: { readonly y: number };
+    /**
+     * Present on a real line. A merged fragment's join line carries spans from two
+     * paragraphs, and its `range` can only name one of them, so the OTHER paragraph's extent
+     * on that line is readable here and nowhere else.
+     */
+    readonly spans?: readonly {
+      readonly range: { readonly paragraphId: string; readonly end: number };
+    }[];
   }[];
+}
+
+/**
+ * The y of the line a position sits on, measured from the anchor's own origin.
+ *
+ * An ordinary line answers from its own range, exactly as it always did. On a merged
+ * fragment's join line the range names one of the two paragraphs, so an offset compared
+ * against it either overshot — putting a card in the absorbed half beside the wrong line —
+ * or matched the first line every time.
+ */
+export function anchorLineY(
+  anchor: ReviewParagraphAnchor,
+  paragraphId: string,
+  offset: number
+): number {
+  const line = anchor.lines?.find((entry) => {
+    const spans = entry.spans;
+    if (!spans) return offset < entry.range.end;
+    const owned = spans.filter((span) => span.range.paragraphId === paragraphId);
+    if (owned.length === spans.length) return offset < entry.range.end;
+    return owned.length > 0 && offset < owned[owned.length - 1]!.range.end;
+  });
+  return line ? line.box.y : anchor.fragmentY;
 }
 
 /**
@@ -613,21 +669,34 @@ export function reviewAnchorIndex<
     readonly lines?: readonly {
       readonly range: { readonly end: number };
       readonly box: { readonly y: number };
+      /** Present on a real line; a merged one carries spans from more than one paragraph. */
+      readonly spans?: readonly {
+        readonly range: { readonly paragraphId: string; readonly end: number };
+      }[];
     }[];
   }[]
 ): Map<string, ReviewParagraphAnchor> {
   const index = new Map<string, ReviewParagraphAnchor>();
   for (const page of layout.pages) {
     for (const fragment of paragraphFragments(page)) {
-      // FIRST fragment wins: a paragraph split across a page break is anchored where it
-      // starts, which is where its comment marker was written.
-      if (index.has(fragment.paragraphId)) continue;
-      index.set(fragment.paragraphId, {
-        pageIndex: page.index,
-        contentY: page.contentBox.y,
-        fragmentY: fragment.box.y,
-        ...(fragment.lines ? { lines: fragment.lines } : {}),
-      });
+      // Every paragraph whose content this fragment HOLDS. A resolved view lays a merged
+      // group out as one fragment named after the survivor, and a card anchored in any other
+      // member would have no geometry and drop out of the rail.
+      const held = new Set<string>([fragment.paragraphId]);
+      for (const line of fragment.lines ?? []) {
+        for (const span of line.spans ?? []) held.add(span.range.paragraphId);
+      }
+      for (const paragraphId of held) {
+        // FIRST fragment wins: a paragraph split across a page break is anchored where it
+        // starts, which is where its comment marker was written.
+        if (index.has(paragraphId)) continue;
+        index.set(paragraphId, {
+          pageIndex: page.index,
+          contentY: page.contentBox.y,
+          fragmentY: fragment.box.y,
+          ...(fragment.lines ? { lines: fragment.lines } : {}),
+        });
+      }
     }
   }
   return index;
@@ -658,9 +727,8 @@ export function reviewItemGeometry(
   //
   // The LINE the range starts on, not the paragraph's top: a comment on the last line of a
   // twelve-line paragraph belongs beside that line, which is where Word puts it.
-  const line = anchor.lines?.find((entry) => range.start.offset < entry.range.end);
   return {
     pageIndex: anchor.pageIndex,
-    y: anchor.contentY + (line ? line.box.y : anchor.fragmentY),
+    y: anchor.contentY + anchorLineY(anchor, range.start.paragraphId, range.start.offset),
   };
 }

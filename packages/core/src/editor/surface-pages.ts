@@ -63,6 +63,18 @@ export function createFurnitureSource(env: {
    * page-number tab in a metric-locale footer lands where Word puts it.
    */
   readonly defaultTabStopPt?: number;
+  /**
+   * The document's revision display mode, so furniture answers it too.
+   *
+   * A header is a story like any other. Without this it was laid out in the layout default
+   * whatever the document was being shown in: a resolved view kept a break the body had
+   * merged away, and All Markup drew no attribution on a header's own tracked mark.
+   *
+   * FIXED FOR THE LIFE OF THIS SOURCE. The story memo below cannot guard a mode change,
+   * because the mode is a constant of this closure — a switch has to rebuild the source, the
+   * way a producer change already does.
+   */
+  readonly displayMode?: import('../layout/revision-projection.ts').RevisionDisplayMode;
   readonly inlineDrawingLayoutForPart?: (
     partName: string
   ) => import('../layout/drawing-layout.ts').InlineDrawingLayoutContext | undefined;
@@ -80,6 +92,7 @@ export function createFurnitureSource(env: {
     cache,
     styleCascade,
     defaultTabStopPt,
+    displayMode,
     inlineDrawingLayoutForPart,
     drawingLayoutTokenForPart,
     drawingTokenForParagraphForPart,
@@ -157,7 +170,7 @@ export function createFurnitureSource(env: {
       undefined,
       undefined,
       defaultTabStopPt,
-      undefined,
+      displayMode,
       inlineDrawingLayout,
       drawingTokenForParagraphForPart
         ? (paragraph) => drawingTokenForParagraphForPart(part.name, paragraph)
@@ -219,7 +232,11 @@ export function createFurnitureSource(env: {
   }
 
   function sectionFurniture(): readonly (PageFurniture | undefined)[] {
-    const sections = enumerateDocumentSections(session.part());
+    // IN THE DOCUMENT'S MODE. Layout indexes this array with a section index it counted over
+    // a mode-filtered block list, so enumerating in another mode pairs a section's pages with
+    // another section's header — a break whose mark a tracked change deleted is a section in
+    // All Markup and none in a resolved view.
+    const sections = enumerateDocumentSections(session.part(), displayMode);
     const bySection = session.headerFooterPartsBySection();
     return sections.map((section, index) =>
       furnitureFromParts(bySection[index], geometryOfSection(section.properties))

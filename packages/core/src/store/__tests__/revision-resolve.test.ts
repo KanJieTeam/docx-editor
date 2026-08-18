@@ -415,3 +415,107 @@ describe('a move recorded on the paragraph mark', () => {
     expect(xml(apply(moved('moveTo'), accept(QA))).match(/<w:p[ >]/g)).toHaveLength(2);
   });
 });
+
+describe('a run of removed paragraph marks', () => {
+  // Word merges all of them into the paragraph whose mark survives. Resolving pairwise left
+  // every second paragraph behind, so accepting sixteen deleted marks produced eight
+  // paragraphs and eight blank lines that no decision asked for.
+  const delMark = (text: string) =>
+    `<w:p><w:pPr><w:rPr><w:del w:id="${QA.id}" w:author="${QA.author}" w:date="${QA.date}"/></w:rPr></w:pPr>` +
+    `${run(text)}</w:p>`;
+
+  test('collapses into the one survivor at its end', () => {
+    const part = load(
+      delMark('one ') + delMark('two ') + delMark('three ') + `<w:p>${run('four')}</w:p>`
+    );
+    const out = xml(apply(part, { op: 'acceptAllRevisions' }));
+    expect(out.match(/<w:p[ >]/g)).toHaveLength(1);
+    expect(out).toContain('one ');
+    expect(out).toContain('four');
+  });
+
+  test('a trailing run keeps the last paragraph, which the others merge into', () => {
+    const part = load(`<w:p>${run('keep')}</w:p>` + delMark('a ') + delMark('b '));
+    const out = xml(apply(part, { op: 'acceptAllRevisions' }));
+    expect(out.match(/<w:p[ >]/g)).toHaveLength(2);
+    // Both members' runs, in the paragraph that survived them.
+    expect(out.slice(out.lastIndexOf('<w:p>'))).toContain('a ');
+    expect(out.slice(out.lastIndexOf('<w:p>'))).toContain('b ');
+  });
+
+  test('a content control is a boundary too', () => {
+    // A `w:sdt` holds its own children, so the paragraph before it and the first paragraph
+    // inside it are not siblings. Scanning past it merged the text into a paragraph in
+    // another parent, where it arrived behind the control.
+    const part = load(
+      delMark('before ') +
+        `<w:sdt><w:sdtContent><w:p>${run('inside')}</w:p></w:sdtContent></w:sdt>` +
+        `<w:p>${run('after')}</w:p>`
+    );
+    const out = xml(apply(part, { op: 'acceptAllRevisions' }));
+    expect(out.indexOf('before ')).toBeLessThan(out.indexOf('<w:sdt'));
+    expect(out).not.toContain('before after');
+  });
+
+  test('a table is a boundary: the content stays in front of it', () => {
+    // `followed` looked at any later paragraph, so the text merged into the one AFTER the
+    // table and arrived behind it — in a place the reader never put it.
+    const table =
+      '<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr>' +
+      '<w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc>' +
+      `<w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr><w:p>${run('cell')}</w:p>` +
+      '</w:tc></w:tr></w:tbl>';
+    const part = load(delMark('before ') + table + `<w:p>${run('after')}</w:p>`);
+    const out = xml(apply(part, { op: 'acceptAllRevisions' }));
+    expect(out.indexOf('before ')).toBeLessThan(out.indexOf('<w:tbl'));
+    expect(out).not.toContain('before after');
+  });
+});
+
+describe('joining paragraphs moves the mark, not just the section break', () => {
+  // A join deletes the FIRST paragraph's mark, so the merged paragraph ends with the SECOND's.
+  // Keeping the first's left the survivor proposing to delete a break the user had just
+  // deleted: the next layout pass merged it into the paragraph after it, and the review pane
+  // kept a card for a mark that no longer exists.
+  const markDel = (id: string) =>
+    `<w:pPr><w:rPr><w:del w:id="${id}" w:author="${QA.author}" w:date="${QA.date}"/></w:rPr></w:pPr>`;
+
+  test('the survivor does not inherit a mark revision the join deleted', () => {
+    const part = load(
+      `<w:p>${markDel('1')}${run('Hello ')}</w:p><w:p>${run('world')}</w:p><w:p>${run('after')}</w:p>`
+    );
+    const ids = [...xml(part).matchAll(/<w:p[ >]/g)].length;
+    expect(ids).toBe(3);
+    const body = part.root.children[0]!;
+    const paragraphs = (body as { children: { kind: string; id: string }[] }).children.filter(
+      (child) => child.kind === 'paragraph'
+    );
+    const joined = applyTreeOp(part, {
+      op: 'joinParagraphs',
+      firstId: paragraphs[0]!.id,
+      secondId: paragraphs[1]!.id,
+    });
+    if (!joined.ok) throw new Error(joined.reason);
+    const out = xml(joined.part);
+    expect(out).toContain('Hello ');
+    expect(out).toContain('world');
+    expect(out).not.toContain('<w:del');
+  });
+
+  test('a mark revision on the SECOND paragraph rides onto the survivor', () => {
+    const part = load(
+      `<w:p>${run('Hello ')}</w:p><w:p>${markDel('2')}${run('world')}</w:p><w:p>${run('after')}</w:p>`
+    );
+    const body = part.root.children[0]!;
+    const paragraphs = (body as { children: { kind: string; id: string }[] }).children.filter(
+      (child) => child.kind === 'paragraph'
+    );
+    const joined = applyTreeOp(part, {
+      op: 'joinParagraphs',
+      firstId: paragraphs[0]!.id,
+      secondId: paragraphs[1]!.id,
+    });
+    if (!joined.ok) throw new Error(joined.reason);
+    expect(xml(joined.part)).toContain('<w:del');
+  });
+});

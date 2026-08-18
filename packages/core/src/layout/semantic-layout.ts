@@ -97,7 +97,8 @@ import {
   type TableFlowDeps,
 } from './semantic-table-layout.ts';
 import { annotateTableFragmentGeometry } from './semantic-table-interaction.ts';
-import { storyBlocks } from './story-roots.ts';
+import { mergeBoundariesOf, remapMergedLines } from './merged-paragraph-ranges.ts';
+import { paragraphMergeGroupOf, storyBlocks } from './story-roots.ts';
 import type { InlineDrawingLayoutContext } from './drawing-layout.ts';
 import {
   clipInlineDrawingRecordToRegion,
@@ -125,14 +126,14 @@ import {
   MAX_DRAWING_EXCLUSION_REFLOW_PASSES,
 } from './drawing-exclusion.ts';
 import { drawingModelOffsetsInParagraph } from './drawing-layout.ts';
-import { drawingResourceLayoutToken, drawingTokenForTableBlock } from './inline-drawing-source.ts';
+import { drawingTokenForTableBlock } from './inline-drawing-source.ts';
 import { projectDrawingsInPart } from '../store/package/drawing-projection.ts';
 import {
   emptyTocPlaceholderParagraphIds,
   emptyTocSuppressedResultParagraphIds,
   tocFieldChromeParagraphIds,
 } from './toc-layout.ts';
-import { type HeaderFooterStoryLayout } from './hf-layout.ts';
+import { storyDrawingResourceToken, type HeaderFooterStoryLayout } from './hf-layout.ts';
 import {
   DEFAULT_SECTION_PROPERTIES,
   enumerateDocumentSectionsFromBlocks,
@@ -410,41 +411,6 @@ const drawingSourceOrderByContext = new WeakMap<
   InlineDrawingLayoutContext,
   ReadonlyMap<string, number>
 >();
-
-/**
- * Resource identity of every image a header/footer story paints.
- *
- * Part of the session context, because the rest of what identifies a story — `contentKey`
- * and `flowHeight` — describes the AUTHORED part, and neither moves when an image finishes
- * decoding: the extent is authored, so the story is exactly as tall with a pending picture
- * as with a ready one. Without this the unchanged-pass early exit finds every key equal and
- * returns the previous pages BY IDENTITY, furniture included, so a header or footer image
- * stays a "loading" placeholder for the rest of the session — nothing will invalidate it
- * again. Body drawings have no such gap; they ride the per-paragraph flow keys.
- */
-function storyDrawingResourceToken(story: HeaderFooterStoryLayout): string {
-  const tokens: string[] = [];
-  const visitBlock = (block: BlockFragmentRecord): void => {
-    if (block.kind === 'table') {
-      for (const row of block.rows) {
-        for (const cell of row.cells) for (const inner of cell.blocks) visitBlock(inner);
-      }
-      return;
-    }
-    for (const line of block.lines) {
-      for (const drawing of line.drawings ?? []) {
-        tokens.push(drawingResourceLayoutToken(drawing.resource));
-      }
-    }
-  };
-  for (const drawing of story.anchoredDrawings ?? []) {
-    tokens.push(drawingResourceLayoutToken(drawing.resource));
-  }
-  for (const fragment of story.fragments) visitBlock(fragment);
-  // Empty for the overwhelmingly common story with no pictures, so the context string for a
-  // plain header is byte-for-byte what it was.
-  return tokens.length === 0 ? '' : `!${tokens.join('!')}`;
-}
 
 /**
  * Lay one story part out into pages.
@@ -2170,6 +2136,8 @@ function layoutBlocksPass(
     }> | null = null;
 
     const markRevisions = paragraphMarkRevisionsOf(entry.paragraph);
+    const mergeGroup = paragraphMergeGroupOf(entry.paragraph);
+    const mergeBoundaries = mergeGroup ? mergeBoundariesOf(mergeGroup) : null;
 
     /**
      * How much of the first placed line's topAndBottom skip this paragraph's own anchor caused.
@@ -2293,6 +2261,10 @@ function layoutBlocksPass(
           },
         });
       }
+      // A resolved view lays a run of paragraphs out as one. The layout is what the document
+      // becomes; the identity has to stay what the document HAS, or an edit in the merged half
+      // addresses a position the store does not hold.
+      const mergedLines = mergeBoundaries ? remapMergedLines(pending, mergeBoundaries) : null;
       const rawMarker =
         fragmentIndex === 0
           ? publishListMarker(
@@ -2309,11 +2281,19 @@ function layoutBlocksPass(
         id: `${paragraphId}#f${fragmentIndex}`,
         paragraphId,
         fragmentIndex,
-        range: {
-          paragraphId,
-          start: fragmentStart,
-          end: pending[pending.length - 1]!.range.end,
-        },
+        range: mergedLines
+          ? // A merged fragment holds more than one paragraph and this field holds one range,
+            // so it cannot be the fragment's extent. It takes the one its LAST line reports —
+            // where the fragment ENDS — and everything that resolves a position reads spans
+            // instead, which name their own paragraphs. `pushLineCaretStops` reads `start`
+            // from here only to dedupe a continuation line's first stop, and a merged
+            // fragment's lines are compared against their own segment starts anyway.
+            mergedLines[mergedLines.length - 1]!.range
+          : {
+              paragraphId,
+              start: fragmentStart,
+              end: pending[pending.length - 1]!.range.end,
+            },
         props,
         spacing: { before: fragmentBefore, after: appliedAfter },
         indent,
@@ -2348,7 +2328,7 @@ function layoutBlocksPass(
         ...(isLast && showsMarkup
           ? markRevisionFields(markRevisions, paragraphMarkFormatRevisionOf(entry.paragraph))
           : {}),
-        lines: pending,
+        lines: mergedLines ?? pending,
         box: { x: columnX + indent.left, y: top, width: available, height },
       });
       if (options.inlineDrawingLayout && paragraphHasAnchors && !paragraphAnchorsPublished) {

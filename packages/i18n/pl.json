@@ -482,7 +482,10 @@
   },
   "revisions": {
     "paragraphMarkInserted": "Wstawiono znak akapitu",
-    "runPropertiesChanged": "Zmieniono formatowanie tekstu"
+    "runPropertiesChanged": "Zmieniono formatowanie tekstu",
+    "paragraphMarkDeleted": null,
+    "paragraphMarkMovedFrom": null,
+    "paragraphMarkMovedTo": null
   },
   "toc": {
     "refresh": "Aktualizuj cały spis",
