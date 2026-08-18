@@ -516,10 +516,12 @@ function anchorFrameContext(
     pageHeight: 792,
     marginLeft: 72,
     marginRight: 72,
-    marginTop: 72,
     marginBottom: 72,
+    contentInsetTop: 72,
+    contentInsetBottom: 72,
     contentWidth,
     contentHeight: 648,
+    contentBandHeight: 648,
     paragraphBox: Object.freeze({ x: 0, y: 40, width: contentWidth, height: 20 }),
     anchorLineBox: Object.freeze({ x: 0, y: 40, width: contentWidth, height: 14 }),
     anchorCharacterX: 6,
@@ -574,6 +576,51 @@ describe('resolves anchored position frames', () => {
     const resolved = resolveAnchoredDrawingPosition(projection, anchorFrameContext());
     expect(resolved.x).toBeCloseTo(emuToPoints(127000) - 72, 3);
     expect(resolved.y).toBeCloseTo(emuToPoints(254000) - 72, 3);
+  });
+
+  // The frame origin is the CONTENT BOX, so a simplePos measured from the sheet corner has to
+  // give back the inset — not the authored margin, which a tall header parts company with
+  // (#274). 72 above is the case where the two coincide; this is the case where they do not.
+  test('simplePos subtracts the content inset, not the authored margin', () => {
+    const part = load(
+      anchoredPictureXml({
+        anchorAttrs:
+          'distT="0" distB="0" distL="0" distR="0" simplePos="1" behindDoc="0" locked="0" allowOverlap="1" layoutInCell="1" relativeHeight="1"',
+        simplePos: '<wp:simplePos x="127000" y="254000"/>',
+        positionH: '<wp:positionH relativeFrom="margin"><wp:align>right</wp:align></wp:positionH>',
+        positionV: '<wp:positionV relativeFrom="page"><wp:align>bottom</wp:align></wp:positionV>',
+      })
+    );
+    const projection = projectDrawing(drawingOf(part), {
+      ownerPartName: OWNER,
+      limits: DEFAULT_DRAWING_PROJECTION_LIMITS,
+    })!;
+    const resolved = resolveAnchoredDrawingPosition(
+      projection,
+      anchorFrameContext({ contentInsetTop: 130, contentBandHeight: 590 })
+    );
+    expect(resolved.y).toBeCloseTo(emuToPoints(254000) - 130, 3);
+  });
+
+  // `contentHeight` is the FLOW height, which a note reserve shrinks below the content band.
+  // The two are equal on an ordinary page, so only a hand-built frame can tell which one an
+  // inside/outside align reads.
+  test('outside vertical align spans the content band, not the note-shrunk flow height', () => {
+    const part = load(
+      anchoredPictureXml({
+        positionV: '<wp:positionV relativeFrom="page"><wp:align>outside</wp:align></wp:positionV>',
+      })
+    );
+    const projection = projectDrawing(drawingOf(part), {
+      ownerPartName: OWNER,
+      limits: DEFAULT_DRAWING_PROJECTION_LIMITS,
+    })!;
+    const resolved = resolveAnchoredDrawingPosition(
+      projection,
+      // Odd page: `outside` puts the object bottom on the band bottom.
+      anchorFrameContext({ contentHeight: 400, contentBandHeight: 648 })
+    );
+    expect(resolved.y).toBeCloseTo(648 - emuToPoints(457200), 3);
   });
 
   test.each([
@@ -802,10 +849,11 @@ describe('page clip for page-relative anchors', () => {
     const clip = pageClipRegion({
       pageWidth: 595.5,
       marginLeft: 49,
-      marginTop: 61,
       marginBottom: 14,
+      contentInsetTop: 61,
+      contentInsetBottom: 14,
       contentHeight: 767,
-      physicalContentHeight: 767,
+      contentBandHeight: 767,
     });
     expect(clip).toEqual({
       x: -49,
