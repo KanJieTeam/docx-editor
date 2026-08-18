@@ -33,7 +33,11 @@ import {
   localizeExclusionZones,
   topAndBottomSkipBeforeLine,
 } from './drawing-exclusion.ts';
-import type { FieldPageContext, HyperlinkProjector } from './field-projection.ts';
+import type {
+  FieldLinkProjector,
+  FieldPageContext,
+  HyperlinkProjector,
+} from './field-projection.ts';
 import { paragraphLayoutKey, type ParagraphLayoutCache } from './layout-cache.ts';
 import { alignDrawings, alignSpans, breakParagraph, type PendingLine } from './paragraph-flow.ts';
 import {
@@ -209,6 +213,16 @@ export interface TableFlowDeps {
    * table cell is an ordinary link; without this it would paint its text and be dead.
    */
   readonly projectLink?: HyperlinkProjector;
+  /** Same seam for HYPERLINK fields: a field in a table cell is an ordinary field. */
+  readonly projectFieldLink?: FieldLinkProjector;
+  /** Document properties for document-property fields; the same object every flow shares. */
+  readonly documentProperties?: import('@docx-editor.dev/core/store').DocumentProperties;
+  /**
+   * True when this table is in BODY flow, whose page fields are substituted at document finalize.
+   * Propagates to every cell paragraph so a body-table PAGE field paints a placeholder; a table
+   * in a header/footer keeps this false and its own live page path.
+   */
+  readonly bodyPageFields?: boolean;
   readonly inlineDrawingLayout?: import('./drawing-layout.ts').InlineDrawingLayoutContext;
   /** Per-paragraph drawing projection/resource token for break cache keys. */
   readonly drawingTokenForParagraph?: (paragraph: OoxmlNode) => string;
@@ -641,6 +655,9 @@ function placeCellParagraph(
       // A cell's own content box is the column a positional tab measures against.
       marginExtent: { left: 0, right: indent.left + available + indent.right },
       ...(deps.projectLink ? { projectLink: deps.projectLink } : {}),
+      ...(deps.projectFieldLink ? { projectFieldLink: deps.projectFieldLink } : {}),
+      ...(deps.documentProperties ? { documentProperties: deps.documentProperties } : {}),
+      ...(deps.bodyPageFields ? { bodyPageFields: true } : {}),
       displayMode: deps.displayMode,
       ...(deps.noteMarks ? { noteMarks: deps.noteMarks } : {}),
       ...(deps.inlineDrawingLayout ? { inlineDrawingLayout: deps.inlineDrawingLayout } : {}),

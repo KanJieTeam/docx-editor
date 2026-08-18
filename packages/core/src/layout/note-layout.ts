@@ -25,6 +25,7 @@ import {
   MAX_NOTES_PER_PART,
 } from '../store/package/note-nodes.ts';
 import type { InlineDrawingLayoutContext } from './drawing-layout.ts';
+import type { FieldLinkProjector, HyperlinkProjector } from './field-pieces.ts';
 import type { ParagraphLayoutCache } from './layout-cache.ts';
 import type { NoteMarkContext } from './note-projection.ts';
 import type { PendingLine } from './paragraph-flow.ts';
@@ -134,6 +135,15 @@ export interface LayoutNoteStoryOptions {
   readonly cache?: ParagraphLayoutCache<readonly PendingLine[]>;
   readonly styleCascade?: StyleCascadeTable;
   readonly defaultTabStopPt?: number;
+  /**
+   * Same projector seams the BODY walk uses. Without them a `w:hyperlink` or a HYPERLINK
+   * field inside a note painted as plain text — measured, but carrying no link record for
+   * paint to anchor and navigation to activate.
+   */
+  readonly projectLink?: HyperlinkProjector;
+  readonly projectFieldLink?: FieldLinkProjector;
+  /** Document properties for a document-property field inside a note story. */
+  readonly documentProperties?: import('@docx-editor.dev/core/store').DocumentProperties;
   /** Derived display marks for noteRef projection inside the note body. */
   readonly noteMarks?: NoteMarkContext;
   /**
@@ -222,6 +232,9 @@ export function layoutNoteStory(
     nextLineId: () => `${prefix}-line-${lineCounter++}`,
     styleCascade: options.styleCascade,
     noteMarks,
+    ...(options.projectLink ? { projectLink: options.projectLink } : {}),
+    ...(options.projectFieldLink ? { projectFieldLink: options.projectFieldLink } : {}),
+    ...(options.documentProperties ? { documentProperties: options.documentProperties } : {}),
     ...(options.defaultTabStopPt !== undefined
       ? { defaultTabStopPt: options.defaultTabStopPt }
       : {}),

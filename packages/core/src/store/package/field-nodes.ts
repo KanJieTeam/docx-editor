@@ -1,9 +1,10 @@
 // Typed field vocabulary helpers (`w:fldChar`, `w:instrText`, `w:fldSimple`).
 //
 // Canonical nodes preserve schema order and authored attributes (`w:fldCharType`,
-// `w:dirty`, `w:fldLock`, `w:instr`). Legacy `CT_FldChar/w:ffData` (including
-// entryMacro/exitMacro) stays generic payload under `fldChar` — never walked for
-// evaluation, never auto-resolved, never executed.
+// `w:dirty`, `w:fldLock`, `w:instr`). Legacy `CT_FldChar/w:ffData` stays generic payload
+// under `fldChar`. Its render STATE (`w:checkBox` / `w:ddList`) is read through the bounded
+// {@link legacyFormFieldDataOf}; its macro references (entryMacro/exitMacro) are never read,
+// never auto-resolved, never executed.
 //
 // Well-formed computed fields (begin→end within one paragraph) and `fldSimple` each contribute
 // exactly one UTF-16 unit ({@link FIELD_ATOM_CHAR}) to paragraph addressing. A FORMTEXT field
@@ -90,9 +91,34 @@ export function isFldChar(node: OoxmlNode, type: FldCharType): boolean {
   return fldCharType(node) === type;
 }
 
-/** Typed or generic `w:instrText`. */
+/**
+ * Typed or generic `w:instrText`, and `w:delInstrText` — the form a tracked deletion gives
+ * the instruction (§17.16.13), always generic in the canonical tree.
+ *
+ * One predicate for both on purpose: everything that consumes instruction text (the offset
+ * authority, the layout field machine, span collection) must treat a deleted field's
+ * instruction exactly like a live one — ingested per phase, never painted. Excluding the
+ * deleted form let its `w:delInstrText` fall through those walks as ordinary run content.
+ */
 export function isInstrText(node: OoxmlNode): boolean {
-  return node.kind === 'instrText' || (node.kind === 'generic' && isWml(node, 'instrText'));
+  return (
+    node.kind === 'instrText' ||
+    (node.kind === 'generic' && (isWml(node, 'instrText') || isWml(node, 'delInstrText')))
+  );
+}
+
+/**
+ * Whether an instruction node is the DELETED form `w:delInstrText` (always generic — no
+ * typed kind).
+ *
+ * Consumers that ingest instruction text must keep deleted chunks in their own buffer:
+ * a tracked field-code edit puts `w:delInstrText` next to `w:instrText` in one field, and
+ * concatenating them produces an instruction nobody authored. The effective instruction is
+ * the live text when any live element exists, else the deleted text (a fully-deleted field
+ * keeps its meaning, with delete attribution).
+ */
+export function isDeletedInstrText(node: OoxmlNode): boolean {
+  return node.kind === 'generic' && isWml(node, 'delInstrText');
 }
 
 /** Typed or generic `w:fldSimple`. */
@@ -165,13 +191,14 @@ export function isFieldChrome(node: OoxmlNode): boolean {
  * True when a `w:fldChar` carries `w:ffData` — a LEGACY FORM FIELD (§17.16.17).
  *
  * FORMTEXT, FORMCHECKBOX and FORMDROPDOWN are what a fillable Word form is made of, and Word
- * shades them on sight so a reader can find the blanks. That is the only reason to ask: it is a
- * presentation question, answered by the element's presence alone.
+ * shades them on sight so a reader can find the blanks. That is a presentation question,
+ * answered by the element's presence alone — this predicate never looks inside.
  *
- * Presence ONLY. `w:ffData` can carry entry and exit MACRO names, and the canonical tree keeps
- * its whole subtree generic and inert on purpose. Walking into it to read a name or a default
- * would be reading attacker-supplied script references for no gain — the shading does not
- * depend on what the form field says, only on it being one.
+ * Rendering STATE (a checkbox's checked bit, a dropdown's entries and selection) is different:
+ * {@link legacyFormFieldDataOf} reads exactly that, bounded, and nothing else. The contract
+ * stands: `w:ffData` macro references (`w:entryMacro` / `w:exitMacro`), `w:name`, help/status
+ * text and behavior flags are attacker-supplied script references and are NEVER read, returned
+ * or resolved by anything in this module.
  */
 export function hasLegacyFormFieldData(node: OoxmlNode): boolean {
   if (node.kind === 'textValue') return false;
@@ -181,6 +208,181 @@ export function hasLegacyFormFieldData(node: OoxmlNode): boolean {
     if (child.localName === 'ffData' && isWml(child, 'ffData')) return true;
   }
   return false;
+}
+
+/**
+ * Legacy form-field render state read from `w:ffData` (§17.16.17), and nothing else.
+ *
+ * `checkbox`: `sizeHalfPoints` is the explicit `w:size` in half-points, clamped to a sane
+ * render range, or null for auto-size (`w:sizeAuto`, absent, malformed, or negative —
+ * ST_HpsMeasure is unsigned, so a negative value is invalid, not small).
+ * `dropdown`: `selectedIndex` is already resolved (in-range `w:result`, else in-range
+ * `w:default`, else 0 — an out-of-range index counts as absent, and the FIRST `w:result` /
+ * `w:default` element wins even when malformed) and always in range when `entries` is
+ * non-empty; `entries` may be empty (layout paints nothing).
+ */
+export type LegacyFormFieldData =
+  | {
+      readonly kind: 'checkbox';
+      readonly checked: boolean;
+      readonly sizeHalfPoints: number | null;
+    }
+  | {
+      readonly kind: 'dropdown';
+      readonly entries: readonly string[];
+      readonly selectedIndex: number;
+    };
+
+/** Total direct-child visits the ffData walk will spend before failing closed. */
+const MAX_FF_DATA_NODES = 256;
+/** Dropdown entries collected — capped BEFORE collection, never sized by the file. */
+const MAX_DROPDOWN_ENTRIES = 64;
+/** Characters kept per dropdown entry. */
+const MAX_DROPDOWN_ENTRY_CHARS = 256;
+/** `w:size` clamp in half-points: 1pt .. 144pt. */
+const MIN_CHECKBOX_SIZE_HALF_POINTS = 2;
+const MAX_CHECKBOX_SIZE_HALF_POINTS = 288;
+/**
+ * Largest `w:val` index accepted for `w:result` / `w:default` on `w:ddList`: the engine's own
+ * entry cap ({@link MAX_DROPDOWN_ENTRIES} collected entries → indices 0..63), not a schema
+ * limit. An index outside 0..63 is treated as ABSENT, never clamped onto an entry the file
+ * did not choose — clamping let a hostile `w:result` shadow a valid `w:default`.
+ */
+const MAX_DROPDOWN_INDEX = MAX_DROPDOWN_ENTRIES - 1;
+
+type NodeBudget = { left: number };
+
+/** On/off child element (`w:checked` / `w:default`): present without `w:val` means true. */
+function onOffElementValue(element: OoxmlNode): boolean {
+  const raw = attributeValue(element, 'val');
+  if (raw === undefined) return true;
+  return !(raw === '0' || raw === 'false' || raw === 'off');
+}
+
+/**
+ * Bounded `w:size` parse (ST_HpsMeasure — half-points, UNSIGNED): null when absent, malformed
+ * or negative (auto size); large values clamp to the render cap. A negative value is not a
+ * small size, it is schema-invalid, so it must not clamp up to a 1pt box.
+ */
+function checkboxSizeAttribute(element: OoxmlNode): number | null {
+  const raw = attributeValue(element, 'val');
+  if (raw === undefined || !/^\d{1,7}$/.test(raw)) return null;
+  const value = Number.parseInt(raw, 10);
+  return Math.min(MAX_CHECKBOX_SIZE_HALF_POINTS, Math.max(MIN_CHECKBOX_SIZE_HALF_POINTS, value));
+}
+
+/**
+ * Bounded index parse for `w:result` / `w:default`: null when absent, malformed, negative or
+ * past {@link MAX_DROPDOWN_INDEX} — out of range means ABSENT, never a clamped neighbor.
+ */
+function dropdownIndexAttribute(element: OoxmlNode): number | null {
+  const raw = attributeValue(element, 'val');
+  if (raw === undefined || !/^-?\d{1,7}$/.test(raw)) return null;
+  const value = Number.parseInt(raw, 10);
+  return value >= 0 && value <= MAX_DROPDOWN_INDEX ? value : null;
+}
+
+function checkboxDataOf(checkbox: OoxmlNode, budget: NodeBudget): LegacyFormFieldData {
+  let checked: boolean | undefined;
+  let fallback: boolean | undefined;
+  let sizeHalfPoints: number | null = null;
+  // First-wins via its own flag ("first state element wins", like `checked` / `default`
+  // above): `??=` cannot express it here because a malformed first size also resolves null.
+  let sizeSeen = false;
+  let sizeAuto = false;
+  if (checkbox.kind !== 'textValue') {
+    for (const child of checkbox.children) {
+      if (budget.left-- <= 0) break;
+      if (child.kind === 'textValue') continue;
+      if (isWml(child, 'checked')) checked ??= onOffElementValue(child);
+      else if (isWml(child, 'default')) fallback ??= onOffElementValue(child);
+      else if (isWml(child, 'size')) {
+        if (!sizeSeen) {
+          sizeSeen = true;
+          sizeHalfPoints = checkboxSizeAttribute(child);
+        }
+      } else if (isWml(child, 'sizeAuto')) sizeAuto = true;
+      // Anything else under checkBox is ignored — never descended into.
+    }
+  }
+  return {
+    kind: 'checkbox',
+    checked: checked ?? fallback ?? false,
+    sizeHalfPoints: sizeAuto ? null : sizeHalfPoints,
+  };
+}
+
+function dropdownDataOf(list: OoxmlNode, budget: NodeBudget): LegacyFormFieldData {
+  let result: number | null = null;
+  let fallback: number | null = null;
+  // First-wins via their own flags, exactly like checkbox `w:size`: `??=` cannot express
+  // "first ELEMENT wins" because a malformed / out-of-range first value also resolves null,
+  // which let a later valid sibling shadow it.
+  let resultSeen = false;
+  let fallbackSeen = false;
+  const entries: string[] = [];
+  if (list.kind !== 'textValue') {
+    for (const child of list.children) {
+      if (budget.left-- <= 0) break;
+      if (child.kind === 'textValue') continue;
+      if (isWml(child, 'result')) {
+        if (!resultSeen) {
+          resultSeen = true;
+          result = dropdownIndexAttribute(child);
+        }
+      } else if (isWml(child, 'default')) {
+        if (!fallbackSeen) {
+          fallbackSeen = true;
+          fallback = dropdownIndexAttribute(child);
+        }
+      } else if (isWml(child, 'listEntry')) {
+        if (entries.length >= MAX_DROPDOWN_ENTRIES) continue;
+        const value = attributeValue(child, 'val');
+        if (value !== undefined) entries.push(value.slice(0, MAX_DROPDOWN_ENTRY_CHARS));
+      }
+      // Anything else under ddList is ignored — never descended into.
+    }
+  }
+  const inRange = (index: number | null): index is number =>
+    index !== null && index >= 0 && index < entries.length;
+  return {
+    kind: 'dropdown',
+    entries,
+    selectedIndex: inRange(result) ? result : inRange(fallback) ? fallback : 0,
+  };
+}
+
+/**
+ * Read a legacy form field's RENDER STATE from the `w:ffData` under a `w:fldChar`, bounded.
+ *
+ * The one sanctioned walk into `w:ffData`: fldChar → ffData → checkBox/ddList → leaf
+ * attributes, direct children only, no recursion, at most {@link MAX_FF_DATA_NODES} child
+ * visits. It reads the checkbox checked/size state and the dropdown entries/selection —
+ * NEVER `w:name`, `w:entryMacro`, `w:exitMacro`, `w:helpText`, `w:statusText`, `w:enabled`
+ * or `w:calcOnExit`: those carry attacker-supplied macro references and behavior, which
+ * rendering must not observe.
+ *
+ * Returns null for anything else (no ffData, a FORMTEXT ffData, malformed content), so
+ * callers fall back to the presence-only behavior of {@link hasLegacyFormFieldData}.
+ */
+export function legacyFormFieldDataOf(node: OoxmlNode): LegacyFormFieldData | null {
+  if (node.kind === 'textValue') return null;
+  if (fldCharType(node) === null) return null;
+  const budget: NodeBudget = { left: MAX_FF_DATA_NODES };
+  for (const child of node.children) {
+    if (budget.left-- <= 0) return null;
+    if (child.kind === 'textValue' || !isWml(child, 'ffData')) continue;
+    // First ffData wins; inside it, the first state element wins.
+    for (const entry of child.children) {
+      if (budget.left-- <= 0) return null;
+      if (entry.kind === 'textValue') continue;
+      if (isWml(entry, 'checkBox')) return checkboxDataOf(entry, budget);
+      if (isWml(entry, 'ddList')) return dropdownDataOf(entry, budget);
+      // `w:textInput` (FORMTEXT), `w:name`, macros, help/status text: deliberately not read.
+    }
+    return null;
+  }
+  return null;
 }
 
 /**
@@ -218,8 +420,24 @@ interface RunChildRef {
 
 const MERGEFORMAT_SUFFIX = /\s*\\\*\s*MERGEFORMAT\s*$/i;
 
+/**
+ * Caps hostile complex-field instruction buffers (fail closed → inert).
+ *
+ * ONE bound for the store's span parser and layout's field machine (which re-exports this
+ * constant): if they disagreed, FORMTEXT addressing here would diverge from what layout
+ * paints. Sized to admit a full-length `HYPERLINK` instruction — the same bound the
+ * `w:fldSimple` attribute lane applies (`MAX_HYPERLINK_INSTRUCTION_CHARS` in
+ * `layout/field-link.ts`), so a long URL behaves identically as a complex field and as a
+ * simple field. Short-grammar parsers (SYMBOL, MACROBUTTON) keep their own tighter local
+ * caps on purpose.
+ */
+export const MAX_FIELD_INSTRUCTION_CHARS = 4096;
+
 /** Whether a bounded instruction denotes Word's editable legacy text-form input. */
-export function isEditableFormTextInstruction(raw: string, maxChars = 256): boolean {
+export function isEditableFormTextInstruction(
+  raw: string,
+  maxChars = MAX_FIELD_INSTRUCTION_CHARS
+): boolean {
   if (raw.length > maxChars) return false;
   const collapsed = raw.replace(/\s+/g, ' ').trim().toUpperCase();
   if (collapsed.length > maxChars) return false;
@@ -244,7 +462,7 @@ export function parsedFieldSpansOf(
   options?: { readonly maxNesting?: number; readonly maxInstructionChars?: number }
 ): readonly ParsedFieldSpan[] {
   const maxNesting = options?.maxNesting ?? 4;
-  const maxInstructionChars = options?.maxInstructionChars ?? 256;
+  const maxInstructionChars = options?.maxInstructionChars ?? MAX_FIELD_INSTRUCTION_CHARS;
   const spans: ParsedFieldSpan[] = [];
 
   // Flatten run children in document order for the complex-field machine.
@@ -322,11 +540,20 @@ export function parsedFieldSpansOf(
     }
 
     // Scan forward for a matching outermost end; track nesting and instruction size.
+    // LIVE (`w:instrText`) and DELETED (`w:delInstrText`) chunks buffer separately, with
+    // per-buffer overflow: a tracked field-code edit puts both in one field, and the
+    // EFFECTIVE instruction is the live text when any live element exists, else the deleted
+    // text — the same rule layout's field machine applies, so addressing agrees with what
+    // is painted.
     let nesting = 0;
     let nestingOverflow = false;
     let instructionChars = 0;
     let instruction = '';
     let instructionOverflow = false;
+    let deletedChars = 0;
+    let deletedInstruction = '';
+    let deletedOverflow = false;
+    let sawLiveInstruction = false;
     let phase: 'instruction' | 'result' | 'done' = 'instruction';
     const removeIds: string[] = [];
     const resultFormatRunIds: string[] = [];
@@ -350,12 +577,25 @@ export function parsedFieldSpansOf(
       if (isInstrText(node)) {
         if (nesting === 1 && phase === 'instruction') {
           const chunk = instrTextValue(node);
-          instructionChars += chunk.length;
-          if (instructionChars > maxInstructionChars) {
-            instructionOverflow = true;
-            instruction = '';
-          } else if (!instructionOverflow) {
-            instruction += chunk;
+          if (isDeletedInstrText(node)) {
+            deletedChars += chunk.length;
+            if (deletedChars > maxInstructionChars) {
+              deletedOverflow = true;
+              deletedInstruction = '';
+            } else if (!deletedOverflow) {
+              deletedInstruction += chunk;
+            }
+          } else {
+            // A live element counts even when empty: accepting the tracked deletion
+            // leaves exactly that instruction.
+            sawLiveInstruction = true;
+            instructionChars += chunk.length;
+            if (instructionChars > maxInstructionChars) {
+              instructionOverflow = true;
+              instruction = '';
+            } else if (!instructionOverflow) {
+              instruction += chunk;
+            }
           }
         }
         if (nesting >= 1) removeIds.push(node.id);
@@ -421,9 +661,9 @@ export function parsedFieldSpansOf(
     }
 
     // Instruction overflow still yields an atomic unit (content stays one selectable
-    // object); evaluation elsewhere fails closed. `instructionOverflow` is retained for
-    // callers that want the signal via a separate scan.
-    void instructionOverflow;
+    // object); evaluation elsewhere fails closed — an overflowed buffer already cleared
+    // itself to '', so the effective instruction resolves inert without another check.
+    const effectiveInstruction = sawLiveInstruction ? instruction : deletedInstruction;
 
     // Empty result: format the separate run when present, else the begin run (matches
     // projection's style fallback when no result run donates `rPr`).
@@ -442,7 +682,7 @@ export function parsedFieldSpansOf(
       runId: current.runId,
       removeNodeIds: [...new Set(removeIds)],
       formatRunIds,
-      addressing: isEditableFormTextInstruction(instruction, maxInstructionChars)
+      addressing: isEditableFormTextInstruction(effectiveInstruction, maxInstructionChars)
         ? 'editable-result'
         : 'atomic',
     });

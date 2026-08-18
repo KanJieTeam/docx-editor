@@ -14,7 +14,27 @@
 import type { AllowlistedPageField, StoryPageFieldNeeds } from './field-instruction.ts';
 import { NO_STORY_PAGE_FIELDS } from './field-instruction.ts';
 import { formatDecimal, formatNumFmt } from './numbering-format.ts';
-import type { HeaderFooterStoryRecord, PageRecord, SemanticLayout } from './semantic-records.ts';
+import type {
+  BlockFragmentRecord,
+  HeaderFooterStoryRecord,
+  LineRecord,
+  PageRecord,
+  SemanticLayout,
+  StyleSpanRecord,
+} from './semantic-records.ts';
+
+/**
+ * Placeholder a body PAGE/NUMPAGES/SECTIONPAGES atom paints during measurement.
+ *
+ * Body content flows once, before the page count is known, so the real value cannot be measured
+ * in place. The paragraph walk reserves one model unit and paints this single digit; document
+ * finalize substitutes the value the atom lands on ({@link substituteBodyPageFields}). The field
+ * is measured at this one-digit width. A one-digit value lays out exactly. A multi-digit value
+ * that is NOT last on its line paints its extra digits over the following same-line content,
+ * because that content was placed at the one-digit x; Word instead re-measures and reflows.
+ * Last-on-line and label usage (the common cases) are unaffected.
+ */
+export const PAGE_FIELD_PLACEHOLDER = '0';
 
 /**
  * Page-field evaluation context for furniture projection.
@@ -141,13 +161,145 @@ export function withPageFieldSources(
   return changed ? next : (pages as PageRecord[]);
 }
 
+/** True when any span on this line carries a body page-field marker. */
+function lineHasBodyPageField(line: LineRecord): boolean {
+  for (const span of line.spans) {
+    if (span.fieldAtom?.pageField) return true;
+  }
+  return false;
+}
+
 /**
- * Project allowlisted PAGE/NUMPAGES/SECTIONPAGES onto every page's read-only furniture once
- * the document page count is known. Body stories are unchanged.
+ * True when a paragraph or a nested-table cell in this block carries a body page field.
  *
- * Uses {@link PageFieldSource} when present (section restart + SECTIONPAGES + fmt). Absent
- * source keeps physical 1-based indices (`page.index + 1`) and treats the whole document as
- * one section — the empty-`pgNumType` comprehensive-fixture behaviour.
+ * Recurses table rows and cells, matching {@link substituteBodyPageFields}'s reach, so a page's
+ * `hasBodyPageFields` flag agrees exactly with whether the substitution walk would change
+ * anything. The marker is a property of the paragraph content, not of the page, so the answer is
+ * the same across every sheet.
+ */
+function blockHasBodyPageField(block: BlockFragmentRecord): boolean {
+  if (block.kind === 'paragraph') {
+    for (const line of block.lines) {
+      if (lineHasBodyPageField(line)) return true;
+    }
+    return false;
+  }
+  for (const row of block.rows) {
+    for (const cell of row.cells) {
+      for (const inner of cell.blocks) {
+        if (blockHasBodyPageField(inner)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Fold a flushed body page's fragments into the two facts pagination needs from them: the deepest
+ * used bottom (column-separator sizing) and whether ANY body page field is present. Both fall out
+ * of the one pass the page assembly already had to make, so the flag costs no extra traversal.
+ *
+ * The `hasBodyPageFields` result is stamped on the {@link PageRecord} and rides it through
+ * incremental reuse. So a page rebuilt this pass is walked once here; a page reused by identity
+ * keeps its fresh, content-derived answer without a second scan. When the flag is `false`,
+ * {@link finalizePageFieldProjection} skips the substitution walk for that page entirely — the
+ * common case, since page numbers usually live in footers, not the body flow.
+ */
+export function summarizeFlushedPage(
+  fragments: readonly BlockFragmentRecord[],
+  regionTop: number
+): { readonly usedBottom: number; readonly hasBodyPageFields: boolean } {
+  let usedBottom = regionTop;
+  let hasBodyPageFields = false;
+  for (const fragment of fragments) {
+    usedBottom = Math.max(usedBottom, fragment.box.y + fragment.box.height);
+    if (!hasBodyPageFields && blockHasBodyPageField(fragment)) hasBodyPageFields = true;
+  }
+  return { usedBottom, hasBodyPageFields };
+}
+
+/**
+ * Substitute a body page-field placeholder line, or return it by identity.
+ *
+ * Only a span carrying a {@link FieldAtomMarker.pageField} marker is touched, and only when the
+ * value the atom lands on differs from what the span already paints. The span's model `range`
+ * stays its reserved one-unit width whatever the substituted text length is — paint and the
+ * offset accounting clamp to that width, so a multi-digit page number never lengthens the model.
+ */
+function substituteBodyPageFieldLine(line: LineRecord, context: FieldPageContext): LineRecord {
+  let spans: StyleSpanRecord[] | null = null;
+  for (let index = 0; index < line.spans.length; index += 1) {
+    const span = line.spans[index]!;
+    const kind = span.fieldAtom?.pageField?.kind;
+    if (!kind) continue;
+    const text = projectPageFieldValue(kind, context);
+    if (text === span.text) continue;
+    if (!spans) spans = line.spans.slice();
+    spans[index] = { ...span, text };
+  }
+  return spans ? { ...line, spans } : line;
+}
+
+/**
+ * Substitute every body page-field placeholder in one block list against a page's context, or
+ * return the list by identity when nothing changed.
+ *
+ * Recurses through table rows and cells, so a PAGE field inside a body table cell resolves the
+ * same way a top-level one does. New records are minted only along the path to a changed span,
+ * mirroring {@link finalizePageFieldProjection}'s identity discipline so incremental layout keeps
+ * reusing untouched pages.
+ */
+export function substituteBodyPageFields(
+  blocks: readonly BlockFragmentRecord[],
+  context: FieldPageContext
+): readonly BlockFragmentRecord[] {
+  let next: BlockFragmentRecord[] | null = null;
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index]!;
+    let replacement: BlockFragmentRecord = block;
+    if (block.kind === 'paragraph') {
+      let mutatedLines: LineRecord[] | null = null;
+      for (let lineIndex = 0; lineIndex < block.lines.length; lineIndex += 1) {
+        const line = block.lines[lineIndex]!;
+        const nextLine = substituteBodyPageFieldLine(line, context);
+        if (nextLine === line) continue;
+        if (!mutatedLines) mutatedLines = block.lines.slice();
+        mutatedLines[lineIndex] = nextLine;
+      }
+      if (mutatedLines) replacement = { ...block, lines: mutatedLines };
+    } else {
+      let mutatedRows: (typeof block.rows)[number][] | null = null;
+      for (let rowIndex = 0; rowIndex < block.rows.length; rowIndex += 1) {
+        const row = block.rows[rowIndex]!;
+        let mutatedCells: (typeof row.cells)[number][] | null = null;
+        for (let cellIndex = 0; cellIndex < row.cells.length; cellIndex += 1) {
+          const cell = row.cells[cellIndex]!;
+          const cellBlocks = substituteBodyPageFields(cell.blocks, context);
+          if (cellBlocks === cell.blocks) continue;
+          if (!mutatedCells) mutatedCells = row.cells.slice();
+          mutatedCells[cellIndex] = { ...cell, blocks: cellBlocks };
+        }
+        if (!mutatedCells) continue;
+        if (!mutatedRows) mutatedRows = block.rows.slice();
+        mutatedRows[rowIndex] = { ...row, cells: mutatedCells };
+      }
+      if (mutatedRows) replacement = { ...block, rows: mutatedRows };
+    }
+    if (replacement === block) continue;
+    if (!next) next = blocks.slice();
+    next[index] = replacement;
+  }
+  return next ?? blocks;
+}
+
+/**
+ * Project allowlisted PAGE/NUMPAGES/SECTIONPAGES once the document page count is known.
+ *
+ * Header/footer furniture substitutes through each story's transient projector. Body flow (and
+ * body tables) substitutes the placeholders the paragraph walk reserved, using the SAME per-page
+ * context — {@link PageFieldSource} when present (section restart + SECTIONPAGES + fmt), else the
+ * physical 1-based index and the whole document as one section (empty-`pgNumType` behaviour).
+ * Pages and stories with no page field are returned by identity.
  */
 export function finalizePageFieldProjection(layout: SemanticLayout): SemanticLayout {
   const pageCount = layout.pages.length;
@@ -175,11 +327,22 @@ export function finalizePageFieldProjection(layout: SemanticLayout): SemanticLay
     };
     const header = project(page.header);
     const footer = project(page.footer);
-    if (header === page.header && footer === page.footer) return page;
+    // Fast-out: a page assembled with no body page field carries `hasBodyPageFields: false`, so
+    // its whole fragment/table walk is skipped. An `undefined` flag (a page built by a path that
+    // does not stamp it) still walks, which is safe — over-walking never drops a substitution.
+    const fragments =
+      page.hasBodyPageFields === false
+        ? page.fragments
+        : substituteBodyPageFields(page.fragments, context);
+    if (header === page.header && footer === page.footer && fragments === page.fragments) {
+      return page;
+    }
+    if (fragments !== page.fragments) changed = true;
     return {
       ...page,
       ...(header !== undefined ? { header } : {}),
       ...(footer !== undefined ? { footer } : {}),
+      ...(fragments !== page.fragments ? { fragments } : {}),
     };
   });
 

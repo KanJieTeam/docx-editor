@@ -10,6 +10,7 @@
 // two boxes for pagination.
 
 import type {
+  DocumentProperties,
   OoxmlElement,
   OoxmlNode,
   OoxmlPart,
@@ -19,7 +20,9 @@ import { WML_MAIN_DOCUMENT_PART } from '../store/package/opc-names.ts';
 import {
   finalizePageFieldProjection,
   storyNeedsPageFields,
+  summarizeFlushedPage,
   withPageFieldSources,
+  type FieldLinkProjector,
   type HyperlinkProjector,
 } from './field-projection.ts';
 import { paragraphLayoutKey, type ParagraphLayoutCache } from './layout-cache.ts';
@@ -138,7 +141,7 @@ import {
   type SectionColumns,
 } from './section-properties.ts';
 import { resolveSectionColumns, type ResolvedSectionColumns } from './section-columns.ts';
-import { layoutSemanticDocumentWithNotes } from './note-pagination.ts';
+import { inheritNotesLayoutInput, layoutSemanticDocumentWithNotes } from './note-pagination.ts';
 import { noteMarksCacheToken } from './note-projection.ts';
 import {
   DEFAULT_PAGE_GEOMETRY,
@@ -149,7 +152,6 @@ import {
   type ContentControlGeometryFragment,
   type ContentControlLevel,
   type ContentControlLock,
-  type ContentControlMappedType,
   type HeaderFooterStoryRecord,
   type LayoutBox,
   type LineRecord,
@@ -166,6 +168,14 @@ import {
   contentControlContentChildren,
   isContentControl,
 } from '../store/package/content-control-walk.ts';
+import {
+  contentControlPropertiesOf,
+  controlLevelOf,
+  mapContentControlType,
+  parseContentControlLock,
+  propertyChild,
+  propertyVal,
+} from './content-control-properties.ts';
 import type { NumberingIndex } from './numbering-index.ts';
 import { firstLineShift, withResolvedListItems, type ResolvedListItem } from './list-resolve.ts';
 import { publishListMarker } from './list-marker.ts';
@@ -299,6 +309,19 @@ export interface SemanticLayoutOptions {
    * degradation a headless test or a furniture-only pass gets, and it is the safe one.
    */
   readonly projectLink?: HyperlinkProjector;
+  /**
+   * Turns a parsed HYPERLINK field instruction into the SANITIZED record its result carries.
+   *
+   * An option for the same reason as {@link projectLink}: the raw target must cross the
+   * surface's href trust boundary, which layout cannot see. Absent means the field's cached
+   * result still measures, breaks and paints — it simply is not clickable.
+   */
+  readonly projectFieldLink?: FieldLinkProjector;
+  /**
+   * The document's parsed metadata, for document-property fields (TITLE, AUTHOR, …). Read once
+   * by the surface and shared across body, table, note and header/footer flows.
+   */
+  readonly documentProperties?: DocumentProperties;
   /**
    * Footnote/endnote layout input. When present, body layout projects note marks and a
    * post-pass attaches note areas (with bounded reflow for pageBottom reservation).
@@ -532,8 +555,11 @@ export function layoutSemanticDocument(
     return finish(runBody(optionsWithLists));
   }
 
+  // Notes inherit the body's projector seams and document properties (link, field link, doc
+  // props) unless the notes input pinned its own — see `inheritNotesLayoutInput`.
+  const notesInput = inheritNotesLayoutInput(options.notes, options);
   return finish(
-    layoutSemanticDocumentWithNotes(part, sections, optionsWithLists, options.notes, runBody)
+    layoutSemanticDocumentWithNotes(part, sections, optionsWithLists, notesInput, runBody)
   );
 }
 
@@ -1257,10 +1283,7 @@ function layoutBlocksPass(
     const box = pageBox(index);
     const header = furnitureFor('header', index, box);
     const footer = furnitureFor('footer', index, box);
-    const usedBottom = pageFragments.reduce(
-      (bottom, fragment) => Math.max(bottom, fragment.box.y + fragment.box.height),
-      columnRegionTop
-    );
+    const { usedBottom, hasBodyPageFields } = summarizeFlushedPage(pageFragments, columnRegionTop);
     pages.push({
       id: `page-${index}`,
       index,
@@ -1272,6 +1295,7 @@ function layoutBlocksPass(
         height: baseContentHeight,
       },
       fragments: pageFragments,
+      hasBodyPageFields,
       ...(columns.separator
         ? {
             columnSeparators: columns.gaps.map((gap, separatorIndex) => ({
@@ -1351,6 +1375,7 @@ function layoutBlocksPass(
       styleCascade,
       ...(defaultTabStopPt !== undefined ? { defaultTabStopPt } : {}),
       ...(displayMode ? { displayMode } : {}),
+      ...(options.documentProperties ? { documentProperties: options.documentProperties } : {}),
       inlineDrawingLayout: options.inlineDrawingLayout,
       drawingTokenForParagraph: options.drawingTokenForParagraph,
     });
@@ -1372,6 +1397,10 @@ function layoutBlocksPass(
     listItems,
     ...(defaultTabStopPt !== undefined ? { defaultTabStopPt } : {}),
     ...(options.projectLink ? { projectLink: options.projectLink } : {}),
+    ...(options.projectFieldLink ? { projectFieldLink: options.projectFieldLink } : {}),
+    ...(options.documentProperties ? { documentProperties: options.documentProperties } : {}),
+    // Body flow: page fields in table cells paint a placeholder for document finalize to fill.
+    bodyPageFields: true,
     ...(options.noteMarks ? { noteMarks: options.noteMarks } : {}),
     ...(options.inlineDrawingLayout ? { inlineDrawingLayout: options.inlineDrawingLayout } : {}),
     ...(options.drawingTokenForParagraph
@@ -1495,6 +1524,10 @@ function layoutBlocksPass(
         startOffset,
         marginExtent: { left: 0, right: entry.indent.left + available + entry.indent.right },
         ...(options.projectLink ? { projectLink: options.projectLink } : {}),
+        ...(options.projectFieldLink ? { projectFieldLink: options.projectFieldLink } : {}),
+        ...(options.documentProperties ? { documentProperties: options.documentProperties } : {}),
+        // Body flow: an empty-cache page field paints a placeholder finalize substitutes per page.
+        bodyPageFields: true,
         displayMode,
         ...(options.noteMarks ? { noteMarks: options.noteMarks } : {}),
         ...(options.inlineDrawingLayout
@@ -2811,95 +2844,6 @@ function layoutBlocksWithGeometry(
 // ---------------------------------------------------------------------------------------
 // Content-control boundary records
 // ---------------------------------------------------------------------------------------
-
-const WML_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
-const W14_NS = 'http://schemas.microsoft.com/office/word/2010/wordml';
-const W15_NS = 'http://schemas.microsoft.com/office/word/2012/wordml';
-
-function wmlValOf(node: OoxmlNode): string | undefined {
-  if (node.kind === 'textValue') return undefined;
-  for (const attribute of node.attributes) {
-    if (attribute.localName === 'val' && attribute.namespaceUri === WML_NS) return attribute.value;
-  }
-  return undefined;
-}
-
-function contentControlPropertiesOf(control: OoxmlElement): OoxmlElement | undefined {
-  for (const child of control.children) {
-    if (child.kind === 'textValue') continue;
-    if (child.kind === 'contentControlProperties' || child.localName === 'sdtPr') return child;
-  }
-  return undefined;
-}
-
-function propertyChild(
-  properties: OoxmlElement | undefined,
-  localName: string
-): OoxmlElement | undefined {
-  if (!properties) return undefined;
-  for (const child of properties.children) {
-    if (child.kind === 'textValue') continue;
-    if (child.localName === localName) return child;
-  }
-  return undefined;
-}
-
-function propertyVal(properties: OoxmlElement | undefined, localName: string): string | undefined {
-  const child = propertyChild(properties, localName);
-  return child ? wmlValOf(child) : undefined;
-}
-
-function parseContentControlLock(value: string | undefined): ContentControlLock {
-  if (value === 'sdtLocked' || value === 'contentLocked' || value === 'sdtContentLocked') {
-    return value;
-  }
-  return 'unlocked';
-}
-
-function mapContentControlType(properties: OoxmlElement | undefined): ContentControlMappedType {
-  if (!properties) return 'richText';
-  for (const child of properties.children) {
-    if (child.kind === 'textValue') continue;
-    const kind = child.kind;
-    const localName = child.localName;
-    const namespaceUri = child.namespaceUri;
-    // Typed markers after the SDT merge; `localName` covers demoted/generic fallbacks.
-    // Do not match `kind === 'text'` — that is `w:t`, not `CT_SdtText` (`contentControlText`).
-    if (kind === 'contentControlDropDownList' || localName === 'dropDownList') return 'dropdown';
-    if (kind === 'contentControlComboBox' || localName === 'comboBox') return 'comboBox';
-    if (kind === 'contentControlDate' || localName === 'date') return 'date';
-    if (localName === 'picture') return 'picture';
-    if (kind === 'contentControlText' || localName === 'text') return 'plainText';
-    if (localName === 'richText') return 'richText';
-    if (
-      kind === 'contentControlCheckbox' ||
-      (localName === 'checkbox' && namespaceUri === W14_NS)
-    ) {
-      return 'checkbox';
-    }
-    if (localName === 'repeatingSection' && namespaceUri === W15_NS) {
-      return 'repeatingSection';
-    }
-  }
-  return 'richText';
-}
-
-function controlLevelOf(control: OoxmlElement): ContentControlLevel {
-  const classify = (nodes: readonly OoxmlNode[], depth: number): ContentControlLevel | null => {
-    for (const child of nodes) {
-      if (child.kind === 'textValue') continue;
-      if (child.kind === 'tableRow') return 'row';
-      if (child.kind === 'tableCell') return 'cell';
-      if (child.kind === 'paragraph' || child.kind === 'table') return 'block';
-      if (isContentControl(child) && depth < MAX_SDT_NESTING) {
-        const nested = classify(contentControlContentChildren(child), depth + 1);
-        if (nested) return nested;
-      }
-    }
-    return null;
-  };
-  return classify(contentControlContentChildren(control), 0) ?? 'inline';
-}
 
 /**
  * Fingerprint of every control wrapper's chrome metadata — not its content.

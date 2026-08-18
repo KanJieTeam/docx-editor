@@ -10,7 +10,14 @@
 
 import { WML_NAMESPACE_URI, type OoxmlNode, type OoxmlProperty } from '@docx-editor.dev/core/store';
 import type { HardBreakKind } from '@docx-editor.dev/core/store';
+import type { LegacyFormFieldData } from '../store/package/field-nodes.ts';
 import type { InlineDrawingLayoutInput } from './drawing-layout.ts';
+import type { ButtonFieldSpec } from './field-button.ts';
+import type { DocPropertyField } from './field-doc-property.ts';
+import type { FormFieldKind } from './field-form.ts';
+import type { AllowlistedPageField } from './field-instruction.ts';
+import type { HyperlinkFieldSpec } from './field-link.ts';
+import type { SymbolFieldSpec } from './field-symbol.ts';
 import type { RevisionAttribution } from './revision-projection.ts';
 import type { ResolvedRunStyle } from './run-style.ts';
 import type { SpanLinkRecord } from './semantic-records.ts';
@@ -45,6 +52,15 @@ export interface FieldAtomMarker {
    * turns it off — because they mark the blanks somebody is meant to fill in.
    */
   readonly formField: boolean;
+  /**
+   * A BODY PAGE / NUMPAGES / SECTIONPAGES atom whose value depends on pagination.
+   *
+   * The paragraph walk cannot know which page the field lands on — layout runs before the page
+   * count — so it paints a placeholder and records the field's kind here. Document finalize
+   * (`substituteBodyPageFields`) reads this marker and substitutes the real value per page.
+   * Absent in headers/footers, which evaluate live through their own per-page projector.
+   */
+  readonly pageField?: { readonly kind: AllowlistedPageField };
 }
 
 /**
@@ -153,4 +169,151 @@ export function positionalTabOf(node: OoxmlNode): PositionalTab | null {
       ? { leader: leader as NonNullable<PositionalTab['leader']> }
       : {}),
   };
+}
+
+/**
+ * How layout turns a typed `w:hyperlink` node into the sanitized record spans carry.
+ *
+ * Injected rather than computed here because resolving `r:id` needs the PACKAGE's
+ * relationships and this module only ever sees one part's tree. `null` means the caller
+ * declined to project — the runs still measure and paint, they simply carry no link, which is
+ * the right degradation: text is never lost for want of a target.
+ */
+export type HyperlinkProjector = (link: OoxmlNode) => SpanLinkRecord | null;
+
+/**
+ * How layout turns a parsed HYPERLINK field instruction into the sanitized record spans carry.
+ *
+ * Injected for the same reason as {@link HyperlinkProjector}: the spec's raw target must cross
+ * the surface's ONE href trust boundary, and layout owns no sanitization policy. `null` means
+ * no link — the cached result still paints as plain text, which is the right degradation.
+ */
+export type FieldLinkProjector = (spec: HyperlinkFieldSpec) => SpanLinkRecord | null;
+
+/**
+ * Pending live or inert-cache projection for one atomic field unit.
+ *
+ * Well-formed computed fields contribute exactly one UTF-16 model unit. Cached result text
+ * is not independently addressable — it only donates display text and result-run style.
+ * Missing `end` demotes: buffered cache is flushed as ordinary pieces with real lengths.
+ *
+ * The state only; the machinery that fills and flushes it stays closure-bound inside
+ * `piecesOfParagraph`.
+ */
+export interface PendingFieldProjection {
+  /** Allowlisted kind when live-projecting; null paints inert cached text at the atom. */
+  kind: AllowlistedPageField | null;
+  /**
+   * Parsed SYMBOL instruction, or null when the field is not one.
+   *
+   * Captured while the machine still holds the raw instruction — at `separate`, or at the
+   * outermost `end` for the begin/instr/end shape Word also writes — because `onFldCharEnd`
+   * resets the buffer before the flush reads anything. SYMBOL has no cached result in real
+   * files, so the flush renders from this and it wins over any stale cached text.
+   */
+  symbolSpec: SymbolFieldSpec | null;
+  /**
+   * Parsed HYPERLINK instruction, or null when the field is not one.
+   *
+   * Captured at the same points as {@link symbolSpec} and for the same reason. Only consulted
+   * when {@link resultLink} stays empty: an ENCLOSING `w:hyperlink` outranks the field's own
+   * instruction, exactly as Word resolves the nesting.
+   */
+  linkSpec: HyperlinkFieldSpec | null;
+  /**
+   * FORMCHECKBOX / FORMDROPDOWN instruction, or null when the field is neither.
+   *
+   * Captured at the same points as {@link symbolSpec}. Consulted with {@link formData}: the
+   * checkbox state is authoritative over any stale cached glyph, the dropdown defers to a
+   * non-empty cached result.
+   */
+  formSpec: FormFieldKind | null;
+  /**
+   * Parsed MACROBUTTON / GOTOBUTTON instruction, or null when the field is neither.
+   *
+   * Captured at the same points as {@link symbolSpec}. Display text only — the macro / target
+   * is discarded at parse and nothing ever executes or navigates. Unlike SYMBOL, a cached
+   * result WINS when present (it is what Word last painted); the flush synthesizes from this
+   * only when the cache is empty.
+   */
+  buttonSpec: ButtonFieldSpec | null;
+  /**
+   * Recognized document-property field (TITLE / AUTHOR / … / `DOCPROPERTY "Name"`), or null.
+   *
+   * Captured at the same points as {@link symbolSpec}. Resolved against the document's parsed
+   * properties at flush time (not here — the properties are document-global, not on the field).
+   * A cached result WINS when present, exactly like {@link buttonSpec}; synthesis fills only an
+   * empty cache.
+   */
+  docPropertySpec: DocPropertyField | null;
+  /**
+   * Bounded `w:ffData` render state read at `begin` (`legacyFormFieldDataOf` — state only,
+   * macros never), or null when absent or malformed. {@link formField} stays presence-based:
+   * ffData present with an unreadable payload still shades as a form field.
+   */
+  formData: LegacyFormFieldData | null;
+  /** True when this pending field is a well-formed atomic unit (begin will close). */
+  atomic: boolean;
+  /** True when this closed FORMTEXT field exposes its authored result as ordinary text. */
+  editableResult: boolean;
+  atomStart: number;
+  props: readonly OoxmlProperty[];
+  style: ResolvedRunStyle;
+  capturedResultStyle: boolean;
+  /** Cached result text (for inert display or demotion flush). */
+  cachedText: string;
+  /**
+   * True once result-phase content the current display mode KEEPS was seen — visible or
+   * vanish-hidden. Only content with model text sets it (result text, tab / break, `w:sym`);
+   * drawings, `w:ptab` and note references never do.
+   *
+   * `cachedText` alone cannot tell "the file cached no result" from "the file cached one and
+   * hid it": both leave it empty. Synthesis (MACROBUTTON / GOTOBUTTON display text, the
+   * FORMDROPDOWN selected entry) fills only the first — painting over a vanished result would
+   * resurrect what the document hides. A result the display mode resolves AWAY (a
+   * `w:del`-wrapped cache in the proposed view) does not set it: that view has no cached
+   * result left, and Word synthesizes there after the deletion is accepted. FORMCHECKBOX
+   * ignores this on purpose: its ffData state is the authority, and a hidden FIELD is
+   * already covered by the flush's style guard.
+   */
+  sawResultContent: boolean;
+  /** Demotion-only: ordinary pieces when the field fails to close. */
+  buffered: FieldAwarePiece[];
+  /** Demotion-only running offset mirror while buffering ordinary pieces. */
+  bufferOffset: number;
+  /**
+   * The revision wrappers this field's displayed text sits inside, captured while the walk was
+   * still INSIDE them.
+   *
+   * An ATOMIC field's result is buffered at the run that carries it and flushed at `fldChar
+   * end`, by which point the depth-first walk has left the wrapper and restored the live stack
+   * to empty. Reading the live stack at flush time therefore attributed a tracked field result
+   * to nothing at all, and it painted as ordinary unchanged text — a deletion with no strike,
+   * an insertion with no underline.
+   *
+   * Both shapes reach here: a `w:del` around only the RESULT run with `begin`/`end` outside it
+   * (how Word records a form field whose value was replaced), and a wrapper around the whole
+   * `begin`…`end` sequence. The second used to demote instead — `atomicFieldSpansOf` did not
+   * descend into revision wrappers — until that walk was widened so the store and layout would
+   * stop disagreeing about what such a field is worth. Anything reasoning about "a wrapped field
+   * never forms an atom" is out of date; `commitAtomicField` now has to resolve visibility
+   * itself, because it can be reached with a stack that the display mode resolves away.
+   *
+   * A field whose result runs carry DIFFERENT stacks collapses to the first: the atom is one
+   * model unit and Word treats a field as one decision, so splitting it would invent a boundary
+   * the model does not have.
+   */
+  resultRevisions: readonly RevisionAttribution[];
+  /** Whether {@link resultRevisions} has been donated yet — an EMPTY stack is a real answer. */
+  capturedResultRevisions: boolean;
+  /** `w:ffData` on the begin marker — a legacy form field, which Word shades on its own rule. */
+  formField: boolean;
+  /**
+   * The link enclosing the displayed result, captured at `begin` for the same reason.
+   *
+   * Reachable where the revision capture is not: `atomicFieldSpansOf` DOES descend into
+   * `w:hyperlink`, so a field inside a link is still an atom, and without this its result was
+   * the one run in the link painting with no href.
+   */
+  resultLink?: SpanLinkRecord;
 }

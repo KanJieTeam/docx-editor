@@ -27,7 +27,14 @@ export type PageReuseGuard =
    */
   | 'flow'
   /** Re-derived over the assembled page list every pass, so a reused page is re-annotated. */
-  | 'rebuilt';
+  | 'rebuilt'
+  /**
+   * A pure function of another field that is ALREADY guarded, computed at page build from it,
+   * so it cannot be stale unless that field is — and that field's guard already prevents it.
+   * The same role `semantic-fragment-signature.ts` calls `covered`. Only a field with that
+   * proof gets this; it is not a place to park a field whose mechanism is merely unclear.
+   */
+  | 'covered';
 
 export const PAGE_REUSE_GUARDS = {
   id: 'identity',
@@ -37,6 +44,12 @@ export const PAGE_REUSE_GUARDS = {
   box: 'context',
   contentBox: 'context',
   fragments: 'flow',
+  // Computed in `flushPage` from the page's own fragments — true when any span carries the
+  // body page-field marker. A pure function of `fragments` (`flow`), so a reused page whose
+  // fragments are unchanged cannot carry a stale flag. It only gates whether the
+  // `pageFieldSource`-driven body substitution runs; the value it substitutes is `rebuilt`
+  // every pass, so a numbering-only change still re-runs it on a page whose flag stays true.
+  hasBodyPageFields: 'covered',
   // `columnsContext` carries `w:cols`. Note that a multi-column section DOES reach reuse: the
   // resume and convergence paths require `resumable`, which is single-column, but the
   // unchanged-document exit gates on `comparable` and returns the previous pages by identity.

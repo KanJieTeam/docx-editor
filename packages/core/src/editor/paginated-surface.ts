@@ -129,6 +129,7 @@ import { createSurfaceStructure } from './surface-structure.ts';
 // Deep import, not the store barrel: re-exporting a bound from there pulls the whole store
 // namespace into the published editor-api surface for one number.
 import { MIN_TABLE_COLUMN_WIDTH_TWIPS } from '../store/store/table-constraints.ts';
+import { createFieldLinkRegistry } from './surface-field-links.ts';
 import { createHyperlinkOps } from './surface-hyperlinks.ts';
 import { createSurfaceNavigation } from './surface-navigation.ts';
 import { drawingLinkByIdFromLayout } from './drawing-link-index.ts';
@@ -596,6 +597,13 @@ export function mountPaginatedSurface(
   };
 
   /**
+   * The SAME boundary for HYPERLINK fields: the raw instruction target crosses
+   * `sanitizeHref` inside the registry, which also remembers every minted record so a click
+   * on the painted anchor resolves through `linkById` like a typed link's does.
+   */
+  const fieldLinks = createFieldLinkRegistry();
+
+  /**
    * The session as every lane sees it: the mode rules applied to `applyTreeOps`.
    *
    * Gating one function inside this file was not enough. Breaks, lists, indent, section
@@ -690,6 +698,10 @@ export function mountPaginatedSurface(
   });
   const hyperlinks = createHyperlinkOps({
     session: gatedSession,
+    // A HYPERLINK field is not a tree node, so its link resolves from the layout projection
+    // plus the field-link registry rather than the typed tree walk.
+    layout: () => currentLayout,
+    fieldLinkById: (linkId) => fieldLinks.linkById(linkId),
     // Asked BEFORE the relationship is minted. The gated session refuses the ops in viewing mode
     // either way, but the mint is a package write that the refusal does not roll back — Ctrl+K in a
     // document open for reading left its target declared in `.rels`.
@@ -707,7 +719,9 @@ export function mountPaginatedSurface(
     scale: () => scale,
     layout: () => currentLayout,
     bookmarks: () => session.bookmarks(),
-    linkById: (linkId) => hyperlinks.linkById(linkId),
+    // Field-derived ids first: they are a closed `field-hyperlink:` namespace, and the typed
+    // lane's tree walk could never answer for them.
+    linkById: (linkId) => fieldLinks.linkById(linkId) ?? hyperlinks.linkById(linkId),
     drawingLinkById: (drawingNodeId) => drawingLinkByIdFromLayout(currentLayout, drawingNodeId),
     setSelection: (position) => setSelection(collapsedAt(position)),
     isCollapsedSelection: () =>
@@ -746,6 +760,8 @@ export function mountPaginatedSurface(
       sectionFurniture: furnitureSource.sectionFurniture(),
       furniture: furnitureSource.furniture(),
       projectLink,
+      projectFieldLink: (spec) => fieldLinks.project(spec),
+      documentProperties: session.documentProperties(),
       inlineDrawingLayout: drawingBundle.bodyContext,
       drawingTokenForParagraph: (paragraph) =>
         drawingBundle.drawingTokenForParagraph(paragraph, session.part().name),

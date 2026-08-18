@@ -5,13 +5,19 @@
 // position-independent — span x offsets are relative to the paragraph origin — which is
 // what lets one cached break serve the same content at any x (body or any cell).
 
-import { PAGE_BREAK_CHAR, type OoxmlNode, type OoxmlProperty } from '@docx-editor.dev/core/store';
+import {
+  PAGE_BREAK_CHAR,
+  type DocumentProperties,
+  type OoxmlNode,
+  type OoxmlProperty,
+} from '@docx-editor.dev/core/store';
 import {
   piecesOfParagraph,
   propertiesOfRunContainer,
   type FieldAwarePiece,
   type FieldPageContext,
   type PositionalTab,
+  type FieldLinkProjector,
   type HyperlinkProjector,
   type ModelRange,
   type RunPropertyCascader,
@@ -107,6 +113,28 @@ export interface ParagraphFlowOptions {
    * link, which is what a table-cell or furniture pass without a resolver gets.
    */
   readonly projectLink?: HyperlinkProjector;
+  /**
+   * Turns a parsed HYPERLINK field instruction into the sanitized record its result carries.
+   *
+   * Same seam and same degradation as {@link projectLink}: absent, the field's cached result
+   * still measures and paints — it simply is not a link.
+   */
+  readonly projectFieldLink?: FieldLinkProjector;
+  /**
+   * The document's parsed metadata, for document-property fields (TITLE, AUTHOR, …).
+   *
+   * Document-global rather than per-paragraph — the surface reads it once from the store and
+   * hands the same object to every flow. Absent means such a field paints its cached result or
+   * nothing, the same degradation as a furniture-only pass.
+   */
+  readonly documentProperties?: DocumentProperties;
+  /**
+   * True when this is BODY flow, whose PAGE/NUMPAGES/SECTIONPAGES fields are substituted at
+   * document finalize (`substituteBodyPageFields`). Only then does an empty-cache page field
+   * paint a placeholder digit; headers/footers, notes and text boxes leave it blank, keeping
+   * their own live path or their deferral, so a placeholder is never stranded unsubstituted.
+   */
+  readonly bodyPageFields?: boolean;
   /**
    * Which revisions this break resolves away.
    *
@@ -656,7 +684,10 @@ export function breakParagraph(
     flow?.displayMode ?? DEFAULT_REVISION_DISPLAY_MODE,
     deletedRanges,
     flow?.inlineDrawingLayout,
-    flow?.themeFonts
+    flow?.themeFonts,
+    flow?.projectFieldLink,
+    flow?.documentProperties,
+    flow?.bodyPageFields ?? false
   );
   const startOffset = Math.max(0, flow?.startOffset ?? 0);
   const pieces = allPieces.flatMap((piece): FieldAwarePiece[] => {

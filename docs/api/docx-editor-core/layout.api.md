@@ -596,7 +596,13 @@ export function expandLvlText(lvlText: string, counters: readonly number[], form
 // @public
 export interface FieldAtomMarker {
     readonly formField: boolean;
+    readonly pageField?: {
+        readonly kind: AllowlistedPageField;
+    };
 }
+
+// @public
+export type FieldLinkProjector = (spec: HyperlinkFieldSpec) => SpanLinkRecord | null;
 
 // @public
 export function filterRefsOnPage(page: PageRecord, allRefs: readonly PageRefHit[], refIndex?: PageRefIndex): readonly PageRefHit[];
@@ -1010,6 +1016,13 @@ export function hitTestSemantic(layout: SemanticLayout, point: {
 export function hitTestSheet(layout: SemanticLayout, point: HitPoint, options?: HitTestOptions): SemanticHit | null;
 
 // @public
+export interface HyperlinkFieldSpec {
+    readonly anchor: string | null;
+    readonly target: string | null;
+    readonly tooltip: string | null;
+}
+
+// @public
 export type HyperlinkProjector = (link: OoxmlNode) => SpanLinkRecord | null;
 
 // @public
@@ -1096,7 +1109,7 @@ export interface LayoutCacheStats {
 }
 
 // @public
-export function layoutHeaderFooterStory(part: OoxmlPart, contentWidth: number, measurer: TextMeasurer, producer: string, cache?: ParagraphLayoutCache<readonly PendingLine[]>, styleCascade?: StyleCascadeTable, pageContext?: FieldPageContext, maxPageContextEntries?: number, defaultTabStopPt?: number, displayMode?: RevisionDisplayMode, inlineDrawingLayout?: InlineDrawingLayoutContext, drawingTokenForParagraph?: (paragraph: OoxmlNode) => string, drawingLayoutToken?: string, hfPageContext?: HeaderFooterPageContext): HeaderFooterStoryLayout;
+export function layoutHeaderFooterStory(part: OoxmlPart, contentWidth: number, measurer: TextMeasurer, producer: string, cache?: ParagraphLayoutCache<readonly PendingLine[]>, styleCascade?: StyleCascadeTable, pageContext?: FieldPageContext, maxPageContextEntries?: number, defaultTabStopPt?: number, displayMode?: RevisionDisplayMode, inlineDrawingLayout?: InlineDrawingLayoutContext, drawingTokenForParagraph?: (paragraph: OoxmlNode) => string, drawingLayoutToken?: string, hfPageContext?: HeaderFooterPageContext, documentProperties?: DocumentProperties): HeaderFooterStoryLayout;
 
 // @public
 export function layoutNoteById(part: OoxmlPart | null | undefined, noteId: number, contentWidth: number, options: LayoutNoteStoryOptions): NoteStoryLayout | null;
@@ -1479,6 +1492,7 @@ export interface NotesLayoutInput {
     // (undocumented)
     readonly documentEndnoteProps: ResolvedEndnoteProperties;
     readonly documentFootnoteProps: ResolvedFootnoteProperties;
+    readonly documentProperties?: DocumentProperties;
     readonly drawingsForPart?: (ownerPartName: string) => NoteStoryDrawings | undefined;
     readonly endnotePropsBySection: readonly ResolvedEndnoteProperties[];
     // (undocumented)
@@ -1490,6 +1504,9 @@ export interface NotesLayoutInput {
     readonly measurer: TextMeasurer;
     // (undocumented)
     readonly producer: string;
+    // (undocumented)
+    readonly projectFieldLink?: FieldLinkProjector;
+    readonly projectLink?: HyperlinkProjector;
     // (undocumented)
     readonly styleCascade?: StyleCascadeTable;
 }
@@ -1645,6 +1662,7 @@ export interface PageRecord {
     readonly footnotes?: NoteAreaRecord;
     // (undocumented)
     readonly fragments: readonly BlockFragmentRecord[];
+    readonly hasBodyPageFields?: boolean;
     readonly header?: HeaderFooterStoryRecord;
     // (undocumented)
     readonly id: string;
@@ -2511,6 +2529,7 @@ export interface SemanticLayoutOptions {
     readonly cache?: ParagraphLayoutCache<readonly PendingLine[]>;
     readonly defaultTabStopPt?: number;
     readonly displayMode?: RevisionDisplayMode;
+    readonly documentProperties?: DocumentProperties;
     readonly drawingExclusionConverged?: boolean;
     readonly drawingExclusionPass?: number;
     readonly drawingExclusionZonesByPage?: ReadonlyMap<number, readonly ExclusionZone[]>;
@@ -2532,6 +2551,7 @@ export interface SemanticLayoutOptions {
     readonly numberingIndex?: NumberingIndex;
     readonly pageBottomReserves?: ReadonlyMap<number, number>;
     readonly producer?: string;
+    readonly projectFieldLink?: FieldLinkProjector;
     readonly projectLink?: HyperlinkProjector;
     readonly sectionColumns?: SectionColumns;
     readonly sectionFurniture?: readonly (PageFurniture | undefined)[];

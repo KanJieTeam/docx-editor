@@ -141,6 +141,15 @@ export interface NotesLayoutInput {
   readonly styleCascade?: StyleCascadeTable;
   readonly defaultTabStopPt?: number;
   /**
+   * Link projector seams, same as the body walk's. Normally injected by `semantic-layout`
+   * from its own options, so a note's `w:hyperlink` / HYPERLINK field carries the same
+   * sanitized record a body one does instead of painting dead text.
+   */
+  readonly projectLink?: import('./field-pieces.ts').HyperlinkProjector;
+  readonly projectFieldLink?: import('./field-pieces.ts').FieldLinkProjector;
+  /** Document properties for a document-property field inside a note story. */
+  readonly documentProperties?: import('@docx-editor.dev/core/store').DocumentProperties;
+  /**
    * Inline drawing support per notes part. Absent means note paragraphs flow without
    * drawing records, which is what a headless caller with no image port wants.
    */
@@ -342,6 +351,9 @@ function layoutOpts(input: NotesLayoutInput, noteMarks?: NoteMarkContext): Layou
     cache: input.cache,
     styleCascade: input.styleCascade,
     defaultTabStopPt: input.defaultTabStopPt,
+    projectLink: input.projectLink,
+    projectFieldLink: input.projectFieldLink,
+    documentProperties: input.documentProperties,
     noteMarks,
     drawingsForPart: input.drawingsForPart,
   };
@@ -2111,6 +2123,31 @@ export function provisionalNoteMarks(
     else endnoteSites.push(site);
   }
   return buildMarkContext(footnoteSites, endnoteSites, input);
+}
+
+/**
+ * Note stories run the same paragraph walk as the body, so they inherit the body's link
+ * projector seams and document properties unless the notes input pinned its own — without which
+ * a `w:hyperlink`, HYPERLINK field, or document-property field in a footnote painted as dead or
+ * blank text while the body's twin resolved.
+ */
+export function inheritNotesLayoutInput(
+  notes: NotesLayoutInput,
+  body: {
+    readonly projectLink?: NotesLayoutInput['projectLink'];
+    readonly projectFieldLink?: NotesLayoutInput['projectFieldLink'];
+    readonly documentProperties?: NotesLayoutInput['documentProperties'];
+  }
+): NotesLayoutInput {
+  const projectLink = notes.projectLink ?? body.projectLink;
+  const projectFieldLink = notes.projectFieldLink ?? body.projectFieldLink;
+  const documentProperties = notes.documentProperties ?? body.documentProperties;
+  return {
+    ...notes,
+    ...(projectLink ? { projectLink } : {}),
+    ...(projectFieldLink ? { projectFieldLink } : {}),
+    ...(documentProperties ? { documentProperties } : {}),
+  };
 }
 
 export {
