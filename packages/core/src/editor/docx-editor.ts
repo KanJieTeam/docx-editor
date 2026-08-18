@@ -97,6 +97,7 @@ import {
   classifyCommand,
   deepFreezeValue,
   docRangeEqual,
+  createTocContextCache,
   editorError,
   formattingEqual,
   normalizeSource,
@@ -114,6 +115,7 @@ import {
   type LocaleStrings,
 } from '@docx-editor.dev/i18n';
 import { execEditorCommand } from './docx-editor-exec.ts';
+import { createOpenScheduler } from './docx-editor-open-scheduler.ts';
 import {
   customNodeDiagnosticReporter,
   sweepCustomNodePayloadsOnOpen,
@@ -241,6 +243,15 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
   const reviewEnabled = modules.review !== null;
   /** Document bytes waiting for a container — set when constructed or loaded detached. */
   let pendingBytes: Uint8Array | null = null;
+  /** A big document's mount, deferred behind one painted frame so a loading screen can
+   *  show — `snapshot().isOpening` holds for that window. See `docx-editor-open-scheduler.ts`. */
+  const openScheduler = createOpenScheduler({
+    mount: (bytes) => mountBytes(bytes),
+    scheduled: () => {
+      bump();
+      emitSelectionChange();
+    },
+  });
   /**
    * How edits are written. `mode: 'view'` at construction opens in viewing; everything else
    * opens in editing, and the toolbar moves between all three. Declared here because the
@@ -619,6 +630,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
 
   /** A NEW document: forget the previous document's measurer, then mount. */
   function loadBytes(bytes: Uint8Array): void {
+    // A load supersedes any open still waiting on its frame: drop the superseded bytes.
+    openScheduler.cancel();
     loadSeq += 1;
     shapedMeasurer = undefined;
     shapedProducer = undefined;
@@ -643,7 +656,10 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         scroller.scrollLeft = 0;
       }
     }
-    mountBytes(bytes);
+    // A big document into a live container yields one painted frame first. Detached
+    // loads only stash bytes; the later `attach` decides whether the mount earns a yield.
+    if (container && openScheduler.shouldYield(bytes)) openScheduler.schedule(bytes);
+    else mountBytes(bytes);
   }
 
   function reportFontError(error: EditorFontError): void {
@@ -935,19 +951,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     }
   }
 
-  /**
-   * The right-click TOC context, reference-stable while the id holds.
-   *
-   * A fresh object per derivation would make `snapshotsEqual` report every tick as a change
-   * and hand every subscriber a new snapshot, which is the opposite of what the cache is
-   * for. The id is the only value, so one object per id is enough.
-   */
-  let cachedTocContext: { readonly id: string } | null = null;
-  function tocContextOf(id: string | null): { readonly id: string } | null {
-    if (id === null) cachedTocContext = null;
-    else if (cachedTocContext?.id !== id) cachedTocContext = Object.freeze({ id });
-    return cachedTocContext;
-  }
+  /** The right-click TOC context, reference-stable while the id holds — see support. */
+  const tocContextOf = createTocContextCache();
 
   function deriveSnapshot(): EditorSnapshot {
     const state = surface?.state() ?? null;
@@ -964,7 +969,16 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       // painted would deadlock — nothing paints until Content mounts, and Content never
       // mounts while the flag is set. A parse failure clears it too; a document that
       // cannot open is not still arriving, and `parseError` is how that is reported.
-      isLoading: parseError === null && surface === null && pendingBytes === null,
+      // A scheduled open counts as "bytes handed over" too, or a host gating its mount
+      // point on this flag would unmount the container the scheduled mount needs.
+      isLoading:
+        parseError === null &&
+        surface === null &&
+        pendingBytes === null &&
+        !openScheduler.isScheduled(),
+      // A supplied document on its way to painted pages. OVERLAY state only — gate
+      // chrome on it, never the mount point; `isLoading` remains the gate-safe flag.
+      isOpening: openScheduler.isScheduled(),
       parseError,
       // The LIVE mode, not only the construction-time one: hosts gate their chrome on this,
       // and it read `true` while every command was being refused with `locked`.
@@ -1766,6 +1780,10 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         pendingBytes = surface.session.save();
         teardownSurface();
       }
+      // A scheduled open was aimed at the PREVIOUS container — and being the newer
+      // document, it outranks any bytes saved off the old surface.
+      const reclaimed = openScheduler.cancel();
+      if (reclaimed) pendingBytes = reclaimed;
       // BEFORE the container moves, unconditionally. The observer is on a scroller found
       // through the OLD container, and only the successful-mount path below re-targets it: a
       // load that failed to parse leaves no surface and no pending bytes, so attaching to a
@@ -1778,8 +1796,10 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       localFontProbe = null;
       const bytes = pendingBytes;
       pendingBytes = null;
-      // A mount bumps the tick and emits change/selectionChange itself.
-      if (bytes) mountBytes(bytes);
+      // A mount bumps the tick and emits change/selectionChange itself. A big document
+      // yields one painted frame first, instead of freezing the commit the attach ran in.
+      if (bytes && openScheduler.shouldYield(bytes)) openScheduler.schedule(bytes);
+      else if (bytes) mountBytes(bytes);
       else bump();
     },
 
@@ -1788,11 +1808,15 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       // Before the container goes: the observer is on an element found THROUGH it, and one
       // left running would keep re-fitting a document that is no longer mounted.
       zoomLane.detach();
+      // Reclaimed before the surface save, applied after: the scheduled document is
+      // the newer one, so it wins the pending slot.
+      const reclaimed = openScheduler.cancel();
       if (surface) {
         surface.flushPendingInput();
         pendingBytes = surface.session.save();
         teardownSurface();
       }
+      if (reclaimed) pendingBytes = reclaimed;
       container = null;
       localFontProbe = null;
       bump();
@@ -1812,6 +1836,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     },
 
     save() {
+      // A save inside the open's yield window sees the just-loaded document: mount now.
+      openScheduler.flush();
       if (!surface) return Promise.reject(editorError('notFound', 'no document is loaded'));
       // Ctrl+S can race a typing burst: queued keystrokes belong in the bytes.
       surface.flushPendingInput();
@@ -1827,6 +1853,9 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     },
 
     exec(command, options) {
+      // A command inside the yield window addresses the just-loaded document: mount now.
+      // (`can` does NOT flush — chrome polls it per render; a read must not defeat the yield.)
+      openScheduler.flush();
       // A view command: it edits nothing, so it runs before the document gate, and it works
       // on a document that failed to open — the pane is still the reader's to close. Not on a
       // DESTROYED editor, though: there is no reader left.
@@ -2033,6 +2062,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     // selecting, because moving the caret does not move the viewport: a match twenty pages
     // down would otherwise be selected where nobody could see it.
     selectMatch(match: TextMatch): ExecResult {
+      // Same rule as `exec`: a selection aimed into the yield window lands, not refuses.
+      openScheduler.flush();
       if (!surface) {
         return { ok: false, code: 'notFound', reason: 'no document is loaded' };
       }
@@ -2489,12 +2520,17 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     getCurrentPage: (mode) => currentPageOf(surface, mode),
 
     // Page NUMBERS are 1-based in this contract; the layout indexes from 0.
-    scrollToPage: (pageNumber: number) =>
-      Number.isInteger(pageNumber) && pageNumber >= 1
-        ? (surface?.revealPage(pageNumber - 1) ?? false)
-        : false,
+    scrollToPage: (pageNumber: number) => {
+      if (!Number.isInteger(pageNumber) || pageNumber < 1) return false;
+      // A scroll aimed into the open's yield window addresses the just-loaded document:
+      // mount it now, or the call would silently report "no such page".
+      openScheduler.flush();
+      return surface?.revealPage(pageNumber - 1) ?? false;
+    },
     scrollToBlock: (blockId: string) => {
       if (typeof blockId !== 'string' || blockId.length === 0) return false;
+      // Same yield-window rule as `scrollToPage`.
+      openScheduler.flush();
       // Revealing a body block is a move OUT of an open header or note: the outline and the
       // search pane both drive this, and leaving the scope on the furniture left the reader
       // looking at the body with every keystroke going to a story off screen.
@@ -2515,6 +2551,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     },
 
     focus(scope?: EditorScope) {
+      // Same yield-window rule as `exec`: focusing the just-loaded document mounts it.
+      openScheduler.flush();
       if (!surface) {
         return { ok: false, code: 'invalidTarget', reason: 'no document is loaded' };
       }
@@ -2534,6 +2572,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
 
     destroy() {
       destroyed = true;
+      openScheduler.cancel();
       zoomLane.detach();
       disposeEmbeddedFaces();
       teardownSurface();
