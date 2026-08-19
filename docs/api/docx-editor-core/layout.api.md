@@ -1951,6 +1951,9 @@ export interface PlacedCell {
 }
 
 // @public
+export function positionPastDeletion(layout: SemanticLayout, position: SemanticPosition): SemanticPosition;
+
+// @public
 export interface PreferredWidth {
     // (undocumented)
     readonly type: PreferredWidthType;

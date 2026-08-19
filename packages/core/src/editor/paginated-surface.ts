@@ -47,6 +47,7 @@ import {
   paragraphsInCells,
   resolveNumberingLevel,
   paragraphTextFromLayout,
+  positionPastDeletion,
   withNumberingStyleLinks,
   wordBoundary,
   type CellSelection,
@@ -4374,7 +4375,11 @@ export function mountPaginatedSurface(
       selection.anchor.paragraphId === selection.head.paragraphId &&
       selection.anchor.offset === selection.head.offset
     ) {
-      return { ops: [], collapseTo: selection.head };
+      // The caret may rest anywhere in struck text — Word's rule — but new content must
+      // never land INSIDE the `w:del`, so an insert aimed at an interior offset relocates
+      // past the deletion. The store enforces the same rule; adjusting here as well lands
+      // the post-edit caret beside the typed text instead of back among the struck words.
+      return { ops: [], collapseTo: positionPastDeletion(currentLayout, selection.head) };
     }
     const { from, to } = orderedRange();
     return planRangeDeletion(
