@@ -2637,9 +2637,14 @@ a.docx-hyperlink:focus-visible {
 /* The pane gutters reach the ruler as PADDING on its frame and the page as the scroller's
    padding. Both move by the same distance, so both have to move on the same curve —
    without this the sheet glided and the ruler above it snapped, and for the length of the
-   animation the ruler measured a page that was no longer under it. */
+   animation the ruler measured a page that was no longer under it.
+
+   The INLINE-START edge only, because that is the only edge the scroller animates: the
+   scroller's `padding-right` (the review column) deliberately snaps, so a ruler easing
+   its right padding for 0.2s measured a page that had already jumped. One edge per curve,
+   both elements on the same one. */
 .docx-ruler-frame {
-  transition: padding 0.2s ease;
+  transition: padding-inline-start 0.2s ease;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -4774,13 +4779,22 @@ a.docx-hyperlink:focus-visible {
 
 /* Room for the review pane. The page centres inside the scroller's padding box, so
  * reserving the rail's width here shifts the sheet left by half of it and the document and
- * its cards read as one centred pair. Closed, only the marker strip is reserved. */
+ * its cards read as one centred pair.
+ *
+ * The reservation is a MEASUREMENT, not a constant: `DocxEditor.Viewport` publishes
+ * `--docx-review-gutter` (this edge) and `--docx-review-gutter-start` (mirrored onto the
+ * inline start, composed into the navigation rule below) from the viewport's width and the
+ * page's entitled width. A viewport with room for both keeps the full column; one without
+ * gets the marker strip on BOTH edges, so the sheet sits centred instead of parked beside
+ * a mostly-empty band. The fallbacks — the full column while open, the strip while
+ * closed — are what stood before the measurement existed, so an unmeasured host paints as
+ * it always did. */
 .docx-editor__scroll-container[data-review-pane='open'] {
-  padding-right: 316px;
+  padding-right: var(--docx-review-gutter, 316px);
 }
 
 .docx-editor__scroll-container[data-review-pane='closed'] {
-  padding-right: 44px;
+  padding-right: var(--docx-review-gutter, 44px);
 }
 
 /* The review rail (`DocxEditor.Review` / the Vue equivalent): one card per pending decision,
@@ -4802,6 +4816,22 @@ a.docx-hyperlink:focus-visible {
 /* Closed, the rail is a strip of markers: it keeps every anchor and gives up the width. */
 .docx-review:not([data-open]) {
   width: 32px;
+}
+
+/* Compact rail (`data-compact`: the pane is open but the viewport reserved only the
+ * mirrored marker strip). The strip shows the markers, and the ONE active card floats at
+ * column width, pinned inside the viewport's right edge — over the page, where a shadow
+ * has to separate it from the ink underneath. Its slot is positioned inline by the rail. */
+.docx-review__slot--compact .docx-review__card {
+  box-shadow: var(--doc-shadow-lg);
+}
+
+/* The column's cards print BESIDE the sheet, which is harmless; the compact card floats
+ * OVER it, which would print on top of the document's own ink. Screen chrome only. */
+@media print {
+  .docx-review__slot--compact {
+    display: none !important;
+  }
 }
 
 /* The "comment on this" button. Pulled OUT of the card column, onto the page's own edge:
@@ -4911,7 +4941,12 @@ a.docx-hyperlink:focus-visible {
  * as scrollbar-gutter above. */
 .docx-editor .docx-editor__scroll-container,
 .docx-editor.docx-editor__scroll-container {
-  padding-inline-start: var(--docx-nav-shift, 0px);
+  /* Two reservations compose on this edge: the navigation pane's displacement, and the
+   * review gutter's mirrored strip (`--docx-review-gutter-start`, 0 whenever the full
+   * column stands on the right). One declaration, because `padding-inline-start` and
+   * `padding-left` are the same slot in LTR and a second rule would just lose the
+   * specificity fight. */
+  padding-inline-start: calc(var(--docx-nav-shift, 0px) + var(--docx-review-gutter-start, 0px));
   transition: padding-inline-start 0.2s ease;
 }
 

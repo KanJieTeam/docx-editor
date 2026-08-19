@@ -1287,6 +1287,7 @@ export function navigationShift(input: NavigationShiftInput): number;
 export interface NavigationShiftInput {
     readonly docked?: boolean;
     readonly inlineEndReservation?: number;
+    readonly inlineStartReservation?: number;
     readonly pageWidthPx: number;
     readonly reservation: number;
     readonly viewportWidth: number;
@@ -1495,7 +1496,33 @@ export { PX_PER_CM }
 
 export { PX_PER_INCH }
 
+// @public
+export const REVIEW_MARKERS_GUTTER = 44;
+
+// @public
+export const REVIEW_PANE_GUTTER = 316;
+
 export { ReviewAuthorInfo }
+
+// @public
+export interface ReviewGutter {
+    // (undocumented)
+    readonly inlineEnd: number;
+    // (undocumented)
+    readonly inlineStart: number;
+}
+
+// @public
+export function reviewGutter(input: ReviewGutterInput): ReviewGutter;
+
+// @public (undocumented)
+export interface ReviewGutterInput {
+    readonly docked?: boolean;
+    readonly inlineStartReservation?: number;
+    readonly open: boolean;
+    readonly pageWidthPx: number;
+    readonly viewportWidth: number;
+}
 
 // @public (undocumented)
 export const ReviewRailContext: react.Context<ReviewRailRegistry | null>;
@@ -2010,6 +2037,9 @@ export interface UseParagraphStyleResult {
 
 // @public
 export function useReviewAuthors(): readonly ReviewAuthorInfo[];
+
+// @public
+export function useReviewGutter(): ReviewGutter;
 
 // @public
 export function useTableBorderTargetLabel(): string;

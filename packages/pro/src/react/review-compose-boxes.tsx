@@ -9,6 +9,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { TranslationKey } from '@docx-editor.dev/i18n';
 import type { ReviewPartProps } from './DocxEditorReview.tsx';
 import type { ReviewItemView } from './useReview.ts';
+import { COMPACT_CARD_WIDTH } from './use-rail-geometry.ts';
 
 interface ComposePartDeps {
   readonly useRail: () => {
@@ -30,7 +31,20 @@ interface ComposePartDeps {
 /** Build the draft and reply compose boxes against the rail's private contexts. */
 export function createReviewComposeParts(deps: ComposePartDeps) {
   /** The compose box for a new comment. @public */
-  function ReviewDraft({ top = 0, className, hidden }: ReviewPartProps & { top?: number }) {
+  function ReviewDraft({
+    top = 0,
+    left = null,
+    className,
+    hidden,
+  }: ReviewPartProps & {
+    top?: number;
+    /**
+     * Rail-local `left` for the COMPACT rail, where the strip is 32px wide and a box laid
+     * out at column width would be cut by the viewport's edge. Null keeps the box in the
+     * rail's own column, which is right whenever the column exists.
+     */
+    left?: number | null;
+  }) {
     const { review, endDraft, measure, readOnly } = deps.useRail();
     const t = deps.useLabel();
     const [text, setText] = useState('');
@@ -60,8 +74,12 @@ export function createReviewComposeParts(deps: ComposePartDeps) {
     if (hidden) return null;
     return (
       <div
-        className={`docx-review__slot${className ? ` ${className}` : ''}`}
-        style={{ position: 'absolute', top }}
+        className={`docx-review__slot${className ? ` ${className}` : ''}${left === null ? '' : ' docx-review__slot--compact'}`}
+        style={{
+          position: 'absolute',
+          top,
+          ...(left === null ? {} : { left, width: COMPACT_CARD_WIDTH }),
+        }}
         ref={(node) => {
           measure(node, deps.composeKey);
         }}
