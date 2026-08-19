@@ -1301,8 +1301,10 @@ function paintLine(
   element.style.overflow = 'visible';
 
   // Justified lines carry their slack in the gaps BETWEEN spans. Inline flow has no gaps,
-  // so each span receives its own published advance below. CSS `word-spacing` is not an
-  // equivalent: Chromium expands NBSPs too, moving painted glyphs away from layout geometry.
+  // so each span receives its own published advance below — as `word-spacing` stretching its
+  // own trailing space where that is safe, and as a margin on the next span otherwise (see
+  // `absorbsFollowingGap`). The stretch is what keeps the native selection band continuous:
+  // a margin is never highlighted, but a space character's advance is.
   // Per-run band heights, chosen so the browser's line-box math cannot move a glyph:
   // the tallest run's band is the glyph band (own height + space-above leading), and any
   // remaining line-box depth is padding-bottom — Word's auto/atLeast extras sit BELOW the
@@ -1407,13 +1409,26 @@ function paintLine(
     anchorLinkId = null;
   };
 
+  // Each boundary's gap is computed ONCE and carried into the next iteration, so a gap is
+  // painted exactly once — as a stretch or as a margin, never both, never neither.
+  let pendingGap = 0;
+  let previousSpanAbsorbedGap = false;
   for (const [spanIndex, span] of line.spans.entries()) {
     appendDrawingAdvancesBefore(span.range.paragraphId, span.range.start);
     appendWrapAdvance(span);
     const band = Math.min(span.box.height + leading, line.box.height);
     const painted = paintSpan(document, span, ctx, band, leading);
-    const gap = interSpanGapBefore(line, spanIndex);
-    if (gap > 0) painted.style.marginLeft = `${gap * scale}px`;
+    if (pendingGap > 0 && !previousSpanAbsorbedGap) {
+      painted.style.marginLeft = `${pendingGap * scale}px`;
+    }
+    // A justify gap is drawn INSIDE the span before it wherever that span can stretch its
+    // trailing space: the browser highlights a space's advance but never a margin, so a
+    // margin gap broke the selection band into one block per word on justified lines.
+    const next = line.spans[spanIndex + 1];
+    const gapAfter = interSpanGapBefore(line, spanIndex + 1, rankOf);
+    previousSpanAbsorbedGap = gapAfter > 0 && next !== undefined && absorbsFollowingGap(span, next);
+    if (previousSpanAbsorbedGap) painted.style.wordSpacing = `${gapAfter * scale}px`;
+    pendingGap = gapAfter;
     const link = span.link;
     if (!link) {
       anchor = null;
@@ -1486,17 +1501,81 @@ function paintLine(
 }
 
 /** The layout-published gap before one span, excluding separately painted advances. */
-function interSpanGapBefore(line: LineRecord, index: number): number {
-  if (index <= 0) return 0;
+function interSpanGapBefore(
+  line: LineRecord,
+  index: number,
+  rankOf: (paragraphId: string) => number
+): number {
+  if (index <= 0 || index >= line.spans.length) return 0;
   const previous = line.spans[index - 1]!;
   const current = line.spans[index]!;
-  const drawingOccupiesGap = line.drawings?.some(
-    (drawing) => drawing.start >= previous.range.end && drawing.start < current.range.start
-  );
+  // A drawing occupies this gap exactly when its spacer is FLUSHED between these two spans,
+  // so the test is the same reader-order window `appendDrawingAdvancesBefore` walks: rank
+  // first, then offset. Matching the raw offset alone was wrong twice on a resolved join
+  // line, where each half counts offsets from zero: a second-half drawing whose offset fell
+  // inside a first-half hole zeroed a gap it does not occupy, and a second-half drawing
+  // BEFORE its own text — numerically below the first half's ranges — was flushed here yet
+  // not counted, so its advance was painted twice.
+  const previousRank = rankOf(previous.range.paragraphId);
+  const currentRank = rankOf(current.range.paragraphId);
+  const drawingOccupiesGap = line.drawings?.some((drawing) => {
+    const rank = rankOf(drawing.paragraphId);
+    const afterPrevious =
+      rank > previousRank || (rank === previousRank && drawing.start >= previous.range.start);
+    const beforeCurrent =
+      rank < currentRank || (rank === currentRank && drawing.start < current.range.start);
+    return afterPrevious && beforeCurrent;
+  });
   if (drawingOccupiesGap) return 0;
   const gap =
     current.box.x - (previous.box.x + previous.box.width) - (current.wrapAdvanceBefore ?? 0);
   return gap > 0.25 ? gap : 0;
+}
+
+/**
+ * Every character an engine's `word-spacing` may move. U+0020 and NBSP expand in Chromium,
+ * WebKit and Gecko alike; a tab expands in Chromium and Gecko (fourfold — it is four
+ * advances). The rest is the CSS Text 3 word-separator list, kept in case an engine starts
+ * honouring it; U+3000 is deliberately absent — no engine expands it, and refusing it would
+ * forfeit the stretch on CJK text for nothing.
+ */
+const WORD_SEPARATOR = /[\t\n\r \u00A0\u1361\u{10100}-\u{10102}\u{1039F}\u{1091F}]/u;
+
+/**
+ * Whether the justify gap AFTER this span can be painted as `word-spacing` on the span
+ * itself, stretching its trailing space, instead of as a margin on the next span.
+ *
+ * The stretch must move ONLY the trailing space. Layout puts justify slack after expandable
+ * U+0020s and word-breaks after every one of them, so an ordinary word-span qualifies —
+ * including a projected field result, whose box was reserved from the drawn text like any
+ * other. A span carrying any OTHER word separator keeps the margin, whose only cost is a
+ * seam in the native selection band. A span with a forced width (`w:w` horizontal scaling)
+ * cannot grow its box, so it keeps the margin too.
+ *
+ * The stretch also lives inside the span's ANCHOR and on its side of a float. A link's last
+ * span stretching over the gap would extend the `<a>` hit target across blank slack — a
+ * click there would follow the link — so both spans must share one anchor, or have none.
+ * And a wrap advance is painted BETWEEN the spans, so stretching across it would draw the
+ * slack (and this span's underline and shading) inside the float's exclusion zone.
+ */
+function absorbsFollowingGap(span: StyleSpanRecord, next: StyleSpanRecord): boolean {
+  if (!span.text.endsWith(' ')) return false;
+  if (span.style.horizontalScalePercent !== 100) return false;
+  if (!sharesAnchor(span, next)) return false;
+  if ((next.wrapAdvanceBefore ?? 0) > 0.001) return false;
+  return !WORD_SEPARATOR.test(span.text.slice(0, -1));
+}
+
+/**
+ * Whether two adjacent spans land in the same painted anchor, mirroring the anchor-opening
+ * rules in {@link paintLine}: both linkless, or the same link id — and for field atoms the
+ * same field (same model start), because two discrete fields share a content-keyed id.
+ */
+function sharesAnchor(a: StyleSpanRecord, b: StyleSpanRecord): boolean {
+  if (!a.link && !b.link) return true;
+  if (!a.link || !b.link || a.link.id !== b.link.id) return false;
+  if (Boolean(a.fieldAtom) !== Boolean(b.fieldAtom)) return false;
+  return !a.fieldAtom || a.range.start === b.range.start;
 }
 
 function paintFragment(
