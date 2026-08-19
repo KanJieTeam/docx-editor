@@ -21,6 +21,12 @@ import {
   type TextShaper,
   type VersionedShapingLibrary,
 } from './shaped-run.ts';
+import {
+  harfBuzzUnsupportedRuntimeDiagnostic,
+  harfBuzzVersionMismatchDiagnostic,
+  harfBuzzWasmUnavailableDiagnostic,
+  isUnsupportedNodeRuntime,
+} from './harfbuzz-wasm-binary.ts';
 
 type HarfBuzzModule = typeof import('harfbuzzjs');
 type HarfBuzzBlob = InstanceType<HarfBuzzModule['Blob']>;
@@ -52,14 +58,40 @@ export function initializeHarfBuzz(): Promise<void> {
       const version = module.versionString();
       if (version !== HARFBUZZ_SHAPING_LIBRARY.version) {
         throw new HarfBuzzShapingError('shapingLibraryMismatch', {
-          diagnostic: `expected ${HARFBUZZ_SHAPING_LIBRARY.version}, loaded ${version}`,
+          // A self-hosted binary makes this the SECOND step of the workflow the docs send
+          // esbuild and Bun consumers down: copy the file, then upgrade the package and
+          // forget to re-copy it. `expected X, loaded Y` alone names no file and no remedy,
+          // which is the dead end the rest of this error handling exists to remove.
+          diagnostic: harfBuzzVersionMismatchDiagnostic(HARFBUZZ_SHAPING_LIBRARY.version, version),
         });
       }
       harfBuzzModule = module;
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       harfBuzzInitialization = null;
-      throw error;
+      // Anything that is not the version pin above means the runtime did not come up, and
+      // the reason is always the same class of problem: the WASM could not be loaded.
+      //
+      // Deliberately NOT a match on the abort text. Emscripten words each failure
+      // differently — `both async and sync fetching of the wasm failed` for a 404,
+      // `expected magic word` when a SPA dev server answers with its HTML fallback,
+      // `ENOENT` when a deploy step copied the JS but not the asset, and an `EvalError`
+      // under a CSP without `wasm-unsafe-eval`. Matching phrases meant the two most likely
+      // server and enterprise failures fell through to a raw abort with no remedy attached.
+      if (error instanceof HarfBuzzShapingError) throw error;
+      // Except the one failure no URL fixes: a Node that predates `process.getBuiltinModule`.
+      // Its own code keeps hosts branching on `wasmUnavailable` from prescribing a WASM fix
+      // for a runtime problem.
+      if (isUnsupportedNodeRuntime(error)) {
+        throw new HarfBuzzShapingError('unsupportedRuntime', {
+          diagnostic: harfBuzzUnsupportedRuntimeDiagnostic(error),
+          cause: error,
+        });
+      }
+      throw new HarfBuzzShapingError('wasmUnavailable', {
+        diagnostic: harfBuzzWasmUnavailableDiagnostic(error),
+        cause: error,
+      });
     });
   return harfBuzzInitialization;
 }
@@ -87,6 +119,8 @@ function requireHarfBuzz(): HarfBuzzModule {
  */
 export type HarfBuzzShapingErrorCode =
   | 'notInitialized'
+  | 'wasmUnavailable'
+  | 'unsupportedRuntime'
   | 'fontOverLimit'
   | 'malformedFont'
   | 'textOverLimit'
@@ -121,9 +155,10 @@ export class HarfBuzzShapingError extends Error {
       readonly limit?: number;
       readonly actual?: number;
       readonly diagnostic?: string;
+      readonly cause?: unknown;
     } = {}
   ) {
-    super(`HarfBuzz shaping failed (${code})`);
+    super(`HarfBuzz shaping failed (${code})`, { cause: details.cause });
     this.code = code;
     this.limit = details.limit;
     this.actual = details.actual;
