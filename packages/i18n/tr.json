@@ -32,7 +32,8 @@
     "sectionBreakContinuous": "Bölüm sonu (sürekli)",
     "sectionBreakNextPage": "Bölüm sonu (sonraki sayfa)",
     "insertFootnote": "Dipnot ekle",
-    "insertEndnote": "Sonnot ekle"
+    "insertEndnote": "Sonnot ekle",
+    "insertTable": null
   },
   "formattingBar": {
     "groups": {
@@ -643,5 +644,21 @@
     "relativeToHorizontal": "Göreli konum (yatay)",
     "relativeToVertical": "Göreli konum (dikey)",
     "verticalOffset": "Dikey uzaklık"
+  },
+  "disabledReason": {
+    "commentSelection": null,
+    "drawingLocked": null,
+    "editorNotReady": null,
+    "imageSuggesting": null,
+    "invalidValue": null,
+    "mergeUnsupported": null,
+    "noContentControl": null,
+    "noDocument": null,
+    "noDrawing": null,
+    "notWired": null,
+    "splitUnsupported": null,
+    "trackedOnly": null,
+    "unavailable": null,
+    "viewing": null
   }
 }

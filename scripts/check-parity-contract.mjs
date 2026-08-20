@@ -21,6 +21,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { normalizeSnapshotText } from './lib/api-snapshot-parse.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -28,6 +29,18 @@ const repoRoot = path.resolve(__dirname, '..');
 const REACT_SNAPSHOT = path.join(repoRoot, 'docs/api/docx-editor-react/index.api.md');
 const VUE_SNAPSHOT = path.join(repoRoot, 'docs/api/docx-editor-vue/index.api.md');
 const CONTRACT_PATH = path.join(repoRoot, 'scripts/parity/parity.contract.json');
+const VUE_DOCX_EDITOR_SOURCE = path.join(repoRoot, 'packages/vue/src/components/DocxEditor.tsx');
+
+function extractVueDocxEditorForms(source) {
+  const start = source.indexOf('const DocxEditorImpl = defineComponent({');
+  const end = source.indexOf('/** @public */\nexport const DocxEditor', start);
+  if (start === -1 || end === -1) return null;
+  const block = source.slice(start, end);
+  const emitsBlock = /emits:\s*\[([\s\S]*?)\]\s*as const/.exec(block)?.[1] ?? '';
+  const emits = new Set([...emitsBlock.matchAll(/['"](\w+)['"]/g)].map((match) => match[1]));
+  const slots = new Set([...block.matchAll(/\bslots\.(\w+)/g)].map((match) => match[1]));
+  return { emits, slots };
+}
 
 /**
  * Pull field names out of an `export interface FooProps { ... }` block.
@@ -69,7 +82,7 @@ function extractInterfaceFields(snapshotText, interfaceName) {
     // `name(): Type;`. Matching only the former made method-style members such
     // as `getEditor(): Editor | null` invisible to the gate, so a ref method
     // could be added or dropped on one adapter without the check noticing.
-    const match = /^ {4}(\w+)\??[(:]/.exec(line);
+    const match = /^ {4}(?:readonly\s+)?(\w+)\??[(:]/.exec(line);
     if (match) fields.add(match[1]);
   }
   return fields;
@@ -142,6 +155,9 @@ const SECTION_SCHEMA = {
   props: {
     paired: 'array',
     deferredInVue: 'object',
+    reactCallbacksAsVueEmits: 'object',
+    reactRenderPropsAsVueSlots: 'object',
+    reactClassNameAsVueClass: 'object',
     vueExclusive: 'object',
   },
   ref: {
@@ -190,7 +206,7 @@ function validateContractShape(contract) {
 }
 
 function main() {
-  for (const f of [REACT_SNAPSHOT, VUE_SNAPSHOT, CONTRACT_PATH]) {
+  for (const f of [REACT_SNAPSHOT, VUE_SNAPSHOT, CONTRACT_PATH, VUE_DOCX_EDITOR_SOURCE]) {
     if (!fs.existsSync(f)) {
       console.error(`Missing required file: ${f}`);
       console.error('Run `bun run api:extract` first.');
@@ -198,8 +214,9 @@ function main() {
     }
   }
 
-  const reactSnapshot = fs.readFileSync(REACT_SNAPSHOT, 'utf8');
-  const vueSnapshot = fs.readFileSync(VUE_SNAPSHOT, 'utf8');
+  const reactSnapshot = normalizeSnapshotText(fs.readFileSync(REACT_SNAPSHOT, 'utf8'));
+  const vueSnapshot = normalizeSnapshotText(fs.readFileSync(VUE_SNAPSHOT, 'utf8'));
+  const vueForms = extractVueDocxEditorForms(fs.readFileSync(VUE_DOCX_EDITOR_SOURCE, 'utf8'));
   const contract = readJson(CONTRACT_PATH);
 
   const shapeErrors = validateContractShape(contract);
@@ -232,36 +249,80 @@ function main() {
   }
 
   const issues = [];
+  if (!vueForms) issues.push('Could not locate the exported Vue DocxEditor implementation');
 
   // ── Props ────────────────────────────────────────────────────────────────
   const paired = contract.props.paired;
   const deferred = Object.keys(contract.props.deferredInVue);
+  const callbackEmits = Object.keys(contract.props.reactCallbacksAsVueEmits ?? {});
+  const renderSlots = Object.keys(contract.props.reactRenderPropsAsVueSlots ?? {});
+  const classFallthrough = Object.keys(contract.props.reactClassNameAsVueClass ?? {});
   const vueOnly = Object.keys(contract.props.vueExclusive);
+  const reactFormProps = [...callbackEmits, ...renderSlots, ...classFallthrough];
 
-  // Paired must exist on both sides.
   for (const k of paired) {
     if (!reactProps.has(k)) issues.push(`PROP paired '${k}' missing from React`);
     if (!vueProps.has(k)) issues.push(`PROP paired '${k}' missing from Vue`);
   }
-  // Deferred must exist on React, must NOT exist on Vue (else contract is stale).
   for (const k of deferred) {
     if (!reactProps.has(k)) issues.push(`PROP deferred '${k}' missing from React (contract stale)`);
     if (vueProps.has(k))
       issues.push(`PROP '${k}' has shipped in Vue — move from deferredInVue to paired`);
   }
-  // Vue-exclusive must exist on Vue, must NOT exist on React.
+  for (const k of callbackEmits) {
+    if (!reactProps.has(k)) issues.push(`PROP reactCallbacksAsVueEmits '${k}' missing from React`);
+    if (vueProps.has(k))
+      issues.push(`PROP '${k}' must be a Vue emit, not a DocxEditorProps field`);
+    const emitName = contract.props.reactCallbacksAsVueEmits[k];
+    if (vueForms && !vueForms.emits.has(emitName)) {
+      issues.push(`PROP '${k}' maps to missing Vue emit '${emitName}'`);
+    }
+  }
+  if (vueForms) {
+    const declaredEmits = new Set(Object.values(contract.props.reactCallbacksAsVueEmits ?? {}));
+    for (const emitName of vueForms.emits) {
+      if (!declaredEmits.has(emitName)) {
+        issues.push(`Vue emit '${emitName}' is not declared in reactCallbacksAsVueEmits`);
+      }
+    }
+  }
+  for (const k of renderSlots) {
+    if (!reactProps.has(k)) issues.push(`PROP reactRenderPropsAsVueSlots '${k}' missing from React`);
+    if (vueProps.has(k))
+      issues.push(`PROP '${k}' must be a Vue slot, not a DocxEditorProps field`);
+    const slotName = contract.props.reactRenderPropsAsVueSlots[k];
+    if (vueForms && !vueForms.slots.has(slotName)) {
+      issues.push(`PROP '${k}' maps to missing Vue slot '${slotName}'`);
+    }
+  }
+  if (vueForms) {
+    const declaredSlots = new Set(Object.values(contract.props.reactRenderPropsAsVueSlots ?? {}));
+    for (const slotName of vueForms.slots) {
+      if (!declaredSlots.has(slotName)) {
+        issues.push(`Vue slot '${slotName}' is not declared in reactRenderPropsAsVueSlots`);
+      }
+    }
+  }
+  for (const k of classFallthrough) {
+    if (!reactProps.has(k)) issues.push(`PROP reactClassNameAsVueClass '${k}' missing from React`);
+    if (vueProps.has(k))
+      issues.push(`PROP '${k}' must fall through as Vue \`class\`, not appear under the React name`);
+  }
   for (const k of vueOnly) {
     if (!vueProps.has(k)) issues.push(`PROP vueExclusive '${k}' missing from Vue (contract stale)`);
     if (reactProps.has(k))
       issues.push(`PROP '${k}' has shipped in React — move from vueExclusive to paired`);
   }
-  // Any React prop not in contract = drift.
   for (const k of reactProps) {
-    if (!paired.includes(k) && !deferred.includes(k) && !vueOnly.includes(k)) {
+    if (
+      !paired.includes(k) &&
+      !deferred.includes(k) &&
+      !reactFormProps.includes(k) &&
+      !vueOnly.includes(k)
+    ) {
       issues.push(`PROP '${k}' in React is not declared in the parity contract`);
     }
   }
-  // Any Vue prop not in contract = drift.
   for (const k of vueProps) {
     if (!paired.includes(k) && !deferred.includes(k) && !vueOnly.includes(k)) {
       issues.push(`PROP '${k}' in Vue is not declared in the parity contract`);
@@ -321,6 +382,9 @@ function main() {
   console.log(`  Vue   DocxEditorRef:   ${vueRefCount} members`);
   console.log(`  Paired props:          ${paired.length}`);
   console.log(`  Deferred in Vue props: ${deferred.length}`);
+  console.log(`  React callbacks as Vue emits: ${callbackEmits.length}`);
+  console.log(`  React render props as Vue slots: ${renderSlots.length}`);
+  console.log(`  React className fallthrough: ${classFallthrough.length}`);
   console.log(`  Vue-exclusive props:   ${vueOnly.length}`);
   console.log(`  Paired ref members:    ${refPaired.length}`);
   console.log(`  Inherited via EditorRefLike: ${refInherited.length}`);

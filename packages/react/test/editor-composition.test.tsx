@@ -25,7 +25,7 @@ import type {
 } from '@docx-editor.dev/core/contracts/editor';
 import type { DocxEditorInstance } from '@docx-editor.dev/core/editor';
 import { DocxEditor } from '../src/components/DocxEditor.tsx';
-import { DocxEditorRoot } from '../src/editor/DocxEditorRoot.tsx';
+import { DocxEditorRoot, provideDocxEditor } from '../src/editor/DocxEditorRoot.tsx';
 import { DocxEditorViewport } from '../src/editor/DocxEditorViewport.tsx';
 import { DocxEditorContent } from '../src/editor/DocxEditorContent.tsx';
 import { DocxEditorPageNumber } from '../src/editor/DocxEditorPageNumber.tsx';
@@ -105,6 +105,25 @@ describe('DocxEditor.Root lifecycle', () => {
     }
     render(<Probe />);
     expect(seen).toBeNull();
+  });
+
+  test('provideDocxEditor composes a Root and exposes its live instance', () => {
+    let seen: DocxEditorInstance | null = null;
+    function Host() {
+      const provided = provideDocxEditor({ document: SOURCE });
+      seen = provided.editorRef;
+      const Root = provided.DocxEditorRoot;
+      return (
+        <Root {...provided.rootProps} {...provided.rootListeners}>
+          <DocxEditorViewport>
+            <DocxEditorContent />
+          </DocxEditorViewport>
+        </Root>
+      );
+    }
+    const view = render(<Host />);
+    expect(seen).not.toBeNull();
+    expect(view.container.querySelector('.docx-page')).not.toBeNull();
   });
 });
 
@@ -215,7 +234,7 @@ describe('useEditorCommand', () => {
       </DocxEditorRoot>
     );
     expect(binding!.isEnabled).toBe(false);
-    expect(binding!.disabledReason).toBe('not wired to an editor command');
+    expect(binding!.disabledReason).toBe('This control is not connected to an editor command');
     expect(binding!.isActive).toBe(false);
     const before = instance!.surface!.session.bodyText();
     expect(() =>
@@ -341,7 +360,7 @@ describe('declarative revision styles', () => {
   const ink = (view: { container: HTMLElement }) =>
     view.container.querySelector<HTMLElement>('.docx-revision')?.style.color;
 
-  test("AuthorStyle overrides one author; unmounting returns them to the ramp", async () => {
+  test('AuthorStyle overrides one author; unmounting returns them to the ramp', async () => {
     const view = render(
       <DocxEditorRoot document={TRACKED}>
         <DocxEditorAuthorStyle author="Ada Lovelace" color="var(--brand-ada)" />

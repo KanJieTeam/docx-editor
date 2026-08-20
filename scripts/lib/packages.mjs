@@ -30,11 +30,6 @@ export const PACKAGES = [
     root: 'packages/vue',
     pkgSlug: 'docx-editor-vue',
     tsconfigPath: 'packages/vue/tsconfig.api.json',
-    // WIP and unpublished (`private: true` in its package.json), so it is off
-    // `build:packages` and has no `dist` for Extractor to read. Clear this flag and
-    // put the package back in `build:packages` in the same change that starts
-    // publishing it again.
-    disconnected: 'WIP adapter, not published and not built on the release path',
   },
   {
     name: '@docx-editor.dev/editor-api',
@@ -141,6 +136,17 @@ export const PACKAGES = [
           'ReviewRoot',
           'ReviewSummary',
           'ReviewTime',
+        ],
+        // Vue compounds follow the same rule as React. Custom-node types come from this
+        // package's main entry, and editor contracts come from core.
+        vue: [
+          'ActivatedCustomNode',
+          'AnyCustomNodeDefinition',
+          'CustomNodeDefinition',
+          'Editor',
+          'EditorModule',
+          'ReviewItemPlacement',
+          'ReviewItemQuery',
         ],
       },
     },

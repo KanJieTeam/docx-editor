@@ -1,3 +1,4 @@
+import type { DocxEditorChildren } from '../../docx-editor-children';
 // A minimal `asChild` slot — the Radix pattern, implemented in-tree.
 //
 // Deliberately NOT a new dependency: the repo does not carry `@radix-ui/react-slot`,
@@ -9,7 +10,7 @@
 // value taking precedence.
 
 import { Children, cloneElement, isValidElement } from 'react';
-import type { HTMLAttributes, ReactElement, ReactNode, Ref } from 'react';
+import type { CSSProperties, HTMLAttributes, ReactElement, Ref } from 'react';
 
 type AnyProps = Record<string, unknown>;
 
@@ -40,9 +41,11 @@ function mergeProps(slotProps: AnyProps, childProps: AnyProps): AnyProps {
 }
 
 export interface SlotProps extends HTMLAttributes<HTMLElement> {
-  children?: ReactNode;
+  children?: DocxEditorChildren;
   /** Fanned out alongside the child's own ref. */
   ref?: Ref<unknown>;
+  className?: string;
+  style?: CSSProperties;
 }
 
 /** Renders its single child element with the slot's props merged in. */

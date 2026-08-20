@@ -158,7 +158,7 @@ wraps its app in one still reaches this chrome and a nested provider composes wi
 
 - **WHEN** `packages/vue/src` is searched for user-facing text
 - **THEN** every such string is a catalogue key resolved through `t`, and `bun run
-  i18n:validate` passes
+i18n:validate` passes
 
 ### Requirement: Vue SHALL ship the seams a capability package composes with
 
@@ -166,9 +166,9 @@ The Vue entry SHALL export `ReviewRailContext` as an injection key with the same
 React's context carries, `Slot` as the single-child prop-merging component, and `LocaleProvider`
 / `useTranslation` / `useChromeTranslate`.
 
-The review PANE lives in the pro package and is not part of this change. The seams are, because
-without them there is nothing for a Vue pane to compose with, and the gutter reservation is
-keyed on a rail actually being mounted — not on a pane's open state, which pushed the page off
+The review pane lives in `@docx-editor.dev/pro/vue`. The adapter supplies its composition seams,
+and the gutter reservation is keyed on a rail actually being mounted — not on a pane's open
+state, which pushed the page off
 centre beside an empty column for every consumer that mounted no rail.
 
 #### Scenario: No rail, no gutter
@@ -186,6 +186,34 @@ centre beside an empty column for every consumer that mounted no rail.
 - **WHEN** `Slot` is given props and a single child element
 - **THEN** the props are merged onto that child, and a slot rendering zero or several roots
   renders nothing rather than guessing
+
+### Requirement: Pro custom-node chrome SHALL support Vue
+
+`@docx-editor.dev/pro/vue` SHALL export `CustomNodeChrome`,
+`CustomNodeContextMenu`, `useCustomNodeDefinitions`,
+`resolveCustomNodeActivation`, and `activatedCustomNodeOf` with the same
+capabilities as the React Pro entry.
+
+The chrome SHALL resolve definitions from the `nodes` prop or the editor module,
+apply host-authored colors without interpolating file data into CSS, dispatch
+click and hover activation, and add edit and remove rows to the context menu.
+
+#### Scenario: A registered definition colors and activates a chip
+
+- **WHEN** `CustomNodeChrome` mounts with a registered definition
+- **THEN** the painted chip uses the definition color
+- **AND** a primary press and release on the same node calls its click hook
+
+#### Scenario: A custom node contributes context menu rows
+
+- **WHEN** the context menu opens on a recognized custom node
+- **THEN** its review-card text and available edit and remove actions render
+  before the packaged rows
+
+#### Scenario: Plain text contributes no custom-node section
+
+- **WHEN** the context menu opens outside a recognized custom node
+- **THEN** `CustomNodeContextMenu` renders nothing
 
 ### Requirement: Painted-surface chrome SHALL sanitize every document-supplied value
 

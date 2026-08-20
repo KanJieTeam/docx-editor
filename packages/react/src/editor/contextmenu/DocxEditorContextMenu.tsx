@@ -1,3 +1,5 @@
+import type { DocxEditorChildren } from '../../docx-editor-children';
+import type { ReactNode } from 'react';
 // The compound context menu: the right-click surface, as a panel of menu rows.
 //
 // DEFAULT-SET + IN-PLACE OVERRIDE, the same contract the toolbar and the menu bar have.
@@ -19,19 +21,25 @@ import {
   Children,
   isValidElement,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
-import type { CSSProperties, ReactElement, ReactNode } from 'react';
+import type { CSSProperties, ReactElement } from 'react';
 import { mergeArrangement, unwrapFragment } from '../merge-arrangement';
-import { useDocxEditor } from '../context';
+import { ReviewRailContext, useDocxEditor } from '../context';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n';
 import type { ToolbarTranslate } from '../toolbar/toolbar-context';
-import { MenuContext, type MenuContextValue } from '../menu/menu-context';
+import {
+  MenuContext,
+  useMenuContext,
+  useMenuLabel,
+  type MenuContextValue,
+} from '../menu/menu-context';
 import { focusBy, focusEdge, panelItems } from '../menu/menu-keyboard';
 import { MenuGroup, MenuItem, MenuRow, MenuSeparator, MenuSubmenu } from '../menu/parts';
 import { ContextMenuContext, type ContextMenuAnchor } from './contextmenu-context';
@@ -55,6 +63,7 @@ import {
   useTableContextMenuVisible,
 } from './parts';
 import { useScopeClassName } from '../scope-context';
+import { chromeControlForSlot, chromeIcon } from '../toolbar/ToolbarButton';
 
 /** Distance kept between the panel and the window edge when it flips. @internal */
 const VIEWPORT_INSET = 8;
@@ -77,13 +86,38 @@ export interface DocxEditorContextMenuProps {
   disabled?: boolean;
   /** Notified whenever the panel opens or closes. */
   onOpenChange?: (open: boolean) => void;
-  children?: ReactNode;
+  children?: DocxEditorChildren;
 }
 
 /** The packaged set, in order. Separators are positional, so they are part of the list. */
 type DefaultEntry =
   | { readonly kind: 'row'; readonly id: string; readonly render: () => ReactElement }
   | { readonly kind: 'separator'; readonly id: string };
+
+function ContextMenuAddComment() {
+  const editor = useDocxEditor();
+  const rail = useContext(ReviewRailContext);
+  const menu = useMenuContext();
+  const label = useMenuLabel();
+  const gate = editor?.can({ type: 'toggleReviewPane' });
+  const disabled =
+    !gate?.ok || (rail?.mounted ?? 0) === 0 || editor?.getSelectionPlacement() === null;
+  const control = chromeControlForSlot('review.comments');
+  return (
+    <MenuRow
+      icon={chromeIcon(control?.paths)}
+      slot="review.comments"
+      disabled={disabled}
+      title={gate && !gate.ok ? gate.reason : undefined}
+      onSelect={() => {
+        if (!rail?.requestCommentDraft()) return;
+        menu.setOpenMenu(null);
+      }}
+    >
+      {label('comments.addComment')}
+    </MenuRow>
+  );
+}
 
 const BASE_DEFAULT_SET: readonly DefaultEntry[] = [
   { kind: 'row', id: 'edit.cut', render: () => <ContextMenuCut /> },
@@ -110,7 +144,7 @@ const BASE_DEFAULT_SET: readonly DefaultEntry[] = [
   {
     kind: 'row',
     id: 'review.comments',
-    render: () => <MenuItem slot="review.comments" labelKey="comments.addComment" />,
+    render: () => <ContextMenuAddComment />,
   },
 ];
 

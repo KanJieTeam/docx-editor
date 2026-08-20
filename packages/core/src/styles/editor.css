@@ -72,6 +72,7 @@
 
   /* Surfaces */
   --doc-surface: #ffffff; /* panels, menus, dropdowns, cards */
+  --doc-popover-bg: var(--doc-surface); /* floating previews and contextual menus */
   --doc-card: #f8fbff; /* collapsed comment / suggestion cards (near-white) */
   --doc-bg: #f8f9fa; /* app background behind the page */
   --doc-bg-subtle: #f5f5f5; /* subtle section backgrounds */
@@ -113,6 +114,7 @@
 
   /* Text */
   --doc-text: #202124; /* primary text */
+  --doc-popover-fg: var(--doc-text); /* text inside floating previews and menus */
   --doc-text-muted: #5f6368; /* secondary text */
   --doc-text-subtle: #9aa0a6; /* tertiary/disabled text */
   --doc-text-placeholder: #999; /* placeholder text */
@@ -2327,6 +2329,36 @@ a.docx-hyperlink:focus-visible {
  * this class opts out deliberately — it is not the default for overlay content.
  */
 .docx-editor-one-surface__overlay-control {
+  pointer-events: auto;
+}
+
+.docx-image-selection-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--doc-z-chrome);
+  pointer-events: none;
+  outline: none;
+}
+
+.docx-image-selection-overlay__frame {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--doc-accent);
+  pointer-events: none;
+}
+
+.docx-image-selection-overlay__frame.docx-editor-one-surface__overlay-control {
+  pointer-events: auto;
+}
+
+.docx-image-selection-overlay__handle {
+  position: absolute;
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border: 1px solid var(--doc-accent);
+  background: var(--doc-bg);
   pointer-events: auto;
 }
 

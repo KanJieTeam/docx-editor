@@ -20,6 +20,7 @@ export {
   disposeLayoutShaping,
   toEditorFontError,
 } from './font-configuration.ts';
+export { LOADING_SNAPSHOT } from './loading-snapshot.ts';
 export {
   MAX_RESOLVER_FAMILIES,
   WORD_DEFAULT_FONT,
@@ -76,6 +77,7 @@ export {
   type RunTableChromeCommandResult,
   type ToolbarCommandState,
 } from './toolbar-commands.ts';
+export { editorCommandKey } from './command-key.ts';
 export { tableCommandState } from './docx-editor-derive.ts';
 export {
   applyTableChromePick,

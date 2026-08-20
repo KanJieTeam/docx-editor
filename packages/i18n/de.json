@@ -32,7 +32,8 @@
     "sectionBreakContinuous": "Abschnittsumbruch (fortlaufend)",
     "sectionBreakNextPage": "Abschnittsumbruch (nächste Seite)",
     "insertFootnote": "Fußnote einfügen",
-    "insertEndnote": "Endnote einfügen"
+    "insertEndnote": "Endnote einfügen",
+    "insertTable": null
   },
   "formattingBar": {
     "groups": {
@@ -643,5 +644,21 @@
     "relativeToHorizontal": "Relativ zu (horizontal)",
     "relativeToVertical": "Relativ zu (vertikal)",
     "verticalOffset": "Vertikaler Versatz"
+  },
+  "disabledReason": {
+    "commentSelection": null,
+    "drawingLocked": null,
+    "editorNotReady": null,
+    "imageSuggesting": null,
+    "invalidValue": null,
+    "mergeUnsupported": null,
+    "noContentControl": null,
+    "noDocument": null,
+    "noDrawing": null,
+    "notWired": null,
+    "splitUnsupported": null,
+    "trackedOnly": null,
+    "unavailable": null,
+    "viewing": null
   }
 }

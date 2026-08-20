@@ -1,3 +1,4 @@
+import type { DocxEditorChildren } from '../docx-editor-children';
 // Provider-first host for the docx editor facade.
 //
 // `DocxEditorRoot` renders no DOM of its own: it creates the facade WITHOUT a container
@@ -13,7 +14,6 @@
 // instance flows through `useState`, so consumers re-render when it lands.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
 import type {
   DocumentChange,
   DocumentSource,
@@ -37,6 +37,7 @@ import type {
 } from '@docx-editor.dev/core/editor';
 import { useTranslation, type TranslationKey } from '../i18n';
 import { DocxEditorContext, ReviewRailContext, type ReviewRailRegistry } from './context';
+import type { useDocxEditor } from './context';
 import { HyperlinkPopupContext, useHyperlinkPopupInstance } from './useHyperlinkPopup';
 import { ContentControlContext, useContentControlInstance } from './useContentControl';
 import { ImageInsertProvider } from './images/ImageInsert';
@@ -122,7 +123,7 @@ export interface DocxEditorRootProps {
   tableInteractionLabel?: (key: 'table.insertRowBelow' | 'table.insertColumnRight') => string;
   /** Optional decode port for embedded image insertion and paint in tests or custom hosts. */
   imageDecodePort?: ImageDecodePort;
-  children?: ReactNode;
+  children?: DocxEditorChildren;
 }
 
 /**
@@ -138,6 +139,58 @@ function sameZoomProp(a: ZoomMode | 'auto', b: ZoomMode | 'auto'): boolean {
   const right = resolveZoomMode(b);
   return left !== null && right !== null && sameZoomMode(left, right);
 }
+
+/** @public Vue-only lifecycle listeners; exported for cross-adapter API parity. */
+export interface DocxEditorRootListeners {
+  onReady?: (editor: Editor) => void;
+  onChange?: (change: DocumentChange) => void;
+  onFontError?: (error: EditorFontError) => void;
+}
+
+/** @public Vue-only setup result; exported for cross-adapter API parity. */
+export interface ProvideDocxEditorResult {
+  readonly DocxEditorRoot: typeof DocxEditorRoot;
+  readonly rootProps: Omit<DocxEditorRootProps, keyof DocxEditorRootListeners>;
+  readonly rootListeners: DocxEditorRootListeners;
+  readonly editorRef: ReturnType<typeof useDocxEditor>;
+}
+
+/**
+ * Prepares Root props and listeners while exposing the instance created by that Root.
+ * Call this function during render, like a React hook.
+ *
+ * @public
+ */
+function useProvidedDocxEditor(options: DocxEditorRootProps): ProvideDocxEditorResult {
+  const latest = useRef(options);
+  latest.current = options;
+  const [editorRef, setEditorRef] = useState<DocxEditorInstance | null>(null);
+  const {
+    onReady: _onReady,
+    onChange: _onChange,
+    onFontError: _onFontError,
+    ...rootProps
+  } = options;
+  const rootListeners = useMemo<DocxEditorRootListeners>(
+    () => ({
+      onReady: (editor) => {
+        setEditorRef(editor as DocxEditorInstance);
+        latest.current.onReady?.(editor);
+      },
+      onChange: (change) => latest.current.onChange?.(change),
+      onFontError: (error) => latest.current.onFontError?.(error),
+    }),
+    []
+  );
+  return {
+    DocxEditorRoot,
+    rootProps,
+    rootListeners,
+    editorRef,
+  };
+}
+
+export { useProvidedDocxEditor as provideDocxEditor };
 
 /**
  * Creates and owns a `DocxEditorInstance` and provides it to the subtree. Renders no
@@ -290,12 +343,26 @@ export function DocxEditorRoot(props: DocxEditorRootProps) {
   // A rail registers itself here so the viewport only reserves a gutter when one is
   // actually composed in. See `ReviewRailContext`.
   const [rails, setRails] = useState(0);
+  const commentDraftHandlers = useRef<Array<() => void>>([]);
   const railRegistry = useMemo<ReviewRailRegistry>(
     () => ({
       mounted: rails,
       register: () => {
         setRails((count) => count + 1);
         return () => setRails((count) => Math.max(0, count - 1));
+      },
+      registerCommentDraft: (handler) => {
+        commentDraftHandlers.current.push(handler);
+        return () => {
+          const index = commentDraftHandlers.current.indexOf(handler);
+          if (index !== -1) commentDraftHandlers.current.splice(index, 1);
+        };
+      },
+      requestCommentDraft: () => {
+        const handler = commentDraftHandlers.current.at(-1);
+        if (!handler) return false;
+        handler();
+        return true;
       },
     }),
     [rails]
@@ -337,13 +404,13 @@ export function DocxEditorRoot(props: DocxEditorRootProps) {
  * Publishes the popover state. A child of the editor context rather than part of `Root`
  * itself, because it consumes that context and a component cannot read its own provider.
  */
-function HyperlinkPopupProvider({ children }: { children?: ReactNode }) {
+function HyperlinkPopupProvider({ children }: { children?: DocxEditorChildren }) {
   const popup = useHyperlinkPopupInstance(true);
   return <HyperlinkPopupContext.Provider value={popup}>{children}</HyperlinkPopupContext.Provider>;
 }
 
 /** One content-control chrome state per editor — inspector open + mode toggles. */
-function ContentControlProvider({ children }: { children?: ReactNode }) {
+function ContentControlProvider({ children }: { children?: DocxEditorChildren }) {
   const chrome = useContentControlInstance();
   return <ContentControlContext.Provider value={chrome}>{children}</ContentControlContext.Provider>;
 }

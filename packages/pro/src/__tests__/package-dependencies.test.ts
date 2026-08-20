@@ -29,13 +29,15 @@ const manifest = JSON.parse(
 
 describe('how this package asks for the engine', () => {
   test('the engine is a peer, so the consumer resolves one copy of it', () => {
-    expect(manifest.peerDependencies?.['@docx-editor.dev/core']).toBeDefined();
+    expect(manifest.peerDependencies?.['@docx-editor.dev/core']).toBe('^2.6.0');
     expect(manifest.dependencies?.['@docx-editor.dev/core']).toBeUndefined();
   });
 
   test('the adapter is a peer for the same reason', () => {
     expect(manifest.peerDependencies?.['@docx-editor.dev/react']).toBeDefined();
+    expect(manifest.peerDependencies?.['@docx-editor.dev/vue']).toBeDefined();
     expect(manifest.dependencies?.['@docx-editor.dev/react']).toBeUndefined();
+    expect(manifest.dependencies?.['@docx-editor.dev/vue']).toBeUndefined();
   });
 
   test('nothing is installed on a consumer that this package does not import', () => {

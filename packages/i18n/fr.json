@@ -32,7 +32,8 @@
     "sectionBreakContinuous": "Saut de section (continu)",
     "sectionBreakNextPage": "Saut de section (page suivante)",
     "insertFootnote": "Insérer une note de bas de page",
-    "insertEndnote": "Insérer une note de fin"
+    "insertEndnote": "Insérer une note de fin",
+    "insertTable": null
   },
   "formattingBar": {
     "groups": {
@@ -643,5 +644,21 @@
     "relativeToHorizontal": "Par rapport à (horizontal)",
     "relativeToVertical": "Par rapport à (vertical)",
     "verticalOffset": "Décalage vertical"
+  },
+  "disabledReason": {
+    "commentSelection": null,
+    "drawingLocked": null,
+    "editorNotReady": null,
+    "imageSuggesting": null,
+    "invalidValue": null,
+    "mergeUnsupported": null,
+    "noContentControl": null,
+    "noDocument": null,
+    "noDrawing": null,
+    "notWired": null,
+    "splitUnsupported": null,
+    "trackedOnly": null,
+    "unavailable": null,
+    "viewing": null
   }
 }

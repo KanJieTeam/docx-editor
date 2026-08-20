@@ -1,9 +1,12 @@
+import type { DocxEditorChildren } from '../../docx-editor-children';
+import type { ReactNode } from 'react';
 // Shared insert-image wiring: hidden file input, preflight, and async dispatch.
 //
 // Toolbar and menu both trigger the same picker; Content attaches paste/drop to the same path.
 
-import { createContext, useCallback, useContext, useMemo, useRef, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useRef } from 'react';
 import { executeImageCommand, toolbarCommandState } from '@docx-editor.dev/core/editor';
+import { localizeDisabledReason } from '@docx-editor.dev/i18n';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n';
 import { useDocxEditor } from '../context';
@@ -59,7 +62,7 @@ export function ImageInsertProvider({ children }: ImageInsertProviderProps) {
     (a, b) => a.enabled === b.enabled && a.disabledReason === b.disabledReason
   );
   const isEnabled = insertState.enabled;
-  const disabledReason = insertState.disabledReason;
+  const disabledReason = localizeDisabledReason(insertState.disabledReason, t);
 
   const insertBytes = useCallback(
     async (bytes: Uint8Array) => {
@@ -182,7 +185,7 @@ export interface ImageInsertTriggerProps {
   className?: string;
   hidden?: boolean;
   asChild?: boolean;
-  children?: ReactNode;
+  children?: DocxEditorChildren;
 }
 
 /** Toolbar insert-image control — opens the shared file picker. @public */

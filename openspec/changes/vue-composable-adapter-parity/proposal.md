@@ -64,8 +64,8 @@ and no exemption file at the end of this change.
 - `@docx-editor.dev/core` moves from `dependencies` to `peerDependencies` + a `workspace:*`
   `devDependency`, the shape `packages/react/package.json` already has and
   `packages/react/test/package-dependencies.test.ts` already pins.
-- The build moves to `tsup`, with the engine, `vue`, the i18n package, `harfbuzzjs` and
-  `emf-converter` external, and `metafile: true`. The metafile is not optional:
+- The build moves to `tsup`, with the engine, `vue`, and the i18n package external, and
+  `metafile: true`. The metafile is not optional:
   `scripts/generate-third-party-notices.mjs` reads `dist/metafile-*.json`, the run is
   all-or-nothing, and a publishable package with no attribution path fails the release.
 - `@docx-editor.dev/i18n` gets a real semver range. `private: true` goes. The package joins
@@ -134,13 +134,17 @@ one: the module auto-imports from the package root and points at
   changeset declares one bump and the rest follow. A deprecation is a minor; the removal is the
   major that follows.
 
+## Extended scope
+
+- `@docx-editor.dev/pro/vue` now supplies the `DocxEditorReview` rail and review composables.
+  The public `Editor.retainSelection()` token and matching `Editor.releaseSelection(token)`
+  let compose fields preserve the selected range without releasing another chrome owner's pin.
+- `@docx-editor.dev/pro/vue` also supplies `CustomNodeChrome`,
+  `CustomNodeContextMenu`, and the activation helpers. These match the React Pro
+  chrome for custom-node color, click, hover, edit, and remove actions.
+
 ## Out of scope
 
-- `@docx-editor.dev/pro/vue`. The review pane pins the selection with
-  `editor.surface.retainSelection()`, and `surface` is the escape hatch, not the contract;
-  publishing retain/release on `Editor` is the prerequisite, and it is engine work. Vue ships
-  the SEAMS the pane composes with (`ReviewRailContext` as an `InjectionKey`, `Slot`,
-  `LocaleProvider`) so the pane is the only thing missing.
 - REMOVING the deprecated React chrome. That is the next major, and it is not this change's to
   spend.
 

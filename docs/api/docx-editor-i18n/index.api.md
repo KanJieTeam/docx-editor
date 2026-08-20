@@ -43,6 +43,9 @@ export const locales: Record<LocaleCode, PartialLocaleStrings>;
 export type LocaleStrings = typeof enJson;
 
 // @public
+export function localizeDisabledReason(reason: string | null, t: TFunction): string | null;
+
+// @public
 export type PartialLocaleStrings = DeepPartial<LocaleStrings> & {
     _lang?: LocaleCode | (string & {});
 };

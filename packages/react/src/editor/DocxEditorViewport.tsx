@@ -1,3 +1,4 @@
+import type { DocxEditorChildren } from '../docx-editor-children';
 // The scroll container around the painted pages.
 //
 // The class list is LOAD-BEARING, not styling sugar:
@@ -9,7 +10,7 @@
 //   document scrolling and virtualization degrades.
 
 import { useCallback, useContext } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties } from 'react';
 import type { EditorSnapshot } from '@docx-editor.dev/core/contracts/editor';
 import { ReviewRailContext, useDocxEditor } from './context';
 import { useEditorState } from './useEditorState';
@@ -27,7 +28,7 @@ export interface DocxEditorViewportProps {
   /** Appended after the load-bearing viewport classes (e.g. `dark` for chrome theming). */
   className?: string;
   style?: CSSProperties;
-  children?: ReactNode;
+  children?: DocxEditorChildren;
 }
 
 /**
