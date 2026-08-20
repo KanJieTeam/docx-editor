@@ -160,6 +160,10 @@ interface ReviewRailValue {
    * host-supplied per-author style (colour, wash, class names, avatar).
    */
   readonly authorInfo: ReadonlyMap<string, ReviewAuthorInfo>;
+  /** The author and resolved presentation an omitted-author comment will receive. */
+  readonly draftAuthor: string | null;
+  readonly draftAuthorInfo: ReviewAuthorInfo | undefined;
+  readonly draftAuthorSlot: number;
   /** Comment items by id, so a card can render its replies without walking the list. */
   readonly byId: ReadonlyMap<string, ReviewItemView>;
   /** Report a slot element so the rail can keep its measured height current. */
@@ -280,6 +284,9 @@ const INERT_RAIL: ReviewRailValue = {
   allItems: [],
   authorSlots: new Map(),
   authorInfo: new Map(),
+  draftAuthor: null,
+  draftAuthorInfo: undefined,
+  draftAuthorSlot: 0,
   byId: new Map(),
   measure: () => {},
   beginDraft: () => {},
@@ -371,8 +378,14 @@ import {
   REJECT_ICON,
   icon,
   markerIconPath,
+  resolvedCommentIcon,
 } from './review-icons.tsx';
-import { createCommentResolutionParts } from './review-comment-resolution.tsx';
+import {
+  ResolvedCommentCard,
+  ResolvedDisclosureProvider,
+  createCommentResolutionParts,
+  useResolvedDisclosure,
+} from './review-comment-resolution.tsx';
 import { createReviewComposeParts } from './review-compose-boxes.tsx';
 import { ReviewActionSlot } from './review-action-slot.tsx';
 import { revisionLabelKey } from './review-labels.ts';
@@ -458,18 +471,20 @@ function ReviewRoot({
   const items = useMemo(() => {
     return filter ? review.items.filter((entry) => filter(entry)) : review.items;
   }, [review.items, filter]);
-
   // Word's rule: a colour per author by ORDER OF FIRST APPEARANCE. A hash of the name is
   // stable but collides, and two reviewers drawn in one colour tells the reader the wrong
   // thing about who proposed what.
+  const configuredAuthor = editor?.getConfiguredAuthor() ?? null;
   const authorSlots = useMemo(() => {
     const slots = new Map<string, number>();
     for (const entry of items) {
       if (entry.author && !slots.has(entry.author)) slots.set(entry.author, slots.size);
     }
+    if (configuredAuthor && !slots.has(configuredAuthor)) {
+      slots.set(configuredAuthor, slots.size);
+    }
     return slots;
-  }, [items]);
-
+  }, [items, configuredAuthor]);
   const byId = useMemo(() => {
     const map = new Map<string, ReviewItemView>();
     for (const entry of items) map.set(entry.id, entry);
@@ -662,6 +677,8 @@ function ReviewRoot({
   // keyed by author for the card parts.
   const roster = useReviewAuthors();
   const authorInfo = useReviewAuthorInfo(roster, items, authorSlots, editor);
+  const draftAuthorSlot = configuredAuthor ? (authorSlots.get(configuredAuthor) ?? 0) : 0;
+  const draftAuthorInfo = configuredAuthor ? authorInfo.get(configuredAuthor) : undefined;
   const value = useMemo<ReviewRailValue>(
     () => ({
       t: hostT,
@@ -671,6 +688,9 @@ function ReviewRoot({
       allItems: allReview.items,
       authorSlots,
       authorInfo,
+      draftAuthor: configuredAuthor,
+      draftAuthorInfo,
+      draftAuthorSlot,
       byId,
       measure: observeSlot,
       beginDraft,
@@ -685,6 +705,9 @@ function ReviewRoot({
       items,
       authorSlots,
       authorInfo,
+      configuredAuthor,
+      draftAuthorInfo,
+      draftAuthorSlot,
       byId,
       observeSlot,
       beginDraft,
@@ -848,52 +871,54 @@ function ReviewRoot({
   );
 
   return (
-    <ReviewContext.Provider value={value}>
-      {asChild && isValidElement(children) ? (
-        // The child becomes the rail ELEMENT and keeps its own children; the rail's content
-        // is appended after them. Two earlier shapes were wrong: rendering `children` alone
-        // mounted an empty element with no cards, and cloning it while ALSO passing it down
-        // as the card preset rendered the consumer's element once per card.
-        <Slot {...shared}>
-          {cloneElement(
-            children as React.ReactElement<{ children?: ReactNode }>,
-            undefined,
-            (children as React.ReactElement<{ children?: ReactNode }>).props.children,
-            // The same presentation switch as the packaged element: a compact rail is
-            // 32px wide (`:not([data-open])`), and mounting the full list inside it
-            // rendered every card squeezed to that width over the page.
-            preset ? (
-              expanded ? (
-                <ReviewList
-                  stack={stack}
-                  positions={stacked}
-                  collapsed={collapsedKeys}
-                  scale={metrics.scale}
-                  offset={metrics.top}
-                  window={window_}
-                />
-              ) : (
-                <>
-                  {markers}
-                  {compactCard}
-                </>
-              )
-            ) : null,
-            affordances
-          )}
-        </Slot>
-      ) : (
-        <aside {...shared}>
-          {expanded && furniture !== undefined ? (
-            <div className="docx-review__furniture" data-testid="review-furniture">
-              {furniture}
-            </div>
-          ) : null}
-          {body}
-          {affordances}
-        </aside>
-      )}
-    </ReviewContext.Provider>
+    <ResolvedDisclosureProvider items={items}>
+      <ReviewContext.Provider value={value}>
+        {asChild && isValidElement(children) ? (
+          // The child becomes the rail ELEMENT and keeps its own children; the rail's content
+          // is appended after them. Two earlier shapes were wrong: rendering `children` alone
+          // mounted an empty element with no cards, and cloning it while ALSO passing it down
+          // as the card preset rendered the consumer's element once per card.
+          <Slot {...shared}>
+            {cloneElement(
+              children as React.ReactElement<{ children?: ReactNode }>,
+              undefined,
+              (children as React.ReactElement<{ children?: ReactNode }>).props.children,
+              // The same presentation switch as the packaged element: a compact rail is
+              // 32px wide (`:not([data-open])`), and mounting the full list inside it
+              // rendered every card squeezed to that width over the page.
+              preset ? (
+                expanded ? (
+                  <ReviewList
+                    stack={stack}
+                    positions={stacked}
+                    collapsed={collapsedKeys}
+                    scale={metrics.scale}
+                    offset={metrics.top}
+                    window={window_}
+                  />
+                ) : (
+                  <>
+                    {markers}
+                    {compactCard}
+                  </>
+                )
+              ) : null,
+              affordances
+            )}
+          </Slot>
+        ) : (
+          <aside {...shared}>
+            {expanded && furniture !== undefined ? (
+              <div className="docx-review__furniture" data-testid="review-furniture">
+                {furniture}
+              </div>
+            ) : null}
+            {body}
+            {affordances}
+          </aside>
+        )}
+      </ReviewContext.Provider>
+    </ResolvedDisclosureProvider>
   );
 }
 
@@ -1025,12 +1050,8 @@ function ReviewMarkers({
   icon: iconOverride,
 }: ReviewMarkersProps) {
   const { review, authorSlots, authorInfo } = useRail();
+  const resolvedDisclosure = useResolvedDisclosure();
   const t = useReviewLabel();
-  // Markers stack the way the cards do: each sits at its own anchor, or just below the
-  // previous marker when the anchors are closer than a marker is tall. Raw anchors put
-  // every change on a dense line at the same `top`, and the rail drew them on top of each
-  // other. The cursor runs in CSS px, after scaling, because the marker's box does not
-  // zoom with the page.
   const { roots, stackedTops } = useMemo(() => {
     const present = idsOf(review.items);
     const entries = review.items.filter((entry) => !isThreadedReply(entry, present));
@@ -1058,8 +1079,6 @@ function ReviewMarkers({
             className="docx-review__marker"
             data-testid="review-marker"
             data-kind={entry.kind === 'revision' ? entry.revisionKind : entry.kind}
-            // Per-author CSS hooks, mirroring the painted document's
-            // `data-review-author`/`data-review-author-slot`. A custom card has no author.
             {...(entry.author
               ? {
                   'data-review-author': entry.author,
@@ -1072,8 +1091,6 @@ function ReviewMarkers({
             style={{
               position: 'absolute',
               top,
-              // The accent rides along so a host rule can colour the marker per author.
-              // The accent only — a card background has no business on a gutter glyph.
               ...(entry.author
                 ? ({
                     '--doc-review-author-current': authorAccent(
@@ -1083,22 +1100,19 @@ function ReviewMarkers({
                   } as CSSProperties)
                 : {}),
             }}
-            // A custom card has no author; leading its tooltip with ": " read as a glitch.
             title={entry.author ? `${entry.author}: ${entry.text}` : entry.text}
-            // The author and the words, not a generic "show pane" — with the label the same
-            // on every marker a screen reader heard N identical buttons and never learned
-            // who said what.
             aria-label={`${t('review.showPane')}: ${entry.author ? `${entry.author}. ` : ''}${entry.text}`}
             onMouseDown={guardMousedown}
             onClick={() => {
-              // Open the pane AND put the caret in this item's text, so the card the reader
-              // asked for is the one that unfolds.
+              if (entry.kind === 'comment' && entry.resolved) resolvedDisclosure.open(entry.key);
               review.setPaneOpen(true);
               review.setActive(entry.key);
             }}
           >
             {(typeof iconOverride === 'function' ? iconOverride(entry) : iconOverride) ??
-              icon(markerIconPath(entry))}
+              (entry.kind === 'comment' && entry.resolved
+                ? resolvedCommentIcon()
+                : icon(markerIconPath(entry)))}
           </button>
         );
       })}
@@ -1500,59 +1514,67 @@ function ReviewCard({ className, asChild, hidden, children }: ReviewPartProps) {
   const { review, authorSlots, authorInfo } = useRail();
   const entry = useContext(ReviewItemContext);
   const cardId = useId();
+  const t = useReviewLabel();
   if (hidden || !entry) return null;
   const slot = authorSlots.get(entry.author) ?? 0;
+  const resolvedCollapsible = !asChild && entry.kind === 'comment' && entry.resolved;
 
   const shared = {
     className: `docx-review__card${className ? ` ${className}` : ''}`,
     'data-testid': 'review-card',
-    'aria-labelledby': `${cardId}-author ${cardId}-summary`,
+    ...(!resolvedCollapsible ? { 'aria-labelledby': `${cardId}-author ${cardId}-summary` } : {}),
     'data-kind': entry.kind === 'revision' ? (entry.revisionKind ?? 'revision') : entry.kind,
-    // Per-author CSS hooks, mirroring the painted document's `data-review-author` /
-    // `data-review-author-slot`: `[data-review-author='Name']` restyles one reviewer's cards,
-    // `[data-review-author-slot='2']` does it without knowing the name.
+    // Match each card to its painted author style.
     ...(entry.author
       ? {
           'data-review-author': entry.author,
           'data-review-author-slot': authorSlot(authorInfo.get(entry.author), slot),
         }
       : {}),
-    // Which custom node, not just that it is one: every custom card is `data-kind="custom"`,
-    // so a theme could otherwise never tell a citation card from a clause card.
+    // Let themes distinguish custom node types.
     ...(entry.kind === 'custom' && entry.item.kind === 'custom'
       ? { 'data-node-name': entry.item.name }
       : {}),
     ...(entry.isActive ? { 'data-active': '' } : {}),
     ...(entry.kind === 'comment' && entry.resolved ? { 'data-resolved': '' } : {}),
-    // The author colour is a CSS variable rather than a class, so a host restyling the card
-    // keeps the per-author identity without re-deriving the slot order. It is the ONLY
-    // styling the packaged card takes from a declaration.
+    ...(resolvedCollapsible ? { 'data-resolved-miniature': '' } : {}),
+    // Keep author identity when a host restyles the card.
     style: authorCardStyle(entry.author, authorInfo.get(entry.author), slot),
-    tabIndex: 0,
-    // `button`, not `group`: it has one action and assistive tech has to announce it. A
-    // `group` with no accessible name is commonly dropped from the tree entirely.
-    role: 'button' as const,
+    ...(!resolvedCollapsible ? { tabIndex: 0, role: 'button' as const } : {}),
     id: cardId,
-    // The rail's mousedown guard keeps the caret, which also cancelled focus and made the
-    // card's own text unselectable. Taking focus explicitly restores the keyboard path
-    // without giving the caret away.
-    onMouseDown: (event: React.MouseEvent) => {
-      if ((event.target as HTMLElement | null)?.closest('[data-review-selectable]')) return;
-      (event.currentTarget as HTMLElement).focus({ preventScroll: true });
-    },
-    onClick: () => review.setActive(entry.key),
-    onKeyDown: (event: React.KeyboardEvent) => {
-      // Only the CARD's own keys. The reply box is inside it, and a bubbling handler that
-      // treats Space as "activate" swallows every space someone types — a reply came out as
-      // "Agreed,keepingthis." before this guard.
-      if (event.target !== event.currentTarget) return;
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      event.preventDefault();
-      review.setActive(entry.key);
-    },
+    // Restore keyboard focus without moving the document caret.
+    ...(!resolvedCollapsible
+      ? {
+          onMouseDown: (event: React.MouseEvent) => {
+            if ((event.target as HTMLElement | null)?.closest('[data-review-selectable]')) return;
+            (event.currentTarget as HTMLElement).focus({ preventScroll: true });
+          },
+          onClick: () => review.setActive(entry.key),
+          onKeyDown: (event: React.KeyboardEvent) => {
+            if (event.target !== event.currentTarget) return;
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            review.setActive(entry.key);
+          },
+        }
+      : {}),
   };
 
   if (asChild) return <Slot {...shared}>{children}</Slot>;
+  if (resolvedCollapsible) {
+    return (
+      <ResolvedCommentCard
+        {...shared}
+        label={t('review.showResolvedComment')}
+        statusLabel={t('review.resolved')}
+        entryKey={entry.key}
+        onActivate={() => review.setActive(entry.key)}
+        onDeactivate={() => review.setActive(null)}
+      >
+        <ReviewCardPreset>{children}</ReviewCardPreset>
+      </ResolvedCommentCard>
+    );
+  }
   return (
     <div {...shared}>
       <ReviewCardPreset>{children}</ReviewCardPreset>

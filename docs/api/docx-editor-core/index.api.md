@@ -4,8 +4,6 @@
 
 ```ts
 
-import { Node as Node_2 } from 'prosemirror-model';
-
 // @public
 export interface ApplyResult {
     // (undocumented)
@@ -1020,6 +1018,8 @@ export interface DocxEditorInstance extends Editor {
     attach(el: HTMLElement): void;
     detach(): void;
     fontMeasurement(): FontMeasurementState;
+    // @internal
+    getConfiguredAuthor(): string | null;
     getReviewAuthors(): readonly ReviewAuthorInfo[];
     // @internal
     getReviewAuthorStyle(author: string): RevisionAuthorStyle | undefined;

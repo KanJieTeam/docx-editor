@@ -111,6 +111,8 @@
   --doc-comment-border: rgba(245, 174, 0, 0.45);
   --doc-comment-active-bg: rgba(255, 212, 0, 0.35);
   --doc-comment-active-border: rgba(245, 174, 0, 0.9);
+  --doc-comment-resolved-active-bg: rgba(255, 212, 0, 0.18);
+  --doc-comment-resolved-active-border: rgba(245, 174, 0, 0.6);
 
   /* Text */
   --doc-text: #202124; /* primary text */
@@ -4939,7 +4941,7 @@ a.docx-hyperlink:focus-visible {
 
 /* A card being composed reads as unfinished until it is committed. */
 .docx-review__card[data-draft] {
-  border-color: var(--doc-primary, #1a73e8);
+  border-color: var(--doc-review-author-ink, var(--doc-primary, #1a73e8));
 }
 
 /* The Word-style decision balloon: clicking a format or structural change in the page
@@ -5456,8 +5458,117 @@ a.docx-hyperlink:focus-visible {
   background: var(--doc-review-card-active-bg);
 }
 
-.docx-review__card[data-resolved] {
+.docx-review__card[data-resolved]:not([data-resolved-miniature]) {
   opacity: 0.55;
+}
+
+.docx-review__card[data-resolved-miniature]:not([open]) {
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--doc-text-muted);
+  font: inherit;
+  opacity: 1;
+}
+
+.docx-review__card[data-resolved-miniature]:not([open]):hover {
+  background: var(--doc-surface-hover);
+  color: var(--doc-text);
+}
+
+.docx-review__resolved-toggle {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  margin: -6px;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-end;
+  border-radius: 50%;
+  color: var(--doc-success, #34a853);
+  cursor: pointer;
+  list-style: none;
+}
+
+.docx-review__resolved-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.docx-review__resolved-status {
+  display: none;
+  color: var(--doc-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.docx-review__card[data-resolved-miniature][open] > .docx-review__resolved-toggle {
+  width: 100%;
+  height: 28px;
+  margin: -4px 0 4px;
+  justify-content: space-between;
+  align-self: stretch;
+  border-radius: 4px;
+}
+
+.docx-review__card[data-resolved-miniature][open]
+  > .docx-review__resolved-toggle
+  > .docx-review__resolved-status {
+  display: inline;
+}
+
+.docx-review__card[data-resolved-miniature]:not([open]) .docx-review__resolved-toggle {
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  align-self: center;
+  border-radius: 6px;
+}
+
+.docx-review__resolved-toggle:focus-visible {
+  outline: 2px solid var(--doc-focus-ring);
+  outline-offset: 1px;
+}
+
+.docx-review__resolved-icon {
+  position: relative;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+}
+
+.docx-review__resolved-comment {
+  display: inline-flex;
+  color: var(--doc-text-muted);
+}
+
+.docx-review__resolved-comment > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.docx-review__resolved-tick {
+  position: absolute;
+  inset: 2px 3px 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--doc-success);
+}
+
+.docx-review__resolved-tick > svg {
+  width: 10px;
+  height: 10px;
 }
 
 .docx-review__head {
@@ -5660,7 +5771,7 @@ a.docx-hyperlink:focus-visible {
 }
 
 .docx-review__input:focus-visible {
-  outline: 2px solid var(--doc-focus-ring, #3b82f6);
+  outline: 1px solid var(--doc-border-strong);
   outline-offset: -1px;
 }
 
@@ -5742,6 +5853,11 @@ a.docx-hyperlink:focus-visible {
 .docx-comment-band--active {
   background: var(--doc-comment-active-bg);
   box-shadow: inset 0 -1px 0 var(--doc-comment-active-border);
+}
+
+.docx-comment-band--resolved-active {
+  background: var(--doc-comment-resolved-active-bg);
+  box-shadow: inset 0 -1px 0 var(--doc-comment-resolved-active-border);
 }
 
 /* WHOSE COMMENT THIS IS, for CSS only.

@@ -603,7 +603,9 @@
     "showPane": "Açıklamaları göster",
     "structural": "Belge yapısı değiştirildi",
     "deleteComment": "Açıklamayı sil",
-    "discardChange": "Değişikliği at"
+    "discardChange": "Değişikliği at",
+    "showResolvedComment": null,
+    "resolved": null
   },
   "imageAltText": {
     "description": "Açıklama",

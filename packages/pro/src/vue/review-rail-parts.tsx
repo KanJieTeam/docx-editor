@@ -40,7 +40,7 @@ import {
   ReviewSummary,
   ReviewTime,
 } from './review-card-parts.tsx';
-import { ADD_COMMENT_ICON, icon, markerIconPath } from './review-icons.tsx';
+import { ADD_COMMENT_ICON, icon, markerIconPath, resolvedCommentIcon } from './review-icons.tsx';
 import { revisionLabelKey } from './review-labels.ts';
 import { authorAccent, authorCardStyle, authorSlot } from './review-author-styles.ts';
 
@@ -164,7 +164,7 @@ export const ReviewMarkers = markPart(
 
       return () => {
         if (props.hidden) return null;
-        const { review, authorSlots, authorInfo } = rail.value;
+        const { review, authorSlots, authorInfo, setExpandedResolvedKey } = rail.value;
         const { roots, stackedTops } = stacked.value;
         return (
           <div class={`docx-review__markers${props.className ? ` ${props.className}` : ''}`}>
@@ -206,12 +206,17 @@ export const ReviewMarkers = markPart(
                   aria-label={`${t('review.showPane')}: ${entry.author ? `${entry.author}. ` : ''}${entry.text}`}
                   onMousedown={guardMousedown}
                   onClick={() => {
+                    if (entry.kind === 'comment' && entry.resolved) {
+                      setExpandedResolvedKey(entry.key);
+                    }
                     review.setPaneOpen(true);
                     review.setActive(entry.key);
                   }}
                 >
                   {(typeof props.icon === 'function' ? props.icon(entry) : props.icon) ??
-                    icon(markerIconPath(entry))}
+                    (entry.kind === 'comment' && entry.resolved
+                      ? resolvedCommentIcon()
+                      : icon(markerIconPath(entry)))}
                 </button>
               );
             })}

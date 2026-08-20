@@ -603,7 +603,9 @@
     "showPane": "הצג הערות",
     "structural": "מבנה המסמך שונה",
     "deleteComment": "מחק הערה",
-    "discardChange": "בטל שינוי"
+    "discardChange": "בטל שינוי",
+    "showResolvedComment": null,
+    "resolved": null
   },
   "imageAltText": {
     "description": "תיאור",

@@ -603,7 +603,9 @@
     "showPane": "टिप्पणियाँ दिखाएँ",
     "structural": "दस्तावेज़ संरचना बदली गई",
     "deleteComment": "टिप्पणी हटाएँ",
-    "discardChange": "परिवर्तन छोड़ें"
+    "discardChange": "परिवर्तन छोड़ें",
+    "showResolvedComment": null,
+    "resolved": null
   },
   "imageAltText": {
     "description": "विवरण",
