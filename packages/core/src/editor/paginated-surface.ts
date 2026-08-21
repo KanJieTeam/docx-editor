@@ -13,6 +13,7 @@ import {
   inlineControlEndingAt,
   inlineControlStartingAt,
   isContentControl,
+  parentNodeOf,
   parseTocInstruction,
   planTocEntries,
   readViewSettings,
@@ -24,6 +25,7 @@ import {
   type StoryScope,
   type TreeDocOp,
 } from '@docx-editor.dev/core/store';
+import { retractedLengthOf } from '../store/store/tree-op-retraction.ts';
 import { syncActiveFieldShading } from './surface-field-shading.ts';
 import {
   createLayoutScheduler,
@@ -2210,6 +2212,10 @@ export function mountPaginatedSurface(
       case 'setParagraphMarkRevision':
       case 'proposeParagraphMerge':
         return true;
+      // Paste proposes its breaks through the op itself, so a paste of newlines alone is a
+      // tracked edit with no `insertText` beside it to report for it.
+      case 'splitParagraphMany':
+        return op.revision !== undefined;
       default:
         return false;
     }
@@ -2236,6 +2242,9 @@ export function mountPaginatedSurface(
       // is already in two paragraphs, and what is being proposed is the break between them.
       // §17.13.5 puts the new mark on the FIRST paragraph, and rejecting it runs the two
       // back together.
+      // Paste cuts its pasted text into paragraphs with ONE op, so the proposal rides on the
+      // op itself: the store mints the paragraphs, so only the store can address their marks.
+      if (op.op === 'splitParagraphMany') return [{ ...op, revision }];
       if (op.op === 'splitParagraph') {
         return [
           op,
@@ -2259,6 +2268,80 @@ export function mountPaginatedSurface(
       }
       return [op];
     });
+  }
+
+  /**
+   * The history mark for a caret, which is what REDO restores.
+   *
+   * `applyOps` takes it as its third argument and the store records it on the entry. Only
+   * `type()` ever supplied one, so redo put the caret back where the edit STARTED — after
+   * redoing Enter the next character went into the paragraph above the one it belonged to.
+   */
+  /**
+   * A selection carried across a change to ONE paragraph's text.
+   *
+   * The two strings are all this needs: what survives at the front stays put, what survives
+   * at the back moves by the length difference, and an offset inside the part that changed
+   * collapses to where the change began — which is where the words the caret was in used to
+   * be. Resolving a revision under the caret is the case: the offsets are still legal, so
+   * nothing clamps them, and they now address different characters.
+   */
+  function mappedAcrossTextChange(
+    current: SemanticSelection,
+    paragraphId: string,
+    beforeText: string
+  ): SemanticSelection {
+    const afterText = textOf(paragraphId);
+    if (afterText === beforeText) return current;
+    let prefix = 0;
+    while (
+      prefix < beforeText.length &&
+      prefix < afterText.length &&
+      beforeText[prefix] === afterText[prefix]
+    ) {
+      prefix += 1;
+    }
+    let suffix = 0;
+    while (
+      suffix < beforeText.length - prefix &&
+      suffix < afterText.length - prefix &&
+      beforeText[beforeText.length - 1 - suffix] === afterText[afterText.length - 1 - suffix]
+    ) {
+      suffix += 1;
+    }
+    const delta = afterText.length - beforeText.length;
+    const move = (position: SemanticPosition): SemanticPosition => {
+      if (position.paragraphId !== paragraphId) return position;
+      if (position.offset <= prefix) return position;
+      if (position.offset >= beforeText.length - suffix) {
+        return { ...position, offset: position.offset + delta };
+      }
+      return { ...position, offset: prefix };
+    };
+    return { anchor: move(current.anchor), head: move(current.head) };
+  }
+
+  /**
+   * Whether two paragraphs are siblings in the same container, so a join is even expressible.
+   *
+   * `paragraphOrder()` is flat document order: the paragraph before the one after a table is
+   * inside the table's last cell, and the paragraph before the first cell's is outside it.
+   * Neither pair can be joined, and the store says so — but only after the op is built and
+   * the whole transaction refused.
+   */
+  function joinableSiblings(firstId: string, secondId: string): boolean {
+    const part = session.partFor(storyScope()) ?? session.part();
+    const firstParent = parentNodeOf(part, firstId);
+    const secondParent = parentNodeOf(part, secondId);
+    return firstParent !== null && secondParent !== null && firstParent.id === secondParent.id;
+  }
+
+  function caretMark(position: { paragraphId: string; offset: number }): {
+    paragraphId: string;
+    start: number;
+    end: number;
+  } {
+    return { paragraphId: position.paragraphId, start: position.offset, end: position.offset };
   }
 
   function commit(
@@ -2454,6 +2537,14 @@ export function mountPaginatedSurface(
       caretFollowPending = true;
     },
     commit: (run) => commit(run),
+    // The composition readback writes through the SAME lane as every other edit. Calling the
+    // session directly skipped `trackedOps` and `writeRefusal`, so IME text in suggesting
+    // mode landed untracked — the reviewer proposing a change was editing the document —
+    // and forms protection and content-control locks did not apply to it either.
+    applyOps: (ops, mark, scope) => applyOps(ops, mark, undefined, scope),
+    hasPendingInput: () => typeBuffer.length > 0,
+    replacementOffset: (paragraphId, from, to) =>
+      replacementOffset({ paragraphId, offset: from }, { paragraphId, offset: to }),
     render: () => render(),
     flushLayout: () => flushLayout(),
     updateCaret: () => {
@@ -2482,6 +2573,12 @@ export function mountPaginatedSurface(
       // buffered body keystrokes must land in the body first, not the header.
       flushTypeBuffer();
       retireActivationPin();
+      // The rest of what a caret move means, which this second entry point used to skip: an
+      // armed typing format belongs to the position it was armed at, and a review card the
+      // reader dismissed at one caret is not dismissed at the next. A round trip through a
+      // header rearmed Bold on re-entry and left a card that would not reopen.
+      reconcilePendingWith(next);
+      dismissedReviewKeys.clear();
       selection = next;
       cellSelection = null;
       desiredX = null;
@@ -2492,6 +2589,7 @@ export function mountPaginatedSurface(
     notify: () => options.onChange?.(currentState()),
     materializedPages: () => materializedSet,
     entryRefused: () => editingMode === 'view',
+    leaveOtherStories: () => noteOps?.exitNote(),
   });
 
   noteOps = createNoteOps({
@@ -2501,6 +2599,8 @@ export function mountPaginatedSurface(
     selection: () => selection,
     selectionMark: () => selectionMark(),
     orderedStart: () => orderedStart(),
+    deleteSelectionPlan: () => deleteSelectionPlan(),
+    undo: () => surface.undo(),
     activeScope: () => {
       const note = noteOps?.activeNoteScope();
       if (note) return note;
@@ -3447,9 +3547,17 @@ export function mountPaginatedSurface(
       // lets the pane fold them into one `Replaced "x" with "y"` card. Mid-sentence
       // replacements were showing as two unrelated decisions, and a reviewer could accept
       // one half.
+      //
+      // It keeps only the characters it STRIKES. Whatever of the range is this author's own
+      // pending insertion is RETRACTED instead — those characters leave the paragraph — so
+      // the offset past the selection is past the end of what the insert will find there.
+      // Typing over your own suggestion was refused as `offset-out-of-range`, and since a
+      // refusal takes the whole transaction, the keystroke did nothing at all.
       const struck = editingMode === 'suggest' ? orderedRange() : null;
       const insertAt =
-        struck && struck.to.paragraphId === start.paragraphId ? struck.to.offset : start.offset;
+        struck && struck.to.paragraphId === start.paragraphId
+          ? struck.to.offset - retractedByOwnInsertion(struck.from, struck.to)
+          : start.offset;
       const insertOps: TreeDocOp[] = [
         ...plan.ops,
         { op: 'insertText', paragraphId: start.paragraphId, offset: insertAt, text },
@@ -3481,7 +3589,7 @@ export function mountPaginatedSurface(
       const plan = deleteSelectionPlan();
       if (plan.ops.length > 0) {
         commit(
-          () => applyOps(plan.ops, selectionMark()),
+          () => applyOps(plan.ops, selectionMark(), caretMark(plan.collapseTo)),
           () => collapsedAt(plan.collapseTo)
         );
         return;
@@ -3513,7 +3621,8 @@ export function mountPaginatedSurface(
                     end: text.length,
                   },
                 ],
-                selectionMark()
+                selectionMark(),
+                caretMark({ paragraphId: member, offset: text.length - 1 })
               ),
             () => collapsedAt({ paragraphId: member, offset: text.length - 1 }),
             { rearmPending: armed }
@@ -3524,12 +3633,23 @@ export function mountPaginatedSurface(
         const index = order.indexOf(position.paragraphId);
         const previous = order[index - 1];
         if (!previous) return;
+        // ONLY A SIBLING CAN BE JOINED. Document order walks straight into the last cell of a
+        // table, so Backspace at the start of the paragraph after one built a join the store
+        // is guaranteed to refuse — the key did nothing AND left `not-adjacent-siblings` on
+        // the surface, where a host that surfaces refusals reported an error for an ordinary
+        // Backspace. Word moves the caret into the last cell instead; doing nothing is the
+        // half of that this lane can honestly promise.
+        if (!joinableSiblings(previous, position.paragraphId)) {
+          setSelection(collapsedAt({ paragraphId: previous, offset: textOf(previous).length }));
+          return;
+        }
         const joinAt = textOf(previous).length;
         commit(
           () =>
             applyOps(
               [{ op: 'joinParagraphs', firstId: previous, secondId: position.paragraphId }],
-              selectionMark()
+              selectionMark(),
+              caretMark({ paragraphId: previous, offset: joinAt })
             ),
           () => collapsedAt({ paragraphId: previous, offset: joinAt }),
           { rearmPending: armed }
@@ -3545,7 +3665,8 @@ export function mountPaginatedSurface(
           () =>
             applyOps(
               [{ op: 'removeContentControl', controlId: chip.controlId, keepContent: false }],
-              selectionMark()
+              selectionMark(),
+              caretMark({ paragraphId: position.paragraphId, offset: chip.start })
             ),
           () => collapsedAt({ paragraphId: position.paragraphId, offset: chip.start }),
           { rearmPending: armed }
@@ -3563,7 +3684,8 @@ export function mountPaginatedSurface(
                 end: position.offset,
               },
             ],
-            selectionMark()
+            selectionMark(),
+            caretMark({ ...position, offset: position.offset - 1 })
           ),
         () => collapsedAt({ ...position, offset: position.offset - 1 }),
         { rearmPending: armed }
@@ -3881,8 +4003,14 @@ export function mountPaginatedSurface(
         pageOffsetX: materializedExtent?.pageOffsetX ?? new Map<number, number>(),
       }),
 
-    commitReviewOps: (run) =>
-      commit(
+    commitReviewOps: (run) => {
+      // The text the caret's paragraph held BEFORE the resolution, so the caret can be mapped
+      // across what Accept or Reject removed. Clamping alone only fires when the paragraph
+      // ends up shorter than the offset; a caret in the MIDDLE of a paragraph that shrank
+      // silently re-points at different characters, and the next thing typed lands there.
+      const caretParagraph = selection.head.paragraphId;
+      const beforeText = textOf(caretParagraph);
+      return commit(
         // Reported as a RESULT, not a boolean: `commit` reads the refusal reason off it, and
         // a boolean made every refused accept clear `lastRejection` instead of setting it.
         () => {
@@ -3917,9 +4045,11 @@ export function mountPaginatedSurface(
           // `unknown-paragraph`. Accepting a header card is exactly that situation.
           const order = paragraphOrder();
           if (order.length === 0) return null;
-          return clampedToDocument(currentLayout, order, selection);
+          const mapped = mappedAcrossTextChange(selection, caretParagraph, beforeText);
+          return clampedToDocument(currentLayout, order, mapped);
         }
-      ),
+      );
+    },
 
     applyAutomationOps: (staged, scope) => {
       // THE SAME PATH A KEYSTROKE TAKES, minus the keystroke. `applyOps` is where viewing
@@ -4104,7 +4234,7 @@ export function mountPaginatedSurface(
       const plan = deleteSelectionPlan();
       if (plan.ops.length === 0) return false;
       commit(
-        () => applyOps(plan.ops, selectionMark()),
+        () => applyOps(plan.ops, selectionMark(), caretMark(plan.collapseTo)),
         () => collapsedAt(plan.collapseTo)
       );
       return true;
@@ -4252,6 +4382,7 @@ export function mountPaginatedSurface(
       applyOps,
       commit,
       deleteSelectionOps,
+      deleteSelectionPlan: () => deleteSelectionPlan(),
       orderedStart,
       selectionMark,
       collapsedAt,
@@ -4345,10 +4476,29 @@ export function mountPaginatedSurface(
       setSelection(clampedToDocument(currentLayout, paragraphOrder(), selection));
       return;
     }
-    setSelection({
+    // CLAMPED LIKE THE BRANCH ABOVE. A mark addresses one paragraph of whatever story the
+    // edit was made in, and the reader may be somewhere else by the time they press Ctrl+Z:
+    // edit the header, click into the body, undo, and the caret was installed on a header
+    // paragraph while the body was the active story. The DOM caret then landed in furniture
+    // that is `contenteditable="false"`, and every keystroke after it was refused as
+    // `unknown-paragraph` — the editor looked dead until the user clicked.
+    const restored = {
       anchor: { paragraphId: mark.paragraphId, offset: mark.start },
       head: { paragraphId: mark.paragraphId, offset: mark.end },
-    });
+    };
+    // A MARK FROM ANOTHER STORY IS NOT AN ADDRESS HERE. It names one paragraph of whatever
+    // story the edit was made in, and the reader may be somewhere else by the time they press
+    // Ctrl+Z: edit the header, click into the body, undo, and the caret was installed on a
+    // header paragraph while the body was the active story. The DOM caret then landed in
+    // furniture that is `contenteditable="false"` and every keystroke after it was refused as
+    // `unknown-paragraph` — the editor looked dead until the user clicked. Clamped exactly
+    // like the no-mark branch above; a mark the active story does hold is installed verbatim,
+    // which is what keeps an ordinary undo on the offset it recorded.
+    setSelection(
+      paragraphOrder().includes(mark.paragraphId)
+        ? restored
+        : clampedToDocument(currentLayout, paragraphOrder(), restored)
+    );
   }
 
   /**
@@ -4489,6 +4639,39 @@ export function mountPaginatedSurface(
     return deleteSelectionPlan().ops;
   }
 
+  /**
+   * How many characters of `[from, to)` a suggesting-mode deletion takes OUT of the
+   * paragraph, rather than striking in place.
+   *
+   * Only ever this author's own pending insertion — everything else stays and keeps its
+   * offsets. Zero outside suggesting, across a paragraph boundary (the paragraphs are not
+   * joined, so nothing shifts within the first one), and with no author configured, which is
+   * the case where nothing is tracked at all.
+   */
+  /**
+   * Where a replacement for `[from, to)` belongs, once suggesting has had its say.
+   *
+   * The struck characters STAY, so the new text goes after them — minus whatever of the range
+   * was this author's own pending insertion, which leaves. Identity in editing mode, where
+   * the range simply goes. Every lane that replaces a range has to ask: `type()` was fixed
+   * first, and the paste, the IME readback and the note reference each landed in front of the
+   * words they were replacing until they asked it too.
+   */
+  function replacementOffset(from: SemanticPosition, to: SemanticPosition): number {
+    if (editingMode !== 'suggest' || from.paragraphId !== to.paragraphId) return from.offset;
+    return to.offset - retractedByOwnInsertion(from, to);
+  }
+
+  function retractedByOwnInsertion(from: SemanticPosition, to: SemanticPosition): number {
+    const author = options.author?.trim();
+    if (editingMode !== 'suggest' || !author) return 0;
+    if (from.paragraphId !== to.paragraphId) return 0;
+    const part = session.partFor(storyScope()) ?? session.part();
+    const paragraph = findNode(part, to.paragraphId);
+    if (!paragraph || paragraph.kind !== 'paragraph') return 0;
+    return retractedLengthOf(paragraph, from.offset, to.offset, author);
+  }
+
   // Event wiring lives HERE rather than in each host, so React, Vue and a plain page get
   // identical behaviour instead of three hand-written keymaps that drift. The handlers
   // themselves are factories over the surface interface: keys, clipboard and `beforeinput` in
@@ -4550,15 +4733,25 @@ export function mountPaginatedSurface(
     const start = plan.collapseTo;
     const joined = lines.join('');
     const ops: TreeDocOp[] = [...plan.ops];
+    // WHERE THE REPLACEMENT GOES, the same question `type()` answers. In suggesting mode a
+    // deletion keeps the characters it strikes, so the replacement belongs AFTER them — and
+    // keeps only those, since whatever of the range was this author's own pending insertion
+    // is retracted and leaves. Pasting at the range start put the new text in front of the
+    // struck words and left the caret inside it, so the next keystroke landed mid-word.
+    const struck = editingMode === 'suggest' ? orderedRange() : null;
+    const insertAt =
+      struck && struck.to.paragraphId === start.paragraphId
+        ? struck.to.offset - retractedByOwnInsertion(struck.from, struck.to)
+        : start.offset;
     // Plain text pasted at a caret takes the armed typing format, like typed text — Word
     // formats a plain paste as if you had typed it. Written over the PRE-SPLIT offsets, so
     // the op runs before `splitParagraphMany` cuts the paragraph up.
-    const pendingOps = consumePendingFormatOps(start.paragraphId, start.offset, joined.length);
+    const pendingOps = consumePendingFormatOps(start.paragraphId, insertAt, joined.length);
     if (joined.length > 0) {
       ops.push({
         op: 'insertText',
         paragraphId: start.paragraphId,
-        offset: start.offset,
+        offset: insertAt,
         text: joined,
       });
       ops.push(...pendingOps);
@@ -4567,7 +4760,7 @@ export function mountPaginatedSurface(
     let consumed = 0;
     for (let index = 0; index < lines.length - 1; index += 1) {
       consumed += lines[index]!.length;
-      boundaries.push(start.offset + consumed);
+      boundaries.push(insertAt + consumed);
     }
     if (boundaries.length > 0) {
       ops.push({ op: 'splitParagraphMany', paragraphId: start.paragraphId, offsets: boundaries });
@@ -4576,14 +4769,22 @@ export function mountPaginatedSurface(
 
     const before = new Set(session.paragraphIdsIn(storyScope()));
     const lastLine = lines[lines.length - 1]!;
+    // A paste that stays in ONE paragraph knows exactly where it ends, so redo can put the
+    // caret there. A multi-line paste mints its paragraphs inside the transaction, so the
+    // landing id does not exist yet and the mark stays undefined — redo then falls back to
+    // the clamp, which is where this lane started.
+    const redoMark =
+      boundaries.length === 0
+        ? caretMark({ paragraphId: start.paragraphId, offset: insertAt + lastLine.length })
+        : undefined;
     const withoutFormat = ops.filter((op) => !pendingOps.includes(op));
     commit(
-      () => withoutPendingOnRejection(ops, withoutFormat, selectionMark()),
+      () => withoutPendingOnRejection(ops, withoutFormat, selectionMark(), redoMark),
       () => {
         if (boundaries.length === 0) {
           return collapsedAt({
             paragraphId: start.paragraphId,
-            offset: start.offset + lastLine.length,
+            offset: insertAt + lastLine.length,
           });
         }
         // The caret lands at the end of the pasted text: in the LAST minted paragraph, right
