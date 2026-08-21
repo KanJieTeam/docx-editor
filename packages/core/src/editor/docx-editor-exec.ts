@@ -30,6 +30,36 @@ import { isTableEditorCommand, planTableCommand } from './table-command-plan.ts'
 import { execImageCommand, isImageCommand } from './docx-editor-images.ts';
 
 /**
+ * One side of `w:spacing`, as the attributes a `setParagraphSpacing` write states.
+ *
+ * `undefined` states nothing at all: the command names one side or both, and the side it
+ * does not name keeps whatever the paragraph already authored.
+ *
+ * The other two attributes on the side go WITH the measurement, because each supersedes it
+ * (§17.3.1.33): `w:beforeAutospacing` substitutes Word's own gap, and `w:beforeLines`
+ * measures in hundredths of a line instead of twips. A merging write that left either in
+ * place wrote a number the file then ignored — the same way the autospacing flag swallowed
+ * this command whole before.
+ *
+ * They are cleared DIFFERENTLY, because their off values differ. `w:beforeAutospacing="0"`
+ * is a real off, so it is written explicitly and blocks an inherited flag. `w:beforeLines`
+ * has no off value — `"0"` means zero lines of space, which would supersede the twips beside
+ * it and flatten the gap the caller just asked for — so the attribute is dropped instead.
+ * That leaves one residual: a STYLE that states `w:beforeLines` still supersedes a direct
+ * `w:before`, which this command cannot express and Word's own points-entry does not either.
+ */
+function spacingSide(
+  side: 'before' | 'after',
+  points: number | null | undefined
+): Record<string, string | null> {
+  if (points === undefined) return {};
+  const autospacing = `${side}Autospacing`;
+  const lines = `${side}Lines`;
+  if (points === null) return { [side]: null, [autospacing]: null, [lines]: null };
+  return { [side]: String(Math.round(points * 20)), [autospacing]: '0', [lines]: null };
+}
+
+/**
  * Run one admitted command against the surface.
  *
  * Returns an `ExecResult` when the command answers for itself (a refusal, or a read-only
@@ -82,17 +112,19 @@ export function execEditorCommand(
       mounted.setParagraphProperty(
         'spacing',
         {
-          // `null` REMOVES the attribute (Word's "Remove space before paragraph"), which is
-          // not the same as writing a zero: a removed value inherits from the style again.
-          ...(command.beforePt !== undefined
-            ? {
-                before:
-                  command.beforePt === null ? null : String(Math.round(command.beforePt * 20)),
-              }
-            : {}),
-          ...(command.afterPt !== undefined
-            ? { after: command.afterPt === null ? null : String(Math.round(command.afterPt * 20)) }
-            : {}),
+          // `null` REMOVES the attribute, which is not the same as writing a zero: a removed
+          // value inherits from the style again, while a zero blocks the cascade. Word's
+          // "Remove space before paragraph" is the ZERO — the toolbar sends 0, not null.
+          //
+          // The autospacing flag on the same side goes with the measurement, because it
+          // REPLACES it: `w:beforeAutospacing="1"` is worth 14pt whatever `w:before` says, so
+          // a paragraph inheriting the flag — which is what Word writes for HTML-shaped
+          // content, as `w:before="100" w:beforeAutospacing="1"` — swallowed this write
+          // whole and the page did not move. Word clears the flag the same way when a value
+          // is typed. An explicit `0` is written rather than the attribute dropped: dropping
+          // it would let the inherited flag come back and win again.
+          ...spacingSide('before', command.beforePt),
+          ...spacingSide('after', command.afterPt),
         },
         { mergeAttributes: true }
       );

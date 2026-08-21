@@ -150,6 +150,47 @@ export function mergedProperties(
   return [...kept, ...additions];
 }
 
+/**
+ * The four font SLOTS `w:rFonts` carries, and the theme reference that outranks each.
+ *
+ * One element, four independent scripts: Latin (`ascii`), Cyrillic and the rest of the
+ * high range (`hAnsi`), East Asian, and complex script. A theme attribute names a slot
+ * indirectly and WINS over the explicit name beside it, so a slot being set has to have its
+ * theme reference cleared with it or the pick resolves back to the theme font.
+ */
+const FONT_SLOT_THEMES: ReadonlyMap<string, string> = new Map([
+  ['ascii', 'asciiTheme'],
+  ['hAnsi', 'hAnsiTheme'],
+  ['eastAsia', 'eastAsiaTheme'],
+  // Lowercase `t` is the schema's own spelling, not a typo (`CT_Fonts`).
+  ['cs', 'cstheme'],
+]);
+
+/**
+ * A `w:rFonts` write merged over what the run already authors, slot by slot.
+ *
+ * `w:rFonts` is the one run property carrying SEVERAL independent settings, so replacing it
+ * wholesale to change the Latin font deleted the run's East Asian and complex-script faces
+ * and its `w:hint`. That loss is invisible here — this engine resolves the Latin slot — and
+ * shows up on save: CJK text in that run reopens in Word in a different font.
+ *
+ * `w:hint` rides along untouched. It says which slot ambiguous characters resolve through,
+ * which is a property of the text, not of the font just picked.
+ */
+export function mergedFontProperty(
+  authored: readonly OoxmlProperty[],
+  incoming: OoxmlProperty
+): OoxmlProperty {
+  const existing = authored.find((entry) => entry.localName === 'rFonts')?.attributes;
+  if (!existing) return incoming;
+  const merged: Record<string, string> = { ...existing, ...(incoming.attributes ?? {}) };
+  for (const slot of Object.keys(incoming.attributes ?? {})) {
+    const theme = FONT_SLOT_THEMES.get(slot);
+    if (theme) delete merged[theme];
+  }
+  return { localName: 'rFonts', attributes: merged };
+}
+
 /** Per-run UTF-16 ranges from `segmentsOf` (fields/notes collapse to one unit on begin). */
 export function runAddressRanges(
   paragraph: Extract<OoxmlNode, { kind: 'paragraph' }>
@@ -199,6 +240,64 @@ export interface RunPropertyEdit {
 }
 
 /**
+ * One incoming write merged over what the node authors, for the properties that carry
+ * SEVERAL independent settings in one element.
+ *
+ * Almost every run property is one setting and replaces cleanly. Two are not: `w:rFonts`
+ * carries a font per script (see {@link mergedFontProperty}), and `w:u` carries the
+ * underline style AND its colour, so toggling the style off and on again dropped an
+ * authored `w:color` and repainted a red underline black.
+ *
+ * Exported because the editor lane keeps its own content-control-aware run walk beside this
+ * one, and the two must reach the same answer.
+ */
+export function mergedMultiSettingProperty(
+  authored: readonly OoxmlProperty[],
+  incoming: OoxmlProperty
+): OoxmlProperty {
+  if (incoming.localName === 'rFonts') return mergedFontProperty(authored, incoming);
+  if (incoming.localName !== 'u') return incoming;
+  const existing = authored.find((entry) => entry.localName === 'u')?.attributes;
+  if (!existing) return incoming;
+  return { localName: 'u', attributes: { ...existing, ...(incoming.attributes ?? {}) } };
+}
+
+/**
+ * A paragraph MARK's own properties with one write merged in, per attribute where it counts.
+ *
+ * The mark carries a `w:rPr` like any run, so a font change has to keep its other font slots
+ * for the same reason a run does — without this the marker of a CJK list item lost its East
+ * Asian face while the text beside it kept one. Lives here because BOTH lanes write the mark:
+ * the editor's toolbar and the automation object model.
+ */
+export function mergedParagraphMarkProperties(
+  part: OoxmlPart,
+  paragraphId: string,
+  incoming: OoxmlProperty | readonly OoxmlProperty[]
+): OoxmlProperty[] {
+  const authored = directParagraphMarkProperties(part, paragraphId);
+  const additions = Array.isArray(incoming)
+    ? (incoming as readonly OoxmlProperty[])
+    : [incoming as OoxmlProperty];
+  return mergedProperties(
+    authored,
+    additions.map((property) => mergedMultiSettingProperty(authored, property))
+  );
+}
+
+function withMultiSettingsKept(
+  authored: readonly OoxmlProperty[],
+  incoming: OoxmlProperty | readonly OoxmlProperty[]
+): OoxmlProperty | readonly OoxmlProperty[] {
+  if (Array.isArray(incoming)) {
+    return (incoming as readonly OoxmlProperty[]).map((property) =>
+      mergedMultiSettingProperty(authored, property)
+    );
+  }
+  return mergedMultiSettingProperty(authored, incoming as OoxmlProperty);
+}
+
+/**
  * A range run-property change, split into ONE edit per run it covers, each merged over that
  * run's own `w:rPr`.
  *
@@ -242,16 +341,14 @@ export function runPropertyEdits(
     const from = Math.max(range.start, start);
     const to = Math.min(range.end, end);
     if (from >= to) return;
+    const authored = authoredProperties(
+      propertyContainer(child, 'runProperties', 'rPr'),
+      AUTHORABLE_RUN_PROPERTIES
+    );
     edits.push({
       start: from,
       end: to,
-      properties: mergedProperties(
-        authoredProperties(
-          propertyContainer(child, 'runProperties', 'rPr'),
-          AUTHORABLE_RUN_PROPERTIES
-        ),
-        incoming
-      ),
+      properties: mergedProperties(authored, withMultiSettingsKept(authored, incoming)),
       ...(formatOwned.has(child.id) ? { targetRunIds: [child.id] } : {}),
     });
   };

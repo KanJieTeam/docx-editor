@@ -7,14 +7,26 @@
 import type { OoxmlElement, OoxmlNode, OoxmlProperty } from '@docx-editor.dev/core/store';
 import { borderStrokeWidthPt } from './border-metrics.ts';
 
-/** Whether a paragraph must start a new page (`w:pageBreakBefore`). */
+/**
+ * Whether a paragraph must start a new page (`w:pageBreakBefore`).
+ *
+ * LAST WINS, like every other toggle read off the cascade (`paragraphKeeps` does the same
+ * for `w:keepNext`). An any-wins `.some()` cannot be switched off: a Chapter or Heading style
+ * carries `w:pageBreakBefore`, and Word writes `w:val="0"` on the one instance whose author
+ * unchecked the box — that paragraph still broke, so the document grew a blank page and every
+ * page number after it was wrong.
+ *
+ * An absent `w:val` is on (§17.17.4), and the off vocabulary is the whole of it — `off` is a
+ * spelling too, which {@link isOn} beside this already accepts.
+ */
 export function paragraphBreaksBefore(props: readonly OoxmlProperty[]): boolean {
-  return props.some(
-    (property) =>
-      property.localName === 'pageBreakBefore' &&
-      property.attributes?.val !== '0' &&
-      property.attributes?.val !== 'false'
-  );
+  let breaks = false;
+  for (const property of props) {
+    if (property.localName !== 'pageBreakBefore') continue;
+    const val = property.attributes?.val;
+    breaks = val === undefined || isOn(val);
+  }
+  return breaks;
 }
 
 /**
@@ -44,7 +56,7 @@ export interface ParagraphSpacing {
 
 /**
  * The gap Word substitutes when `w:beforeAutospacing` / `w:afterAutospacing` is on
- * (ECMA-376 §17.3.1.2, §17.3.1.13).
+ * (ECMA-376 §17.3.1.33, the `w:spacing` clause both attributes belong to).
  *
  * The attribute means "the consumer decides", and the authored `@before` / `@after` beside it
  * is IGNORED rather than used as the value. Word's answer is HTML's default `<p>` margin,
@@ -206,6 +218,36 @@ function childNamed(node: OoxmlElement, localName: string): OoxmlElement | undef
     if (child.kind !== 'textValue' && child.localName === localName) return child;
   }
   return undefined;
+}
+
+/**
+ * Fold every entry of one `w:pPr` element name in a FLATTENED CASCADE into one attribute bag.
+ *
+ * A cascaded property list carries one entry per level — `w:docDefaults`, then each style in
+ * the `basedOn` chain, then the paragraph's own `w:pPr` — in that order, LOWEST PRECEDENCE
+ * FIRST. `Array.prototype.find` therefore answers the document's defaults and never the
+ * paragraph's own formatting, which is the wrong end of the list: read that way, a paragraph
+ * that had just been given 24pt of space before still reported the 8pt its `w:docDefaults`
+ * set.
+ *
+ * Attributes merge INDEPENDENTLY, the rule {@link paragraphSpacing} and
+ * {@link paragraphLineSpacing} already follow: `w:spacing` carries the line rule, the space
+ * before and the space after in one element, and a style that states `w:before` alone must
+ * leave the `w:after` an earlier level set in place.
+ *
+ * Returns null when no level states the element at all — not the same as one stating it with
+ * no attributes.
+ */
+export function cascadedParagraphAttributes(
+  props: readonly OoxmlProperty[],
+  localName: string
+): Readonly<Record<string, string>> | null {
+  let merged: Record<string, string> | null = null;
+  for (const property of props) {
+    if (property.localName !== localName) continue;
+    merged = { ...(merged ?? {}), ...(property.attributes ?? {}) };
+  }
+  return merged;
 }
 
 /**

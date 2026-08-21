@@ -9,11 +9,12 @@
 
 import {
   documentOrder,
-  paragraphFragmentsOf,
+  paragraphsInCells,
   spansInCells,
   spansInSelection,
   type BlockFragmentRecord,
   type PageRecord,
+  type ParagraphFragmentRecord,
   type ParagraphIndent,
   type SemanticLayout,
   type SemanticSelection,
@@ -32,14 +33,79 @@ import {
   type OoxmlPart,
   type RunPropertyEdit,
 } from '@docx-editor.dev/core/store';
+import { mergedMultiSettingProperty } from '@docx-editor.dev/core/store';
 import { walkParagraphInline } from '../store/package/content-control-walk.ts';
 import type { SurfaceFormatting } from './paginated-surface-contract.ts';
 import { lineSegments } from '../layout/line-segments.ts';
+import { paragraphAlignment } from '../layout/paragraph-flow.ts';
+import { cascadedParagraphAttributes } from '../layout/paragraph-style.ts';
 
 /** One property as the ops and the layout records carry it: an element name plus attributes. */
 export interface SurfaceProperty {
   readonly localName: string;
   readonly attributes?: Record<string, string>;
+}
+
+/**
+ * Every paragraph fragment the layout publishes, in EVERY story the caret can reach.
+ *
+ * `layout.pages[].fragments` is the BODY. Headers, footers, footnotes and endnotes are
+ * editable scopes of their own (`enterHeaderFooter`, `enterNote`), and a paragraph index
+ * built from the body alone answers nothing for a caret inside one — so the toolbar read
+ * defaults over a centred header and Increase Indent stepped from an indent of zero,
+ * moving header text BACKWARDS. `paragraphLinesIndex` already walks the same four stories
+ * for exactly this reason; these two indexes did not.
+ *
+ * Header-repeat rows are skipped: a repeated row is the SAME paragraph drawn again, and it
+ * carries the header row's properties rather than its own.
+ *
+ * `inTable` rides along because it is the ruler's gate and this is the walk that knows it.
+ */
+function eachParagraphFragmentOnPage(
+  page: PageRecord,
+  visit: (fragment: ParagraphFragmentRecord, inTable: boolean) => void
+): void {
+  const walk = (blocks: readonly BlockFragmentRecord[], inTable: boolean): void => {
+    for (const block of blocks) {
+      if (block.kind === 'paragraph') {
+        visit(block, inTable);
+        continue;
+      }
+      for (const row of block.rows) {
+        if (row.isHeaderRepeat) continue;
+        for (const cell of row.cells) walk(cell.blocks, true);
+      }
+    }
+  };
+  walk(page.fragments, false);
+  if (page.header) walk(page.header.fragments, false);
+  if (page.footer) walk(page.footer.fragments, false);
+  for (const area of [page.footnotes, page.endnotes]) {
+    if (!area) continue;
+    for (const note of area.notes) walk(note.fragments, false);
+  }
+}
+
+/**
+ * Record one paragraph under EVERY id it is drawn for: its own, and every member of a
+ * merged run laid out under it.
+ *
+ * A resolved view draws a run of paragraphs as one fragment under the survivor's name, and
+ * each member is being shown with that fragment's properties — so each has to be reachable
+ * by them. First-wins, so a continuation fragment on a later page never displaces the one
+ * that opened the paragraph.
+ */
+function recordFragment<T>(
+  index: Map<string, T>,
+  fragment: ParagraphFragmentRecord,
+  value: T
+): void {
+  if (!index.has(fragment.paragraphId)) index.set(fragment.paragraphId, value);
+  for (const line of fragment.lines) {
+    for (const segment of lineSegments(line)) {
+      if (!index.has(segment.paragraphId)) index.set(segment.paragraphId, value);
+    }
+  }
 }
 
 /**
@@ -69,17 +135,7 @@ function pageProps(page: PageRecord): ReadonlyMap<string, readonly SurfaceProper
   const cached = fragmentPropsByPage.get(page);
   if (cached) return cached;
   const props = new Map<string, readonly SurfaceProperty[]>();
-  for (const fragment of paragraphFragmentsOf(page)) {
-    if (!props.has(fragment.paragraphId)) props.set(fragment.paragraphId, fragment.props);
-    // A merged fragment lays every member out under the SURVIVOR's `w:pPr`, so that is the
-    // projection each member is being shown with. Without this a member the fragment is not
-    // named after read no properties at all, and the toolbar showed defaults.
-    for (const line of fragment.lines) {
-      for (const segment of lineSegments(line)) {
-        if (!props.has(segment.paragraphId)) props.set(segment.paragraphId, fragment.props);
-      }
-    }
-  }
+  eachParagraphFragmentOnPage(page, (fragment) => recordFragment(props, fragment, fragment.props));
   fragmentPropsByPage.set(page, props);
   return props;
 }
@@ -125,20 +181,9 @@ function pageIndents(page: PageRecord): ReadonlyMap<string, ParagraphIndentEntry
   const cached = fragmentIndentByPage.get(page);
   if (cached) return cached;
   const indents = new Map<string, ParagraphIndentEntry>();
-  // Walked here rather than through `paragraphFragmentsOf`, which flattens cell paragraphs
-  // in with body ones — that difference is exactly what this index carries.
-  const visit = (blocks: readonly BlockFragmentRecord[], inTable: boolean): void => {
-    for (const block of blocks) {
-      if (block.kind === 'paragraph') {
-        if (!indents.has(block.paragraphId)) {
-          indents.set(block.paragraphId, { indent: block.indent, inTable });
-        }
-        continue;
-      }
-      for (const row of block.rows) for (const cell of row.cells) visit(cell.blocks, true);
-    }
-  };
-  visit(page.fragments, false);
+  eachParagraphFragmentOnPage(page, (fragment, inTable) =>
+    recordFragment(indents, fragment, { indent: fragment.indent, inTable })
+  );
   fragmentIndentByPage.set(page, indents);
   return indents;
 }
@@ -183,6 +228,7 @@ export {
   directParagraphMarkProperties,
   directParagraphProperties,
   isAuthorableRunProperty,
+  mergedMultiSettingProperty,
   mergedProperties,
   propertyContainer,
   runAddressRanges,
@@ -213,16 +259,17 @@ export function runPropertyEdits(
     const from = Math.max(range.start, start);
     const to = Math.min(range.end, end);
     if (from >= to) return;
+    const authored = authoredProperties(
+      propertyContainer(child, 'runProperties', 'rPr'),
+      AUTHORABLE_RUN_PROPERTIES
+    );
     edits.push({
       start: from,
       end: to,
-      properties: mergedProperties(
-        authoredProperties(
-          propertyContainer(child, 'runProperties', 'rPr'),
-          AUTHORABLE_RUN_PROPERTIES
-        ),
-        incoming
-      ),
+      // Merged per attribute for the two run properties carrying several independent
+      // settings, the same rule the store lane's own walk applies — see
+      // `mergedMultiSettingProperty`.
+      properties: mergedProperties(authored, mergedMultiSettingProperty(authored, incoming)),
       ...(formatOwned.has(child.id) ? { targetRunIds: [child.id] } : {}),
     });
   });
@@ -477,7 +524,16 @@ export function formattingAt(
    * is actually written in. Word's style box shows THAT (normally "Normal"), not a blank:
    * "no `w:pStyle`" is a statement about the file, not about what the user is looking at.
    */
-  defaultParagraphStyleId?: string | null
+  defaultParagraphStyleId?: string | null,
+  /**
+   * Paragraph ids in reading order for the ACTIVE story.
+   *
+   * The read has to sweep the same order the write does, or the two disagree about which
+   * paragraphs are involved: falling back to the body order answered for a header selection
+   * with the head paragraph alone, so a two-paragraph header selection reported the first
+   * one's alignment as if the pair agreed — and the following press changed both.
+   */
+  paragraphOrder?: readonly string[]
 ): SurfaceFormatting {
   const spans = selectionSpans(layout, selection, cells);
   const styles = spans.map((span) => span.style);
@@ -511,19 +567,16 @@ export function formattingAt(
   // alignment control depend on the DIRECTION the user dragged: a centred paragraph
   // selected together with a left one showed Centre pressed one way and Left the other,
   // and pressing either was a change to both. Word shows none of the four pressed.
-  const touchedParagraphs = paragraphsTouched(layout, selection);
+  const touchedParagraphs = paragraphsTouched(layout, selection, cells, paragraphOrder);
   const paragraphValue = <T>(read: (properties: readonly SurfaceProperty[]) => T): T | null =>
     agreedOver(touchedParagraphs.map((id) => read(paragraphPropertiesOf(layout, id))));
   // Normalized BEFORE agreement: `w:jc` absent and `w:jc val="left"` are the same
   // alignment, and comparing the raw attribute would call them a mixed selection.
-  const alignment = paragraphValue((properties) => {
-    const jc = properties.find((property) => property.localName === 'jc')?.attributes?.val;
-    return jc === 'center' || jc === 'right' || jc === 'both'
-      ? jc
-      : jc === 'end'
-        ? ('right' as const)
-        : ('left' as const);
-  });
+  //
+  // Read through the LAYOUT's own resolver, so the pressed button and the painted line can
+  // never disagree about the same paragraph. It also folds the cascade the way a cascade has
+  // to be folded — see `cascadedParagraphAttributes`.
+  const alignment = paragraphValue((properties) => paragraphAlignment(properties));
   // Resolved per paragraph BEFORE agreement, so a styled paragraph selected together with
   // an unstyled one still reads as mixed (two different styles), while an unstyled
   // paragraph on its own reports the default rather than nothing. Comparing raw `w:pStyle`
@@ -533,7 +586,7 @@ export function formattingAt(
   const style =
     paragraphValue(
       (properties) =>
-        properties.find((property) => property.localName === 'pStyle')?.attributes?.val ??
+        cascadedParagraphAttributes(properties, 'pStyle')?.val ??
         defaultParagraphStyleId ??
         undefined
     ) ?? null;
@@ -543,7 +596,7 @@ export function formattingAt(
   // 240ths are the same attribute meaning two different quantities, and a control that
   // showed the raw number would be right half the time.
   const spacing = (properties: readonly SurfaceProperty[]) =>
-    properties.find((property) => property.localName === 'spacing')?.attributes;
+    cascadedParagraphAttributes(properties, 'spacing') ?? undefined;
   const lineSpacingText = paragraphValue((properties) => {
     const attributes = spacing(properties);
     const line = Number(attributes?.line);
@@ -558,6 +611,15 @@ export function formattingAt(
     const [rule, value] = lineSpacingText.split(':');
     return { rule: rule as 'multiple' | 'exact' | 'atLeast', value: Number(value) };
   })();
+  // The gap the cascade states, in points, or null when no level states it.
+  //
+  // The MEASUREMENT, not the resolved gap: `w:beforeAutospacing` replaces the twips beside
+  // it with Word's auto value, and resolving that here needs to know whether the paragraph
+  // is in a list or a cell — two answers only the layout holds, and guessing either one
+  // makes the control disagree with the page it sits above. The measurement is the honest
+  // answer, and it is the same answer for the one question asked of it today: Word writes
+  // `w:before="100"` beside the flag, so an auto-spaced paragraph reads non-zero and the
+  // menu offers Remove, as Word's does.
   const spacePt = (attribute: 'before' | 'after') =>
     paragraphValue((properties) => {
       const raw = Number(spacing(properties)?.[attribute]);
@@ -630,12 +692,21 @@ export function formattingAt(
  */
 function paragraphsTouched(
   layout: SemanticLayout,
-  selection: SemanticSelection
+  selection: SemanticSelection,
+  cells?: readonly string[],
+  paragraphOrder?: readonly string[]
 ): readonly string[] {
+  // A RECTANGLE first, for the same reason the write takes it first: a selected column read
+  // as a range runs through the cells between its corners, so the toolbar answered "mixed"
+  // over a column that was uniformly centred — and would then have centred it correctly.
+  // The button never lit, before a press or after one.
+  if (cells && cells.length > 0) return [...paragraphsInCells(layout, cells)];
   if (selection.anchor.paragraphId === selection.head.paragraphId) {
     return [selection.head.paragraphId];
   }
-  const order = documentOrder(layout);
+  // The ACTIVE story's order when the caller knows it; `documentOrder` is the body's, and a
+  // header selection resolves to -1 in it.
+  const order = paragraphOrder ?? documentOrder(layout);
   const anchorIndex = order.indexOf(selection.anchor.paragraphId);
   const headIndex = order.indexOf(selection.head.paragraphId);
   if (anchorIndex === -1 || headIndex === -1) return [selection.head.paragraphId];

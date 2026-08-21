@@ -28,6 +28,7 @@ import {
 } from './surface-formatting.ts';
 import type { TreeDocOp } from '@docx-editor.dev/core/store';
 import { paragraphsInCells } from '@docx-editor.dev/core/layout';
+import { mergedParagraphMarkProperties } from '@docx-editor.dev/core/store';
 import type { PaginatedSurface } from './paginated-surface-contract.ts';
 
 /** What the composition root lends this lane. */
@@ -125,10 +126,7 @@ export function createSurfaceFormat(deps: SurfaceFormatDeps): FormatMethods {
       const edits = runPropertyEdits(part, from.paragraphId, from.offset, to.offset, incoming);
       // No run in range means nothing was formatted, so the mark must not move either.
       if (edits.length === 0) return;
-      const markProperties = mergedProperties(
-        directParagraphMarkProperties(part, from.paragraphId),
-        incoming
-      );
+      const markProperties = mergedParagraphMarkProperties(part, from.paragraphId, incoming);
       commit(() =>
         applyOps(
           [
@@ -195,7 +193,7 @@ export function createSurfaceFormat(deps: SurfaceFormatDeps): FormatMethods {
         ops.push({
           op: 'setParagraphMarkProperties',
           paragraphId,
-          properties: mergedProperties(directParagraphMarkProperties(part, paragraphId), incoming),
+          properties: mergedParagraphMarkProperties(part, paragraphId, incoming),
         });
       }
     }
@@ -236,7 +234,7 @@ export function createSurfaceFormat(deps: SurfaceFormatDeps): FormatMethods {
       ops.push({
         op: 'setParagraphMarkProperties' as const,
         paragraphId,
-        properties: mergedProperties(directParagraphMarkProperties(part, paragraphId), incoming),
+        properties: mergedParagraphMarkProperties(part, paragraphId, incoming),
       });
     }
     if (ops.length === 0) return false;
@@ -351,7 +349,8 @@ export function createSurfaceFormat(deps: SurfaceFormatDeps): FormatMethods {
             return fallback === null ? resolved : { ...resolved, fontFamily: fallback };
           },
           deps.selectedCells?.(),
-          deps.defaultParagraphStyleId?.() ?? null
+          deps.defaultParagraphStyleId?.() ?? null,
+          deps.paragraphOrder()
         ),
         deps.pendingFormats()
       ),

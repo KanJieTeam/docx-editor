@@ -9,8 +9,8 @@
 import type { TreeApplyResult, TreeDocxSessionView } from '@docx-editor.dev/core/binding';
 import type { TreeDocOp, StoryScope } from '@docx-editor.dev/core/store';
 import {
-  documentOrder,
   enumerateDocumentSections,
+  paragraphsInCells,
   readSectionProperties,
   storyBlocks,
   type SemanticLayout,
@@ -36,7 +36,8 @@ export interface SurfaceStructureDeps {
   layout(): SemanticLayout;
   commit(
     run: () => TreeApplyResult | boolean,
-    nextSelection?: () => SemanticSelection | null
+    nextSelection?: () => SemanticSelection | null,
+    options?: { readonly keepCellSelection?: boolean }
   ): void;
   orderedStart(): SemanticPosition;
   orderedRange(): { from: SemanticPosition; to: SemanticPosition };
@@ -57,6 +58,15 @@ export interface SurfaceStructureDeps {
   numberingLevelExists(numId: string, level: number): boolean;
   /** Paragraph ids in reading order for the active scope. */
   paragraphOrder(): readonly string[];
+  /**
+   * The cells a RECTANGLE selection covers, when there is one.
+   *
+   * A rectangle is not the range it stands in for: read as a range, a selected column runs
+   * through every cell between its corners in document order, so bulleting the left column
+   * of a 2x2 table also bulleted the cell beside it. `setParagraphProperty` already asks
+   * this question (see `surface-format.ts`); every write here has to ask it too.
+   */
+  selectedCells?(): readonly string[] | undefined;
 }
 
 type StructureMethods = Pick<
@@ -94,6 +104,11 @@ function leftIndentAttributes(
   value: string
 ): Record<string, string> {
   const attributes: Record<string, string> = { ...(authored ?? {}) };
+  // The character-unit twin supersedes the twips (§17.3.1.12), so the step has to clear it
+  // or the paragraph does not move. BOTH spellings: `CT_Ind` declares `w:startChars` too,
+  // and ISO Strict declares only that one.
+  delete attributes.leftChars;
+  delete attributes.startChars;
   if (authored?.start !== undefined) attributes.start = value;
   if (authored?.start === undefined || authored.left !== undefined) attributes.left = value;
   return attributes;
@@ -112,6 +127,13 @@ function writeIndentSide(
   value: number | null
 ): Record<string, string> {
   const attributes: Record<string, string> = { ...authored };
+  // The CHARACTER-unit twin goes with the measurement either way, because it SUPERSEDES it
+  // (§17.3.1.12): `w:leftChars` measures the same indent in hundredths of a character, so a
+  // merging write that left it in place wrote twips the file then ignored. Both spellings —
+  // `w:startChars`/`w:endChars` are the direction-relative names, and the only ones ISO
+  // Strict declares.
+  delete attributes[`${physical}Chars`];
+  delete attributes[`${relative}Chars`];
   if (value === null) {
     delete attributes[physical];
     delete attributes[relative];
@@ -139,6 +161,9 @@ function writeFirstLine(
   value: number | null
 ): Record<string, string> {
   const attributes: Record<string, string> = { ...authored };
+  // Both character-unit twins go too: either supersedes the twips beside it.
+  delete attributes.firstLineChars;
+  delete attributes.hangingChars;
   if (value === null) {
     delete attributes.firstLine;
     delete attributes.hanging;
@@ -169,6 +194,54 @@ export function createSurfaceStructure(deps: SurfaceStructureDeps): StructureMet
       return deps.layout();
     },
   };
+
+  /** The live cell rectangle, or null when the selection is an ordinary range. */
+  function rectangleCells(): readonly string[] | null {
+    const cells = deps.selectedCells?.();
+    return cells && cells.length > 0 ? cells : null;
+  }
+
+  /**
+   * Commit a structural write, keeping a cell RECTANGLE selected across it.
+   *
+   * `setParagraphProperty` already does this, so Centre left a selected column selected while
+   * Bullets and Increase Indent cleared it — the same gesture behaving two ways depending on
+   * which button was pressed.
+   */
+  function commitOverTarget(run: () => TreeApplyResult): boolean {
+    let committed = false;
+    commit(
+      () => {
+        const result = run();
+        committed = result.committed;
+        return result;
+      },
+      undefined,
+      { keepCellSelection: rectangleCells() !== null }
+    );
+    return committed;
+  }
+
+  /**
+   * The paragraphs a structural write acts on, in document order, or null when the
+   * selection does not resolve against the active scope's order.
+   *
+   * A RECTANGLE takes precedence over the range, exactly as it does for
+   * `setParagraphProperty`: with a column selected, these are the column's paragraphs and
+   * nothing between them. Without one, the selection sweeps from its first paragraph to its
+   * last, which is what Word does and what every one of these verbs did before.
+   */
+  function targetParagraphs(): readonly string[] | null {
+    if (rectangleCells() !== null) {
+      return [...paragraphsInCells(currentLayout.value, rectangleCells()!)];
+    }
+    const { from, to } = orderedRange();
+    const order = orderOf();
+    const firstIndex = order.indexOf(from.paragraphId);
+    const lastIndex = order.indexOf(to.paragraphId);
+    if (firstIndex === -1 || lastIndex === -1) return null;
+    return order.slice(firstIndex, lastIndex + 1);
+  }
 
   /** Word's Increase/Decrease Indent step: one default tab stop. */
   const INDENT_STEP_TWIPS = 720;
@@ -269,12 +342,30 @@ export function createSurfaceStructure(deps: SurfaceStructureDeps): StructureMet
     return declared && deps.numberingLevelExists(marker.numId, level);
   }
 
-  /** Authored `w:ind/@left` in twips, zero when the paragraph states none. */
+  /**
+   * `w:ind/@left` in twips, zero when nothing states it.
+   *
+   * Resolved across the whole list rather than picked out of it: this reads a CASCADE, whose
+   * entries run lowest precedence first, so taking the first `w:ind` answered the style's
+   * indent for a paragraph that had already been indented past it — and Increase Indent then
+   * rewrote the same one step forever.
+   *
+   * Resolved PER LEVEL, not per attribute, which is where `cascadedParagraphAttributes` is
+   * the wrong tool: `w:left` and `w:start` are two SPELLINGS OF ONE SETTING (transitional and
+   * ISO Strict), so flattening both into one bag and preferring `left` answers whichever
+   * level happened to use that word. A paragraph spelling it `w:start` over a style spelling
+   * it `w:left` then stepped BACKWARDS on Increase Indent. This is the rule `paragraphIndent`
+   * already applies, and the two must agree or the ruler and the button disagree.
+   */
   function leftIndentTwipsOf(
     properties: readonly { localName: string; attributes?: Readonly<Record<string, string>> }[]
   ): number {
-    const ind = properties.find((property) => property.localName === 'ind');
-    const raw = ind?.attributes?.left ?? ind?.attributes?.start;
+    let raw: string | undefined;
+    for (const property of properties) {
+      if (property.localName !== 'ind') continue;
+      const stated = property.attributes?.left ?? property.attributes?.start;
+      if (stated !== undefined) raw = stated;
+    }
     if (!raw || !/^-?\d{1,7}$/.test(raw)) return 0;
     return Number(raw);
   }
@@ -364,26 +455,17 @@ export function createSurfaceStructure(deps: SurfaceStructureDeps): StructureMet
     },
 
     isListActive(kind) {
-      const { from, to } = orderedRange();
-      const order = orderOf();
-      const firstIndex = order.indexOf(from.paragraphId);
-      const lastIndex = order.indexOf(to.paragraphId);
-      if (firstIndex === -1 || lastIndex === -1) return false;
+      const touched = targetParagraphs();
+      if (touched === null) return false;
       const wanted = kind === 'bullet' ? 'bullet' : 'ordered';
-      const touched = order.slice(firstIndex, lastIndex + 1);
       return (
         touched.length > 0 && touched.every((paragraphId) => listKindOf(paragraphId) === wanted)
       );
     },
 
     toggleList(kind) {
-      const { from, to } = orderedRange();
-      const order = orderOf();
-      const firstIndex = order.indexOf(from.paragraphId);
-      const lastIndex = order.indexOf(to.paragraphId);
-      if (firstIndex === -1 || lastIndex === -1) return false;
-      const touched = order.slice(firstIndex, lastIndex + 1);
-      if (touched.length === 0) return false;
+      const touched = targetParagraphs();
+      if (touched === null || touched.length === 0) return false;
       // Word toggles OFF only when the whole selection is already that list; a mixed
       // selection becomes one list rather than clearing half of it.
       const turningOff = touched.every((paragraphId) => listKindOf(paragraphId) === kind);
@@ -391,32 +473,31 @@ export function createSurfaceStructure(deps: SurfaceStructureDeps): StructureMet
         ? null
         : (adjacentListNumId(touched, kind) ?? session.ensureListDefinition(kind));
       if (!turningOff && numId === null) return false;
-      const ops: TreeDocOp[] = touched.map((paragraphId) => ({
-        op: 'setListNumbering',
-        paragraphId,
-        numId,
-      }));
-      let committed = false;
-      commit(() => {
-        const result = applyOps(ops, selectionMark());
-        committed = result.committed;
-        return result;
+      const ops: TreeDocOp[] = touched.map((paragraphId) => {
+        // `w:numPr` carries the level AND the definition, and the op mints a fresh one, so
+        // a call that names no level silently resets `w:ilvl` to 0. Word converts a bullet
+        // to a number IN PLACE: pressing Numbered on a level-2 item left it at level 2,
+        // where this flattened it to the left margin two levels out.
+        const level = listLevelOf(paragraphId);
+        return {
+          op: 'setListNumbering' as const,
+          paragraphId,
+          numId,
+          ...(level !== null ? { level } : {}),
+        };
       });
-      return committed;
+      return commitOverTarget(() => applyOps(ops, selectionMark()));
     },
 
     canAdjustIndent(direction) {
-      const { from, to } = orderedRange();
-      const order = orderOf();
-      const firstIndex = order.indexOf(from.paragraphId);
-      const lastIndex = order.indexOf(to.paragraphId);
-      if (firstIndex === -1 || lastIndex === -1) return false;
+      const touched = targetParagraphs();
+      if (touched === null) return false;
       const step = direction === 'increase' ? 1 : -1;
       // Enabled when ANY paragraph the selection touches could move. Word greys the
       // control out only when nothing would happen at all — and for a list item that is
       // the ENDS of the level range, never a missing definition: a level `numbering.xml`
       // does not declare gets declared on the way (see `ensureListLevel`).
-      return order.slice(firstIndex, lastIndex + 1).some((paragraphId) => {
+      return touched.some((paragraphId) => {
         const marker = markerOf(paragraphId);
         if (marker) {
           const next = marker.level + step;
@@ -428,14 +509,11 @@ export function createSurfaceStructure(deps: SurfaceStructureDeps): StructureMet
     },
 
     adjustIndent(direction) {
-      const { from, to } = orderedRange();
-      const order = orderOf();
-      const firstIndex = order.indexOf(from.paragraphId);
-      const lastIndex = order.indexOf(to.paragraphId);
-      if (firstIndex === -1 || lastIndex === -1) return false;
+      const touched = targetParagraphs();
+      if (touched === null) return false;
       const step = direction === 'increase' ? 1 : -1;
       const ops: TreeDocOp[] = [];
-      for (const paragraphId of order.slice(firstIndex, lastIndex + 1)) {
+      for (const paragraphId of touched) {
         const properties = paragraphPropertiesOf(currentLayout.value, paragraphId);
         const marker = markerOf(paragraphId);
         const level = marker?.level ?? null;
@@ -481,29 +559,23 @@ export function createSurfaceStructure(deps: SurfaceStructureDeps): StructureMet
         });
       }
       if (ops.length === 0) return false;
-      let committed = false;
-      commit(() => {
-        const result = applyOps(ops, selectionMark());
-        committed = result.committed;
-        return result;
-      });
-      return committed;
+      return commitOverTarget(() => applyOps(ops, selectionMark()));
     },
 
     setIndent(update) {
       if (update.left === undefined && update.right === undefined && update.firstLine === undefined)
         return false;
-      const { from, to } = orderedRange();
-      const order = documentOrder(currentLayout.value);
-      const firstIndex = order.indexOf(from.paragraphId);
-      const lastIndex = order.indexOf(to.paragraphId);
-      if (firstIndex === -1 || lastIndex === -1) return false;
+      // The SCOPED order and the SCOPED part, like every other write in this lane. Reading
+      // the body order meant a header paragraph was never in it, so a ruler drag inside an
+      // open header or footer resolved to -1 and returned false — silently doing nothing.
+      const touched = targetParagraphs();
+      if (touched === null) return false;
       const ops: TreeDocOp[] = [];
-      for (const paragraphId of order.slice(firstIndex, lastIndex + 1)) {
+      for (const paragraphId of touched) {
         // Merged over the paragraph's OWN `w:ind`, never the cascade the layout publishes:
         // an op whose base is the cascade is refused, and `w:ind` carries four independent
         // settings in one element, so naming one field must leave the others as authored.
-        const direct = directParagraphProperties(session.part(), paragraphId);
+        const direct = directParagraphProperties(storyPart(), paragraphId);
         const authored = direct.find((property) => property.localName === 'ind')?.attributes ?? {};
         let attributes: Record<string, string> = { ...authored };
         if (update.left !== undefined) {
@@ -525,13 +597,7 @@ export function createSurfaceStructure(deps: SurfaceStructureDeps): StructureMet
         });
       }
       if (ops.length === 0) return false;
-      let committed = false;
-      commit(() => {
-        const result = session.applyTreeOps(ops, selectionMark());
-        committed = result.committed;
-        return result;
-      });
-      return committed;
+      return commitOverTarget(() => applyOps(ops, selectionMark()));
     },
 
     sectionProperties: () => readSectionProperties(session.part()),
