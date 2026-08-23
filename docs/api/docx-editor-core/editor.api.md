@@ -1359,6 +1359,11 @@ export interface PaginatedSurface {
     revealParagraph(paragraphId: string, options?: RevealOptions): boolean;
     revealPosition(position: SemanticPosition, options?: RevealOptions): boolean;
     revisionAuthors(): ReadonlyMap<string, number>;
+    sectionAnchorParagraphAt(paragraphId: string): SectionAnchor;
+    sectionAtPage(pageIndex: number): {
+        sectionIndex: number;
+        sectionStart: number;
+    };
     sectionProperties(): SectionProperties;
     sectionPropertiesAt(paragraphId: string): SectionProperties;
     selectAll(): void;
@@ -1506,6 +1511,9 @@ export interface ParagraphTabStop {
     // (undocumented)
     readonly positionTwips: number;
 }
+
+// @public
+export function partOfNodeId(session: Pick<TreeDocxSessionView, 'currentPackage' | 'part'>, nodeId: string | undefined): OoxmlPart | null;
 
 // @public
 export function pointsToEmu(points: number): number;
@@ -1693,6 +1701,29 @@ value?: unknown): ExecResult;
 
 // @public
 export function sameZoomMode(a: ZoomMode, b: ZoomMode): boolean;
+
+// @public
+export type SectionAnchor =
+/** Name this body paragraph. Its section is the one the caret is in. */
+    {
+    readonly kind: 'anchor';
+    readonly paragraphId: string;
+}
+/** One section: an anchor names nothing extra, so the op may omit it. */
+| {
+    readonly kind: 'whole-document';
+}
+/**
+* Several sections, and the caret's holds no paragraph to name.
+*
+* An omitted anchor here would write EVERY section, which is what `scope: 'document'` is
+* for — so answering it to a `scope: 'section'` request changes sections nobody asked
+* about. There is no anchor that reaches an empty final section: one exists only when every
+* paragraph already closes an earlier section, so nothing sits at or after it.
+*/
+| {
+    readonly kind: 'unaddressable';
+};
 
 // @public
 export interface SectionProperties {
@@ -1977,7 +2008,7 @@ export interface TableBorderStyleOption {
     readonly labelKey: string;
     readonly previewClass: string;
     // (undocumented)
-    readonly value: TableBorderStyle_2;
+    readonly value: TableBorderStyle;
 }
 
 // @public
@@ -1990,7 +2021,7 @@ export interface TableBorderTargetOption {
 }
 
 // @public
-export type TableBorderTargetValue = TableBorderEdgeTarget_2 | 'none';
+export type TableBorderTargetValue = TableBorderEdgeTarget | 'none';
 
 // @public
 export interface TableBorderWidthOption {
@@ -2003,7 +2034,7 @@ export interface TableBorderWidthOption {
 // @public
 export interface TableChromeDraft {
     // (undocumented)
-    readonly activeTarget: TableBorderEdgeTarget_2;
+    readonly activeTarget: TableBorderEdgeTarget;
     // (undocumented)
     readonly spec: TableBorderSpec;
 }
@@ -2012,7 +2043,7 @@ export interface TableChromeDraft {
 export function tableChromeIconPaths(name: keyof typeof GENERATED_ICON_PATHS): readonly string[];
 
 // @public
-export function tableChromeLabelKeyForTarget(target: TableBorderEdgeTarget_2): string;
+export function tableChromeLabelKeyForTarget(target: TableBorderEdgeTarget): string;
 
 // @public
 export interface TableChromePick {
@@ -2155,6 +2186,7 @@ export interface TreeDocxSessionView {
     save(): Uint8Array;
     setCommentResolved(commentId: string, resolved: boolean): boolean;
     settingsRoot(): OoxmlElement | null;
+    storyParts(): readonly OoxmlPart[];
     storyText(scope: StoryScope): string | null;
     stylesRoot(): OoxmlElement | null;
     // (undocumented)

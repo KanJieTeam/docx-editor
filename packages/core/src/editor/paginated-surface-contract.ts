@@ -624,11 +624,23 @@ export interface PaginatedSurface {
    */
   sectionProperties(): SectionProperties;
   /**
-   * The section GOVERNING one paragraph — what a ruler or dialog reflects when the
-   * caret sits in a multi-section document. Falls back to the body-level section for
-   * an unknown id.
+   * The section GOVERNING one paragraph — what a ruler or dialog reflects when the caret sits
+   * in a multi-section document.
+   *
+   * Body content answers for itself, whatever story is open. A header or footer belongs to the
+   * section that names its relationship, and a note to the section holding its reference mark.
+   * An id nothing settles falls back to the FIRST section: the tail is the document-wide answer
+   * and is wrong for everything not on the last page.
    */
   sectionPropertiesAt(paragraphId: string): SectionProperties;
+  /**
+   * How a section-addressed op should name the section `paragraphId` is in.
+   *
+   * `w:sectPr` lives on the body story, so such an op can only name body content — and a caret
+   * in a header or a note is not body content. Passing that caret straight through made every
+   * section write from furniture fail `unknown-paragraph`.
+   */
+  sectionAnchorParagraphAt(paragraphId: string): import('./section-scope.ts').SectionAnchor;
   /**
    * Write section page-setup fields — size, orientation, margins — as ONE undoable
    * transaction. Twips throughout; omitted fields are left as authored. With
@@ -871,6 +883,15 @@ export interface PaginatedSurface {
     resolver: (key: 'table.insertRowBelow' | 'table.insertColumnRight') => string
   ): void;
   destroy(): void;
+  /**
+   * The section a painted page belongs to, and the page that section starts on.
+   *
+   * Published because opening a furniture story without a page opens it without a section, and
+   * the section is what the ruler clamps to and what a new table's grid is divided from. One
+   * header part can serve several sections, so only the page settles which one the reader is
+   * looking at.
+   */
+  sectionAtPage(pageIndex: number): { sectionIndex: number; sectionStart: number };
   /** Active editing view — body, or an open header/footer story by rId. */
   activeScope(): ViewScope;
   /** Activate a view scope. Returns false when a header/footer rId cannot be opened. */

@@ -12,11 +12,11 @@ import {
   enumerateDocumentSections,
   paragraphsInCells,
   readSectionProperties,
-  storyBlocks,
   type SemanticLayout,
   type SemanticPosition,
   type SemanticSelection,
 } from '@docx-editor.dev/core/layout';
+import { sectionAnchorParagraphFor, sectionIndexForCaret } from './section-scope.ts';
 import type { ListMarkerRecord } from '@docx-editor.dev/core/layout';
 import { fragmentHolding } from '../layout/line-segments.ts';
 import { paragraphTabStopsOf } from './surface-formatting.ts';
@@ -56,6 +56,8 @@ export interface SurfaceStructureDeps {
   readonly session: TreeDocxSessionView;
   /** Active story for content mutations — body or open furniture. */
   storyScope(): StoryScope;
+  /** Section index of the header or footer the reader has open, when one is. */
+  headerFooterSectionIndex?(): number | undefined;
   /** The CURRENT layout — read per call, never captured. */
   layout(): SemanticLayout;
   commit(
@@ -108,6 +110,7 @@ type StructureMethods = Pick<
   | 'exitListOnEmptyItem'
   | 'sectionProperties'
   | 'sectionPropertiesAt'
+  | 'sectionAnchorParagraphAt'
   | 'setSectionProperties'
   | 'insertSectionBreak'
 >;
@@ -720,11 +723,6 @@ export function createSurfaceStructure(deps: SurfaceStructureDeps): StructureMet
         // paragraph's authorable `w:pPr` children with what it is handed, so pushing it for
         // a tab-stops-only edit put the whole of `w:pPr` at the mercy of the `direct` read
         // — a wrong base there deletes `w:pStyle`, `w:jc` and everything else rather than
-        // doing nothing.
-        // Only when there is something to write. `setParagraphProperties` REPLACES the
-        // paragraph's authorable `w:pPr` children with what it is handed, so pushing it for
-        // a tab-stops-only edit put the whole of `w:pPr` at the mercy of the `direct` read
-        // — a wrong base there deletes `w:pStyle`, `w:jc` and everything else rather than
         // doing nothing. Defence in depth: the header test pins the part identity, and this
         // makes a repeat of that mistake harmless for edits that name no property.
         if (entries.length > 0 || wantsIndent) {
@@ -768,38 +766,39 @@ export function createSurfaceStructure(deps: SurfaceStructureDeps): StructureMet
 
     sectionPropertiesAt(paragraphId) {
       const sections = enumerateDocumentSections(session.part());
-      if (sections.length === 1) return sections[0]!.properties;
-      const blocks = storyBlocks(session.part());
-      const contains = (node: (typeof blocks)[number], id: string): boolean => {
-        if (node.id === id) return true;
-        for (const child of node.children) {
-          if (child.kind !== 'textValue' && contains(child as (typeof blocks)[number], id)) {
-            return true;
-          }
-        }
-        return false;
-      };
-      const blockIndex = blocks.findIndex(
-        (block) => block.id === paragraphId || contains(block, paragraphId)
+      const index = sectionIndexForCaret(
+        session,
+        paragraphId,
+        deps.storyScope(),
+        deps.headerFooterSectionIndex?.()
       );
-      // An unknown id falls back to the tail section — the document-wide answer.
-      let owner = sections[sections.length - 1]!;
-      if (blockIndex !== -1) {
-        for (const section of sections) {
-          if (section.blockStart <= blockIndex) owner = section;
-          else break;
-        }
-      }
-      return owner.properties;
+      return (sections[index] ?? sections[sections.length - 1]!).properties;
+    },
+
+    sectionAnchorParagraphAt(paragraphId) {
+      return sectionAnchorParagraphFor(
+        session,
+        paragraphId,
+        deps.storyScope(),
+        deps.headerFooterSectionIndex?.()
+      );
     },
 
     setSectionProperties(update) {
       let committed = false;
       commit(() => {
         // Section geometry lives on the body story, never on an open furniture scope.
+        //
+        // The SELECTION MARK has to stay behind with it. A body-scoped write is validated
+        // against the body store, and a mark naming the header paragraph the caret is really
+        // in is a paragraph that store has never heard of — so the whole write came back
+        // `unknown-paragraph` and Page Setup silently did nothing from any furniture caret.
+        // Recording no mark costs an undo that does not restore the caret, which is the
+        // smaller loss and the honest one: the caret never moved to begin with.
+        const inBody = deps.storyScope().kind === 'body';
         const result = session.applyTreeOps(
           [{ op: 'setSectionProperties', ...update }],
-          selectionMark(),
+          inBody ? selectionMark() : undefined,
           undefined,
           { kind: 'body' }
         );

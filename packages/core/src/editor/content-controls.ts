@@ -34,6 +34,7 @@ import {
 import type { ParagraphAnchorIndex } from '../binding/paragraph-anchors.ts';
 import { isDocAnchor, resolveDocAnchor } from './anchor-resolution.ts';
 import type { PaginatedSurface } from './paginated-surface-contract.ts';
+import { partOfNodeId, storyScopeOfNodeId } from './surface-scope.ts';
 import { selectionMarkOf } from './surface-selection-ops.ts';
 
 const W14_NAMESPACE_URI = 'http://schemas.microsoft.com/office/word/2010/wordml';
@@ -279,15 +280,23 @@ function blockAncestorsOf(part: OoxmlPart, paragraphId: string): ContentControlS
   return ancestors.reverse();
 }
 
-/** The `contentControls` query — every control in the loaded body part, optionally filtered. */
+/**
+ * The `contentControls` query — every control in the document, optionally filtered.
+ *
+ * EVERY STORY, not the body alone. Its sibling `contentControlAt` answers about the caret and
+ * so already reached a header's control, which meant the two queries described different
+ * documents: the list never contained the control the caret was standing in, and a host
+ * building a picker from it could not offer what the user was looking at.
+ */
 export function contentControlsOf(
   surface: PaginatedSurface | null,
   filter?: ContentControlFilter
 ): readonly ContentControlSummary[] {
   if (!surface) return [];
-  return collectContentControls(surface.session.part()).filter((summary) =>
-    matchesFilter(summary, filter)
-  );
+  return surface.session
+    .storyParts()
+    .flatMap((part) => collectContentControls(part))
+    .filter((summary) => matchesFilter(summary, filter));
 }
 
 /**
@@ -303,8 +312,12 @@ export function contentControlAtOf(
   filter?: ContentControlFilter
 ): ContentControlSummary | null {
   if (!surface) return null;
-  const part = surface.session.part();
   const { paragraphId, offset } = surface.state().selection.head;
+  // The caret's OWN part. Against the body's, a caret in a header found no paragraph and no
+  // ancestors, so the facade answered "no control here" for a control the surface had already
+  // resolved — and `exec({type:'setContentControlValue'})` refused with the same words while
+  // the Inspector button beside it was live.
+  const part = partOfNodeId(surface.session, paragraphId) ?? surface.session.part();
   const paragraph = findNode(part, paragraphId);
   if (paragraph && paragraph.kind === 'paragraph') {
     for (const summary of inlineControlsContaining(paragraph, offset, part)) {
@@ -477,7 +490,12 @@ function resolveDocAnchorControl(
   if (!resolved.ok) {
     return { ok: false, code: resolved.code, reason: resolved.reason, target: anchor };
   }
-  const paragraph = findNode(part, resolved.span.nodeId);
+  // The paragraph's OWN part. `resolveDocAnchor` spans every story, so the id it hands back is
+  // routinely a header's — and looking it up in the body reported `paragraph 'X' was not
+  // found` about a paragraph the same call had just found. `DocAnchor` is the only non-caret
+  // way to target a control, so that made every control outside the body unaddressable.
+  const owner = anchors.partByNode.get(resolved.span.nodeId) ?? part;
+  const paragraph = findNode(owner, resolved.span.nodeId);
   if (!paragraph || paragraph.kind !== 'paragraph') {
     return {
       ok: false,
@@ -487,10 +505,10 @@ function resolveDocAnchorControl(
     };
   }
   const atOffset = resolved.span.start;
-  for (const summary of inlineControlsContaining(paragraph, atOffset, part)) {
+  for (const summary of inlineControlsContaining(paragraph, atOffset, owner)) {
     return { ok: true, controlId: summary.id };
   }
-  const ancestors = blockAncestorsOf(part, paragraph.id);
+  const ancestors = blockAncestorsOf(owner, paragraph.id);
   const innermost = ancestors.at(-1);
   if (innermost) return { ok: true, controlId: innermost.id };
   return {
@@ -581,10 +599,21 @@ function gateContentControlCommand(
   mode: 'edit' | 'view' | 'suggesting',
   options?: { scope?: EditorScope }
 ): CommandGate {
-  if (options?.scope && options.scope.kind !== 'body') {
+  // A control is addressed by its OWN id, and `resolveContentControlTarget` reads the part out
+  // of that id, so the caret path answers in whatever story the caret is in. A blanket non-body
+  // refusal here used to make an explicitly-scoped call fail on a control the caret path would
+  // have edited — and, because `exec` runs this same gate, refused the write too.
+  //
+  // What a non-body scope still cannot have is an EXPLICIT `DocLocation` or `DocAnchor` target:
+  // both resolve against `session.part()`, the body's. The refusal narrows to that, and says so.
+  if (options?.scope && options.scope.kind !== 'body' && command.target !== undefined) {
     return {
       ok: false,
-      refusal: { ok: false, code: 'unsupported', reason: 'only the body scope is supported' },
+      refusal: {
+        ok: false,
+        code: 'unsupported',
+        reason: 'a location or anchor target resolves in the body only; omit it to use the caret',
+      },
     };
   }
   if (!surface) {
@@ -648,7 +677,10 @@ export function canContentControlCommand(
     command.type === 'setContentControlValue'
       ? { op: 'setContentControlValue', controlId: resolved.controlId, value: command.value }
       : { op: 'removeContentControl', controlId: resolved.controlId };
-  const rejection = validateTreeOp(surface!.session.part(), op);
+  const rejection = validateTreeOp(
+    partOfNodeId(surface!.session, resolved.controlId) ?? surface!.session.part(),
+    op
+  );
   if (rejection) {
     return {
       ok: false,
@@ -678,18 +710,29 @@ export function execContentControlCommand(
   // A direct session write below `commit`: queued typing must land first, or a
   // control edit that shrinks the caret paragraph makes the later flush refuse.
   surface.flushPendingInput();
-  const before = surface.session.revision();
   const mark = selectionMarkOf(surface.state().selection);
   const op: TreeDocOp =
     command.type === 'setContentControlValue'
       ? { op: 'setContentControlValue', controlId: resolved.controlId, value: command.value }
       : { op: 'removeContentControl', controlId: resolved.controlId };
 
-  const result = surface.session.applyTreeOps([op], mark, mark);
+  // The STORY the control is in, from its own id. Left to default, this wrote against the body
+  // store, which has never heard of a control in a header — so the facade refused a verb the
+  // surface performs happily, on the same control.
+  const result = surface.session.applyTreeOps(
+    [op],
+    mark,
+    mark,
+    storyScopeOfNodeId(surface.session, resolved.controlId, { kind: 'body' })
+  );
   if (result.rejected) {
     return treeOpRejectionToExecResult(result.reason ?? 'unsupported', command.target);
   }
 
   surface.layout();
-  return { ok: true, changed: surface.session.revision() !== before };
+  // The STORE's own verdict, not a revision comparison. `session.revision()` is the BODY
+  // store's clock, and a header, a footer and a notes part each count their own — so every
+  // successful write outside the body compared equal and reported `changed: false`, which the
+  // contract defines as a no-op. A caller was told its header write did nothing.
+  return { ok: true, changed: result.committed };
 }

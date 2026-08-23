@@ -8,7 +8,7 @@
 // flattened cascade.
 
 import {
-  documentOrder,
+  everyStoryOrder,
   paragraphsInCells,
   spansInCells,
   spansInSelection,
@@ -497,20 +497,31 @@ export function withPendingFormatting(
 function selectionSpans(
   layout: SemanticLayout,
   selection: SemanticSelection,
-  cells?: readonly string[]
+  cells?: readonly string[],
+  /**
+   * Reading order of the ACTIVE story.
+   *
+   * The RUN properties need it for the same reason the paragraph ones do. Without it a
+   * two-paragraph selection in a header ordered its endpoints against the body, gave up, and
+   * reported no spans at all — so Bold read false over bold text and the size box emptied.
+   */
+  paragraphOrder?: readonly string[]
 ): readonly StyleSpanRecord[] {
-  return cells && cells.length > 0
-    ? spansInCells(layout, cells)
-    : spansInSelection(layout, selection);
+  if (cells && cells.length > 0) return spansInCells(layout, cells);
+  // `everyStoryOrder`, not `documentOrder`. The fallback is only reached by a caller that
+  // named no story, and the body's order is wrong for every caret outside it — which is the
+  // exact defect the parameter above exists to prevent, left standing in its own fallback.
+  return spansInSelection(layout, selection, paragraphOrder ?? everyStoryOrder(layout));
 }
 
 /** The run properties in force across the selection, taken from its first span. */
 export function selectionRunProperties(
   layout: SemanticLayout,
   selection: SemanticSelection,
-  cells?: readonly string[]
+  cells?: readonly string[],
+  paragraphOrder?: readonly string[]
 ): readonly SurfaceProperty[] {
-  return selectionSpans(layout, selection, cells)[0]?.props ?? [];
+  return selectionSpans(layout, selection, cells, paragraphOrder)[0]?.props ?? [];
 }
 
 /**
@@ -526,9 +537,11 @@ export function isRunPropertyActive(
   cells?: readonly string[],
   /** The value being toggled, for a property whose ON state is one member of an
    *  enumeration rather than a boolean (`w:vertAlign`). */
-  value?: string
+  value?: string,
+  /** Reading order of the ACTIVE story. See {@link selectionSpans}. */
+  paragraphOrder?: readonly string[]
 ): boolean {
-  const spans = selectionSpans(layout, selection, cells);
+  const spans = selectionSpans(layout, selection, cells, paragraphOrder);
   if (spans.length === 0) return false;
   const flagOf = (span: (typeof spans)[number]): boolean => {
     switch (localName) {
@@ -585,7 +598,7 @@ export function formattingAt(
    */
   paragraphOrder?: readonly string[]
 ): SurfaceFormatting {
-  const spans = selectionSpans(layout, selection, cells);
+  const spans = selectionSpans(layout, selection, cells, paragraphOrder);
   const styles = spans.map((span) => span.style);
   // Agreement across the WHOLE selection, or nothing. A collapsed caret yields the one
   // span beside it (Word's rule), so the toolbar reflects the run the user is typing in.
@@ -842,9 +855,11 @@ function paragraphsTouched(
   if (selection.anchor.paragraphId === selection.head.paragraphId) {
     return [selection.head.paragraphId];
   }
-  // The ACTIVE story's order when the caller knows it; `documentOrder` is the body's, and a
-  // header selection resolves to -1 in it.
-  const order = paragraphOrder ?? documentOrder(layout);
+  // The ACTIVE story's order when the caller knows it, and every story when it does not.
+  // `documentOrder` is the body's, and a header selection resolves to -1 in it — so the
+  // fallback used to return the head paragraph alone and the caller saw a one-paragraph
+  // selection where the reader had made a two-paragraph one.
+  const order = paragraphOrder ?? everyStoryOrder(layout);
   const anchorIndex = order.indexOf(selection.anchor.paragraphId);
   const headIndex = order.indexOf(selection.head.paragraphId);
   if (anchorIndex === -1 || headIndex === -1) return [selection.head.paragraphId];

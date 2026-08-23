@@ -849,7 +849,8 @@ export interface CustomNodePayloadRead {
 }
 
 // @public
-export function customNodePayloadsByControl(pkg: OoxmlPackage, storyPartName: string): ReadonlyMap<string, CustomNodePayloadRead>;
+export function customNodePayloadsByControl(pkg: OoxmlPackage, storyPartName: string,
+dataOwnerPartName?: string): ReadonlyMap<string, CustomNodePayloadRead>;
 
 // @public
 export function customNodePayloadsOf(pkg: OoxmlPackage, storyPartName: string, namespaceUri: string): ReadonlyMap<string, {
@@ -1831,6 +1832,9 @@ export function isSearchableQuery(query: unknown): query is string;
 
 // @public
 export function isSeparatorNode(node: OoxmlNode): node is OoxmlSeparatorNode;
+
+// @public
+export function isStoryPart(part: OoxmlPart): boolean;
 
 // @public
 export function isValidId(id: string): boolean;
@@ -4218,6 +4222,7 @@ export class TreeDocumentStore {
 // @public
 export interface TreeDocumentStoreOptions {
     readonly historyLimit?: number;
+    readonly settingsPart?: () => OoxmlPart | null | undefined;
 }
 
 // @public
@@ -4391,6 +4396,8 @@ export class TreePackageStore {
     // (undocumented)
     get lastModelChange(): TreeModelChange | null;
     openedStoryCount(): number;
+    openStoryParts(): readonly OoxmlPart[];
+    openStoryToken(): string;
     // (undocumented)
     get packageRevision(): number;
     partFor(scope: StoryScope): OoxmlPart | null;
