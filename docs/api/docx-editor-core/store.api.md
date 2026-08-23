@@ -5,7 +5,7 @@
 ```ts
 
 // @public
-export const ACCEPTED_PARAGRAPH_PROPERTIES: readonly ["pStyle", "jc", "spacing", "ind", "tabs", "numPr", "keepNext", "keepLines", "widowControl", "pageBreakBefore", "shd"];
+export const ACCEPTED_PARAGRAPH_PROPERTIES: readonly ["pStyle", "jc", "spacing", "ind", "tabs", "numPr", "keepNext", "keepLines", "widowControl", "pageBreakBefore", "contextualSpacing", "shd"];
 
 // @public
 export const ACCEPTED_RUN_PROPERTIES: readonly ["rFonts", "sz", "szCs", "color", "b", "bCs", "i", "iCs", "u", "strike", "dstrike", "highlight", "vertAlign", "position", "caps", "smallCaps", "spacing", "w", "kern"];
@@ -3667,6 +3667,9 @@ export const TABLE_BORDER_STYLES: readonly ["single", "dashed", "dotted", "doubl
 export type TableBorderStyle = (typeof TABLE_BORDER_STYLES)[number];
 
 // @public
+export type TabStopWrite = ParagraphTabStop;
+
+// @public
 export type TargetMode = 'Internal' | 'External';
 
 // @public
@@ -3774,7 +3777,7 @@ export interface TransportPort {
 }
 
 // @public
-export const TREE_DOC_OP_KINDS: readonly ["insertText", "deleteText", "setParagraphMarkRevision", "proposeParagraphMerge", "insertCommentMarker", "acceptRevision", "rejectRevision", "acceptAllRevisions", "rejectAllRevisions", "insertTab", "insertHardBreak", "insertPageBreak", "insertPageField", "setListLevel", "setListNumbering", "setParagraphMarkProperties", "splitParagraph", "splitParagraphMany", "joinParagraphs", "setRunProperties", "setParagraphProperties", "setSectionProperties", "setSectionMark", "insertHyperlink", "setHyperlinkTarget", "removeHyperlink", "setContentControlValue", "removeContentControl", "insertInlineContentControl", "addRepeatingSectionItem", "removeRepeatingSectionItem", "deleteBlock", "insertTable", "insertTableRow", "deleteTableRow", "insertTableColumn", "deleteTableColumn", "setTableColumnWidths", "setTableRightEdgeWidth", "setTableRowHeight", "setTableCellBorders", "setTableCellFill", "setTableCellVerticalAlignment", "createHeaderFooter", "deleteHeaderFooter", "linkToPrevious", "unlinkFromPrevious", "setSectionFurnitureOptions", "insertNote", "deleteNote", "convertNote", "convertAllNotes", "setNoteProperties", "setContentControlProperties", "insertContentControl", "insertDrawing", "replaceDrawingResource", "deleteDrawing", "resizeDrawing", "cropDrawing", "positionDrawing", "setDrawingWrap", "setDrawingMetadata", "setDrawingLocks", "transformDrawing", "insertToc", "replaceTocResult", "rewriteTocPageNumbers"];
+export const TREE_DOC_OP_KINDS: readonly ["insertText", "deleteText", "setParagraphMarkRevision", "proposeParagraphMerge", "insertCommentMarker", "acceptRevision", "rejectRevision", "acceptAllRevisions", "rejectAllRevisions", "insertTab", "insertHardBreak", "insertPageBreak", "insertPageField", "setListLevel", "setListNumbering", "setParagraphTabStops", "setParagraphMarkProperties", "splitParagraph", "splitParagraphMany", "joinParagraphs", "setRunProperties", "setParagraphProperties", "setSectionProperties", "setSectionMark", "insertHyperlink", "setHyperlinkTarget", "removeHyperlink", "setContentControlValue", "removeContentControl", "insertInlineContentControl", "addRepeatingSectionItem", "removeRepeatingSectionItem", "deleteBlock", "insertTable", "insertTableRow", "deleteTableRow", "insertTableColumn", "deleteTableColumn", "setTableColumnWidths", "setTableRightEdgeWidth", "setTableRowHeight", "setTableCellBorders", "setTableCellFill", "setTableCellVerticalAlignment", "createHeaderFooter", "deleteHeaderFooter", "linkToPrevious", "unlinkFromPrevious", "setSectionFurnitureOptions", "insertNote", "deleteNote", "convertNote", "convertAllNotes", "setNoteProperties", "setContentControlProperties", "insertContentControl", "insertDrawing", "replaceDrawingResource", "deleteDrawing", "resizeDrawing", "cropDrawing", "positionDrawing", "setDrawingWrap", "setDrawingMetadata", "setDrawingLocks", "transformDrawing", "insertToc", "replaceTocResult", "rewriteTocPageNumbers"];
 
 // @public
 export type TreeDocOp = {
@@ -3866,6 +3869,11 @@ export type TreeDocOp = {
     readonly paragraphId: string;
     readonly numId: string | null;
     readonly level?: number;
+} | {
+    readonly op: 'setParagraphTabStops';
+    readonly paragraphId: string;
+    readonly stops: readonly TabStopWrite[];
+    readonly inForcePositionsTwips?: readonly number[];
 } | {
     readonly op: 'splitParagraph';
     readonly paragraphId: string;
