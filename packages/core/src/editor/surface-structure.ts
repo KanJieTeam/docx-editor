@@ -30,6 +30,7 @@ import {
   mergedProperties,
   paragraphPropertiesOf,
 } from './surface-formatting.ts';
+import { createListStyleWrites } from './surface-list-style.ts';
 import type {
   PaginatedSurface,
   SurfaceParagraphFormat,
@@ -212,6 +213,9 @@ export function createSurfaceStructure(deps: SurfaceStructureDeps): StructureMet
     before?: Parameters<TreeDocxSessionView['applyTreeOps']>[1],
     after?: Parameters<TreeDocxSessionView['applyTreeOps']>[2]
   ): TreeApplyResult => session.applyTreeOps(ops, before, after, deps.storyScope());
+  // Word's list gesture is two writes: the numbering, and the List Paragraph style that
+  // carries `w:contextualSpacing`. The style half lives in its own lane.
+  const listStyle = createListStyleWrites({ session, storyPart });
   const orderOf = () => deps.paragraphOrder();
   const currentLayout = {
     get value(): SemanticLayout {
@@ -461,12 +465,22 @@ export function createSurfaceStructure(deps: SurfaceStructureDeps): StructureMet
       if (text.length > 0) return false;
 
       const outdented = marker.level > 0 && listLevelExists(marker, marker.level - 1);
-      const op: TreeDocOp = outdented
-        ? { op: 'setListLevel', paragraphId: from.paragraphId, level: marker.level - 1 }
-        : { op: 'setListNumbering', paragraphId: from.paragraphId, numId: null };
+      // Outdenting stays in the list, so it keeps the style. Leaving the list sheds it, or
+      // the paragraph keeps List Paragraph's half-inch indent with no marker beside it —
+      // see `clearListParagraphStyleOp`. The style write goes first for the same reason it
+      // does in `toggleList`: it carries the authored `w:numPr` forward, so running it
+      // after the numbering op would put back what that op had just removed.
+      const ops: TreeDocOp[] = [];
+      if (outdented) {
+        ops.push({ op: 'setListLevel', paragraphId: from.paragraphId, level: marker.level - 1 });
+      } else {
+        const cleared = listStyle.clearOp(from.paragraphId);
+        if (cleared) ops.push(cleared);
+        ops.push({ op: 'setListNumbering', paragraphId: from.paragraphId, numId: null });
+      }
       let committed = false;
       commit(() => {
-        const result = applyOps([op], selectionMark());
+        const result = applyOps(ops, selectionMark());
         committed = result.committed;
         return result;
       });
@@ -497,19 +511,22 @@ export function createSurfaceStructure(deps: SurfaceStructureDeps): StructureMet
         ? null
         : (adjacentListNumId(touched, kind) ?? session.ensureListDefinition(kind));
       if (!turningOff && numId === null) return false;
-      const ops: TreeDocOp[] = touched.map((paragraphId) => {
+      // Turning a list OFF leaves the style alone, as Word does: an outdented item stays
+      // in List Paragraph until the user picks another style.
+      const ops: TreeDocOp[] = turningOff ? [] : listStyle.applyOps(touched);
+      for (const paragraphId of touched) {
         // `w:numPr` carries the level AND the definition, and the op mints a fresh one, so
         // a call that names no level silently resets `w:ilvl` to 0. Word converts a bullet
         // to a number IN PLACE: pressing Numbered on a level-2 item left it at level 2,
         // where this flattened it to the left margin two levels out.
         const level = listLevelOf(paragraphId);
-        return {
-          op: 'setListNumbering' as const,
+        ops.push({
+          op: 'setListNumbering',
           paragraphId,
           numId,
           ...(level !== null ? { level } : {}),
-        };
-      });
+        });
+      }
       return commitOverTarget(() => applyOps(ops, selectionMark()));
     },
 
