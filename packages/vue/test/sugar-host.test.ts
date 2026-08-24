@@ -11,7 +11,7 @@ import { DocxEditorNavigation } from '../src/editor/navigation';
 import { DocxEditorLoading } from '../src/editor/DocxEditorLoading';
 import { LocaleProvider } from '../src/i18n';
 import { flush, mountComponent, mountEditorTree, mountSugarAsync, SOURCE } from './helpers/mount';
-import { docx } from './helpers/fixtures';
+import { docx, LARGE_SOURCE } from './helpers/fixtures';
 
 const label = createT(en);
 
@@ -20,6 +20,36 @@ afterEach(() => {
 });
 
 describe('DocxEditor sugar host', () => {
+  test('mounts the default loading page while no document is available', async () => {
+    const view = await mountSugarAsync({ document: undefined });
+    await nextTick();
+    const loading = view.container.querySelector('.docx-editor__loading--overlay');
+    expect(loading).not.toBeNull();
+    expect(loading?.querySelectorAll('.docx-editor__loading-page')).toHaveLength(1);
+    expect(
+      (view.container.querySelector('[data-testid="docx-toolbar"]') as HTMLFieldSetElement).disabled
+    ).toBe(true);
+    expect(
+      (view.container.querySelector('[data-testid="editing-mode-trigger"]') as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
+    view.unmount();
+  });
+
+  test('keeps the default loading page up while a large document opens', async () => {
+    const view = await mountSugarAsync({ document: LARGE_SOURCE });
+    await nextTick();
+    expect(view.container.querySelector('.docx-editor__loading-page')).not.toBeNull();
+
+    await view.flush();
+    expect(view.container.querySelector('.docx-editor__loading')).toBeNull();
+    expect(view.container.textContent).toContain('large body');
+    expect(
+      (view.container.querySelector('[data-testid="docx-toolbar"]') as HTMLFieldSetElement).disabled
+    ).toBe(false);
+    view.unmount();
+  });
+
   test('clamps rulers with the page on narrow viewports', async () => {
     const widthDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
@@ -284,6 +314,10 @@ describe('DocxEditorLoading composition', () => {
     app.mount(container);
     await nextTick();
     expect(container.querySelector('.docx-editor__loading')).not.toBeNull();
+    expect(container.querySelectorAll('.docx-editor__loading-page')).toHaveLength(1);
+    expect(container.querySelector('.docx-editor__loading-lines')).toBeNull();
+    expect(container.querySelector('.docx-editor__loading-spinner')).not.toBeNull();
+    expect(container.querySelector('.docx-editor-sr-only')?.textContent).toBe('Loading');
     app.unmount();
     container.remove();
   });

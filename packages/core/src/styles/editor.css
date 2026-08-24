@@ -2703,6 +2703,13 @@ a.docx-hyperlink:focus-visible {
   transition: padding-inline-start 0.2s ease;
 }
 
+/* A deferred open gives the loading overlay one frame before parsing. The parse blocks
+   layout transitions, so snap both ruler reservations before that frame or the right edge
+   moves while the start edge remains frozen, leaving the ruler half a strip off the page. */
+.docx-ruler-frame--opening {
+  transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .docx-ruler-frame {
     transition: none;
@@ -3423,6 +3430,9 @@ a.docx-hyperlink:focus-visible {
 .docx-toolbar {
   display: flex;
   align-items: center;
+  min-inline-size: 0;
+  margin: 0;
+  border: 0;
   /* NOT overflow-scroll like the chrome spec's pill: this toolbar hosts LIVE popups
    * (font menu, swatch grids) positioned absolutely inside their parts, and any
    * overflow clipping on the bar would cut them off. A bar that does not measure
@@ -3675,8 +3685,10 @@ a.docx-hyperlink:focus-visible {
   user-select: none;
 }
 
-.docx-toolbar__picker[aria-disabled='true'] {
+.docx-toolbar__picker[aria-disabled='true'],
+.docx-toolbar__picker:disabled {
   opacity: 0.5;
+  cursor: default;
 }
 
 .docx-toolbar__picker-caret {
@@ -4640,17 +4652,15 @@ a.docx-hyperlink:focus-visible {
    Loading surface (`DocxEditor.Loading`)
    --------------------------------------------------------------------------- */
 
-/* Fills whatever box the host places it in, so the same declaration works as a
-   full-page screen and as an in-viewport overlay. */
+/* Fills whatever box the host places it in. The default child uses the real paginated
+   surface and page classes, so its position and paper styling match a loaded document. */
 .docx-editor__loading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
+  display: block;
+  box-sizing: border-box;
   width: 100%;
   height: 100%;
   min-height: 0;
+  overflow: auto;
   color: var(--doc-text-muted);
   font-size: 14px;
 }
@@ -4684,11 +4694,38 @@ a.docx-hyperlink:focus-visible {
   }
 }
 
-/* The default screen when the host supplies no children.
-   `display` and `box-sizing` are explicit rather than inherited from Tailwind's
-   preflight: the part emits its own `docx-editor`, so it can be composed somewhere the
-   preflight does not reach, and an inline span would otherwise measure 42px and only
-   size at all by accident of being a flex item. */
+/* The loading sheet uses the same surface tree as a painted document:
+   `.docx-paginated-surface > .docx-pages > .docx-page`. React and Vue apply the layout
+   page size and zoom to the surface. The shared surface margin and page rule then control
+   centring, paper colour, and shadow without a second approximation. */
+.docx-editor__loading-surface > .docx-pages {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.docx-editor__loading-page {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.docx-editor__loading-page-status {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: translateY(-50%);
+}
+
+/* `display` and `box-sizing` are explicit rather than inherited from Tailwind's
+   preflight. The loading part can sit outside the host's utility scope. */
 .docx-editor__loading-spinner {
   display: block;
   box-sizing: border-box;
@@ -4709,7 +4746,7 @@ a.docx-hyperlink:focus-visible {
   }
 }
 
-/* Respect a reduced-motion preference: keep the indicator, drop the rotation. */
+/* Respect a reduced-motion preference by keeping the indicator still. */
 @media (prefers-reduced-motion: reduce) {
   .docx-editor__loading-spinner {
     animation: none;

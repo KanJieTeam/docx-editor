@@ -32,6 +32,7 @@ import type { ReactNode } from 'react';
 import type { CSSProperties } from 'react';
 import type { EditorSnapshot } from '@docx-editor.dev/core/contracts/editor';
 import { useTranslation } from '../i18n';
+import { twipsToPixels } from '../lib/units';
 import { useEditorState } from './useEditorState';
 
 /**
@@ -41,6 +42,19 @@ import { useEditorState } from './useEditorState';
  */
 const selectShowLoading = (snapshot: EditorSnapshot) =>
   snapshot.isLoading || snapshot.isOpening === true;
+
+interface LoadingPageSize {
+  readonly width: number;
+  readonly height: number;
+}
+
+const selectLoadingPageSize = (snapshot: EditorSnapshot): LoadingPageSize => ({
+  width: twipsToPixels(snapshot.pageSetup?.pageWidthTwips ?? 12_240) * snapshot.zoom,
+  height: twipsToPixels(snapshot.pageSetup?.pageHeightTwips ?? 15_840) * snapshot.zoom,
+});
+
+const sameLoadingPageSize = (a: LoadingPageSize, b: LoadingPageSize) =>
+  a.width === b.width && a.height === b.height;
 
 /** Props for `DocxEditor.Loading`. @public */
 export interface DocxEditorLoadingProps {
@@ -67,9 +81,9 @@ export interface DocxEditorLoadingProps {
   /** Inline styles for the loading container, as on `DocxEditor.Viewport`. */
   style?: CSSProperties;
   /**
-   * The loading screen. Omitted, a neutral spinner rendered from the `--doc-*` tokens is
-   * used, so the batteries-included path has something to show. Compose your own around
-   * `DocxEditor.Loading.Spinner` to keep the packaged indicator beside your own copy.
+   * The loading screen. Omitted, a full-size document page with the packaged indicator
+   * and localized status is used. Compose your own around `DocxEditor.Loading.Spinner`
+   * to keep the packaged indicator beside your own copy.
    */
   children?: DocxEditorChildren;
 }
@@ -107,6 +121,7 @@ function DocxEditorLoadingImpl({
   children,
 }: DocxEditorLoadingProps) {
   const showLoading = useEditorState(selectShowLoading);
+  const pageSize = useEditorState(selectLoadingPageSize, sameLoadingPageSize);
   const { t } = useTranslation();
   if (!when && !showLoading) return null;
 
@@ -116,12 +131,19 @@ function DocxEditorLoadingImpl({
   return (
     <div className={classes} style={style} role="status" aria-live="polite">
       {children ?? (
-        <>
-          <DocxEditorLoadingSpinner />
-          {/* The spinner is decorative, so the live region would otherwise announce an
-              empty string — worse than having no region at all. */}
-          <span className="docx-editor-sr-only">{t('loading.label')}</span>
-        </>
+        <div
+          className="docx-paginated-surface docx-editor__loading-surface"
+          style={{ width: pageSize.width, height: pageSize.height }}
+        >
+          <div className="docx-pages">
+            <div className="docx-page docx-editor__loading-page">
+              <div className="docx-editor__loading-page-status">
+                <DocxEditorLoadingSpinner />
+                <span className="docx-editor-sr-only">{t('loading.label')}</span>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

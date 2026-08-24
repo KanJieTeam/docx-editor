@@ -2,15 +2,28 @@
 import './dom-setup.ts';
 
 import { afterEach, describe, expect, test } from 'bun:test';
-import { defineComponent, h, onMounted, onUnmounted } from 'vue';
+import { defineComponent, h, nextTick, onMounted, onUnmounted } from 'vue';
+import type { EditorModule } from '@docx-editor.dev/core/editor';
 import { DocxEditorNavigation } from '../src/editor/navigation';
+import { DocxEditorLoading } from '../src/editor/DocxEditorLoading';
+import { DocxEditorHorizontalRuler } from '../src/editor/DocxEditorRulers';
 import { useReviewRailRegistry } from '../src/editor/context';
 import { useNavigationLayoutStore } from '../src/editor/navigation/navigation-layout';
+import { LARGE_SOURCE, SOURCE } from './helpers/fixtures';
 import { flush, mountEditorTree } from './helpers/mount';
 
 afterEach(() => {
   document.body.innerHTML = '';
 });
+
+const REVIEW_MODULE: EditorModule = {
+  id: 'review',
+  review: {
+    displayModes: ['all-markup', 'proposed', 'original'],
+    collectReviewItems: () => [],
+    revisionItemsOfParagraph: () => [],
+  },
+};
 
 const RailRegistrar = defineComponent({
   setup() {
@@ -61,10 +74,18 @@ describe('DocxEditorViewport review rail', () => {
   });
 
   test('sets data-review-pane and nav shift when a rail mounts', async () => {
-    const view = mountEditorTree(() => [
-      h(RailRegistrar),
-      h(DocxEditorNavigation, { t: (key: string) => key }),
-    ]);
+    const view = mountEditorTree(
+      () => [
+        h(RailRegistrar),
+        h(DocxEditorNavigation, { t: (key: string) => key }),
+        h(DocxEditorLoading, { when: true, overlay: true }),
+      ],
+      SOURCE,
+      () => [],
+      [REVIEW_MODULE]
+    );
+    await flush();
+    view.editor().exec({ type: 'toggleReviewPane' });
     await flush();
     const scroller = view.container.querySelector(
       '[data-testid="docx-editor-scroll"]'
@@ -76,6 +97,10 @@ describe('DocxEditorViewport review rail', () => {
     expect(Number.parseFloat(shift)).toBeGreaterThanOrEqual(0);
     expect(scroller.style.getPropertyValue('--docx-review-gutter')).toBe('316px');
     expect(scroller.style.getPropertyValue('--docx-review-gutter-start')).toBe('0px');
+    const loading = view.container.querySelector('.docx-editor__loading') as HTMLElement;
+    expect(
+      loading.querySelector('.docx-paginated-surface > .docx-pages > .docx-page')
+    ).not.toBeNull();
     view.unmount();
   });
 
@@ -92,13 +117,38 @@ describe('DocxEditorViewport review rail', () => {
     view.unmount();
   });
 
-  test('applies nav shift from the layout store outside render', async () => {
-    const view = mountEditorTree(() => h(ShiftWriter));
+  test('applies nav shift to the viewport but keeps the loading page centred', async () => {
+    const view = mountEditorTree(() => [
+      h(ShiftWriter),
+      h(DocxEditorLoading, { when: true, overlay: true }),
+    ]);
     await flush();
     const scroller = view.container.querySelector(
       '[data-testid="docx-editor-scroll"]'
     ) as HTMLElement;
     expect(scroller.style.getPropertyValue('--docx-nav-shift')).toBe('128px');
+    const loading = view.container.querySelector('.docx-editor__loading') as HTMLElement;
+    expect(
+      loading.querySelector('.docx-paginated-surface > .docx-pages > .docx-page')
+    ).not.toBeNull();
+    view.unmount();
+  });
+
+  test('snaps the ruler reservation while a replacement document opens', async () => {
+    const view = mountEditorTree(() => [
+      h(DocxEditorHorizontalRuler),
+      h(DocxEditorLoading, { overlay: true }),
+    ]);
+    await flush();
+
+    view.editor().load(LARGE_SOURCE);
+    expect(view.editor().snapshot().isOpening).toBe(true);
+    await nextTick();
+    await nextTick();
+
+    expect(view.container.querySelector('.docx-ruler-frame--opening')).not.toBeNull();
+    await flush();
+    expect(view.container.querySelector('.docx-ruler-frame--opening')).toBeNull();
     view.unmount();
   });
 });

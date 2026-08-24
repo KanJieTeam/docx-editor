@@ -19,11 +19,13 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { renderToString } from 'react-dom/server';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { zipSync, strToU8 } from 'fflate';
+import type { DocxEditorInstance } from '@docx-editor.dev/core/editor';
 import { DocxEditor } from '../src/components/DocxEditor.tsx';
 import { DocxEditorLoading } from '../src/editor/DocxEditorLoading.tsx';
 import { DocxEditorRoot } from '../src/editor/DocxEditorRoot.tsx';
 import { DocxEditorViewport } from '../src/editor/DocxEditorViewport.tsx';
 import { DocxEditorContent } from '../src/editor/DocxEditorContent.tsx';
+import { DocxEditorHorizontalRuler } from '../src/editor/DocxEditorRulers.tsx';
 import { useEditorState } from '../src/editor/useEditorState.ts';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -289,6 +291,37 @@ describe('DocxEditor.Loading', () => {
     });
   });
 
+  test('a ruler snaps to the centred loading page before a deferred replacement', async () => {
+    let editor: DocxEditorInstance | null = null;
+    const view = render(
+      <DocxEditorRoot
+        document={SOURCE}
+        onReady={(ready) => {
+          editor = ready as DocxEditorInstance;
+        }}
+      >
+        <DocxEditorHorizontalRuler />
+        <DocxEditorLoading />
+        <DocxEditorViewport>
+          <DocxEditorContent />
+        </DocxEditorViewport>
+      </DocxEditorRoot>
+    );
+    await waitFor(() => expect(editor).not.toBeNull());
+
+    act(() => {
+      editor!.load(LARGE_SOURCE);
+    });
+    expect(editor!.snapshot().isOpening).toBe(true);
+    await act(async () => {});
+
+    expect(view.container.querySelector('.docx-ruler-frame--opening')).not.toBeNull();
+    await waitFor(() => {
+      expect(view.container.textContent).toContain('large body');
+    });
+    expect(view.container.querySelector('.docx-ruler-frame--opening')).toBeNull();
+  });
+
   test('onReady waits for a LARGE document to mount, so it can scroll a real document', async () => {
     // The engine opens big files behind one painted frame. A host that scrolls or
     // selects from onReady must observe the mounted document, not the yield window.
@@ -323,25 +356,29 @@ describe('DocxEditor.Loading', () => {
     );
   });
 
-  test('renders the packaged spinner when the host supplies no children', () => {
+  test('renders one packaged loading page when the host supplies no children', () => {
     const view = render(<DocxEditorLoading when />);
     const el = view.container.querySelector(LOADING)!;
+    const surface = el.querySelector('.docx-paginated-surface') as HTMLElement;
 
+    expect(el.querySelectorAll('.docx-editor__loading-page')).toHaveLength(1);
+    expect(surface.querySelector(':scope > .docx-pages > .docx-page')).not.toBeNull();
+    expect(surface.style.width).toBe('816px');
+    expect(surface.style.height).toBe('1056px');
+    expect(el.querySelector('.docx-editor__loading-lines')).toBeNull();
     expect(el.querySelector(SPINNER)).not.toBeNull();
-    // Announced as a live status, and the decorative spinner is hidden from it.
     expect(el.getAttribute('role')).toBe('status');
     expect(el.getAttribute('aria-live')).toBe('polite');
-    expect(el.querySelector(SPINNER)!.getAttribute('aria-hidden')).toBe('true');
   });
 
-  test('the default screen has something to announce, not an empty live region', () => {
-    // The spinner is aria-hidden, so without a text node `role="status"` would announce
-    // "" — worse than having no live region at all.
+  test('the default screen announces loading without a visible label', () => {
     const view = render(<DocxEditorLoading when />);
     const el = view.container.querySelector(LOADING)!;
+    const page = el.querySelector('.docx-editor__loading-page')!;
 
-    expect(el.textContent!.trim().length).toBeGreaterThan(0);
-    expect(el.querySelector('.docx-editor-sr-only')).not.toBeNull();
+    expect(page.querySelector('.docx-editor-sr-only')?.textContent).toBe('Loading');
+    expect(page.querySelector('.docx-editor__loading-page-status')).not.toBeNull();
+    expect(el.querySelector(SPINNER)!.getAttribute('aria-hidden')).toBe('true');
   });
 
   test('carries its own token scope, so it is styled wherever it is composed', () => {
@@ -410,5 +447,38 @@ describe('DocxEditor.Loading', () => {
 
   test('is reachable as a namespace static', () => {
     expect(DocxEditor.Loading).toBe(DocxEditorLoading);
+  });
+});
+
+describe('packaged DocxEditor loading screen', () => {
+  test('mounts the default loading page while no document is available', () => {
+    const view = render(<DocxEditor />);
+    const loading = view.container.querySelector('.docx-editor__loading--overlay');
+
+    expect(loading).not.toBeNull();
+    expect(loading!.querySelectorAll('.docx-editor__loading-page')).toHaveLength(1);
+    expect(
+      (view.container.querySelector('[data-testid="docx-toolbar"]') as HTMLFieldSetElement).disabled
+    ).toBe(true);
+    expect(
+      (view.container.querySelector('[data-testid="editing-mode-trigger"]') as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
+  });
+
+  test('keeps the default loading page up while a large document opens', async () => {
+    const view = render(<DocxEditor document={LARGE_SOURCE} />);
+
+    await act(async () => {});
+    expect(view.container.querySelector('.docx-editor__loading-page')).not.toBeNull();
+    expect(view.container.textContent).not.toContain('large body');
+
+    await waitFor(() => {
+      expect(view.container.textContent).toContain('large body');
+    });
+    expect(view.container.querySelector('.docx-editor__loading')).toBeNull();
+    expect(
+      (view.container.querySelector('[data-testid="docx-toolbar"]') as HTMLFieldSetElement).disabled
+    ).toBe(false);
   });
 });

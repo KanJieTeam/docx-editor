@@ -618,12 +618,18 @@ export function ComposedEditorDemo({ fixtureUrl }: { fixtureUrl: string }) {
       className={`docx-editor demo-app${colorMode === 'dark' ? ' dark' : ''}`}
       data-testid="composed-mount"
     >
-      {bytes ? (
+      {loadError ? (
+        // A failed fetch is NOT a loading state: it is terminal, and routing it through
+        // the polite live region would announce it as progress. Its own assertive region.
+        <div className="demo-loading" role="alert">
+          {`Could not load the document: ${loadError.message}`}
+        </div>
+      ) : (
         // Authoring is ambient: comments and tracked changes take their `@w:author` from
         // `author`, the way the Office JS API sources it from context. A real app supplies
         // the signed-in user; a demo supplies a name so replies can be written at all.
         <DocxEditor.Root
-          document={bytes}
+          {...(bytes ? { document: bytes } : {})}
           author="Demo Reviewer"
           // The demo always opens ready to type: without an explicit mode, a document
           // carrying `w:trackRevisions` opens in suggesting (the Root follows the file).
@@ -706,10 +712,7 @@ export function ComposedEditorDemo({ fixtureUrl }: { fixtureUrl: string }) {
                 big file behind one painted frame and reports `isOpening`, so picking a
                 large document through Open DOCX shows this screen instead of freezing
                 on the old one. It renders nothing while the document is on screen. */}
-            <DocxEditor.Loading overlay>
-              <DocxEditor.Loading.Spinner />
-              <span>Loading document…</span>
-            </DocxEditor.Loading>
+            <DocxEditor.Loading overlay />
             {/* Floating diagnostics chrome, above the overlay panels. */}
             <PerfHud />
             <CitationPopover
@@ -722,20 +725,6 @@ export function ComposedEditorDemo({ fixtureUrl }: { fixtureUrl: string }) {
             ) : null}
           </div>
         </DocxEditor.Root>
-      ) : loadError ? (
-        // A failed fetch is NOT a loading state: it is terminal, and routing it through
-        // the polite live region would announce it as progress. Its own assertive region.
-        <div className="demo-loading" role="alert">
-          {`Could not load the document: ${loadError.message}`}
-        </div>
-      ) : (
-        // The library's loading surface rather than a hand-rolled div: rendered outside
-        // a `Root` it always shows, which is exactly this branch's condition. Children
-        // replace the packaged screen, so the spinner is composed back in by name.
-        <DocxEditor.Loading className="demo-loading">
-          <DocxEditor.Loading.Spinner />
-          <span>Loading document…</span>
-        </DocxEditor.Loading>
       )}
     </div>
   );
