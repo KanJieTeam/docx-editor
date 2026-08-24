@@ -112,6 +112,7 @@ import {
   applyRewriteTocPageNumbers,
 } from './tree-op-toc.ts';
 import { applyInsertTable } from './tree-op-insert-table.ts';
+import { applyReplaceStoryBlocks } from './tree-op-story-replace.ts';
 import type {
   OoxmlProperty,
   TreeDocOp,
@@ -215,6 +216,9 @@ export function applyTreeOp(part: OoxmlPart, op: TreeDocOp, options?: EditOption
   const rejection = validateTreeOp(part, op);
   if (rejection) return { ok: false, reason: rejection };
 
+  if (op.op === 'replaceStoryBlocks') {
+    return applyReplaceStoryBlocks(part, op.storyRootId, op.paragraphs, options);
+  }
   if (op.op === 'setContentControlValue' && typeof op.value !== 'string') {
     return applyAutomationSetContentControlValue(part, op, options);
   }

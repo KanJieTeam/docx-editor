@@ -597,7 +597,9 @@ describe('the shaped parts', () => {
       trigger.click();
     });
     // Word never offers to add space that is already there.
-    expect(spacingRows()[0]!.textContent).toBe(label('lineSpacing.removeSpaceBefore' as TranslationKey));
+    expect(spacingRows()[0]!.textContent).toBe(
+      label('lineSpacing.removeSpaceBefore' as TranslationKey)
+    );
     await act(async () => {
       spacingRows()[0]!.click();
     });
@@ -609,7 +611,9 @@ describe('the shaped parts', () => {
     await act(async () => {
       trigger.click();
     });
-    expect(spacingRows()[0]!.textContent).toBe(label('lineSpacing.addSpaceBefore' as TranslationKey));
+    expect(spacingRows()[0]!.textContent).toBe(
+      label('lineSpacing.addSpaceBefore' as TranslationKey)
+    );
   });
 
   test('line spacing and paragraph space are independent settings of one w:spacing', async () => {

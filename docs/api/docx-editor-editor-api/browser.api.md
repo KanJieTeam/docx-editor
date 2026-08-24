@@ -248,12 +248,14 @@ export type ContentControlValue = {
 // @public
 export interface CreateBrowserOptions {
     readonly author?: string;
+    readonly revisionTextView?: RevisionTextView;
 }
 
 // @public
 export interface CreateServerOptions {
     readonly author?: string;
     readonly limits?: DocumentLimits;
+    readonly revisionTextView?: RevisionTextView;
 }
 
 // @public
@@ -701,6 +703,9 @@ export class RevisionCollection extends HandleCollection<Revision> {
     protected promised(label: string, nullable: boolean): Revision & PromisedItem;
     rejectAll(): void;
 }
+
+// @public
+export type RevisionTextView = 'all' | 'vanilla';
 
 // @public
 export type RevisionType = 'None' | 'Insert' | 'Delete' | 'Property' | 'ParagraphNumber' | 'DisplayField' | 'Reconcile' | 'Conflict' | 'Style' | 'Replace' | 'ParagraphProperty' | 'TableProperty' | 'SectionProperty' | 'StyleDefinition' | 'MovedFrom' | 'MovedTo' | 'CellInsertion' | 'CellDeletion' | 'CellMerge' | 'CellSplit' | 'ConflictInsert' | 'ConflictDelete';

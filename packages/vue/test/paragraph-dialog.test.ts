@@ -1,4 +1,4 @@
-/* eslint-disable react-hooks/rules-of-hooks -- Vue composables in defineComponent setup */
+ 
 // The Vue twin of `packages/react/test/paragraph-dialog.test.tsx`.
 //
 // The two dialogs share their field logic as a byte-identical module, so what is worth
@@ -58,7 +58,10 @@ function mountDialog(body: string) {
     render: () =>
       h(
         DocxEditorRoot,
-        { document: docx(body), onReady: (editor: Editor) => ready.push(editor as DocxEditorInstance) },
+        {
+          document: docx(body),
+          onReady: (editor: Editor) => ready.push(editor as DocxEditorInstance),
+        },
         {
           default: () =>
             h(DocxEditorViewport, null, {
@@ -140,7 +143,7 @@ describe('the Vue Paragraph dialog', () => {
     // The row asks the host for the dialog rather than mounting it: the part moves between
     // the bar and the overflow panel, and a dialog mounted inside it went with it mid-edit.
     expect(source).toContain('useParagraphDialog');
-    expect(source).toContain("paragraphDialog?.open(");
+    expect(source).toContain('paragraphDialog?.open(');
   });
 
   test('seeds every field from the live selection when it opens', async () => {
@@ -206,9 +209,7 @@ describe('the Vue Paragraph dialog', () => {
         true
       );
 
-      panel!.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
-      );
+      panel!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       await flush();
       expect(open.value).toBe(false);
     } finally {

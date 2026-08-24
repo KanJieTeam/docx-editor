@@ -55,7 +55,7 @@ const writeMetafileAs = (prefix: string): NonNullable<Options['esbuildPlugins']>
         if (written.has(name)) {
           throw new Error(
             `${prefix}: two builds both want to write dist/${name}. One would overwrite ` +
-              "the other, and the notice would describe less than the package ships."
+              'the other, and the notice would describe less than the package ships.'
           );
         }
         written.add(name);

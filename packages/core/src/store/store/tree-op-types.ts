@@ -178,6 +178,17 @@ export interface RevisionAttributionInput {
 export type TreeDocOp =
   | {
       /**
+       * Replace one story's complete block structure with fresh plain paragraphs.
+       *
+       * Unlike a span replacement, this removes section-ending paragraphs and content-control
+       * wrappers. A body's final direct `w:sectPr` survives to retain the page setup.
+       */
+      readonly op: 'replaceStoryBlocks';
+      readonly storyRootId: string;
+      readonly paragraphs: readonly string[];
+    }
+  | {
+      /**
        * Insert an SDT-wrapped TOC immediately before a body paragraph.
        * The initial cached result and any heading bookmarks land in one undo unit.
        */
@@ -975,6 +986,7 @@ export type TreeDocOpKind = TreeDocOp['op'];
 
 /** Every {@link TreeDocOpKind}, for validation and exhaustiveness checks. */
 export const TREE_DOC_OP_KINDS = [
+  'replaceStoryBlocks',
   'insertText',
   'deleteText',
   'setParagraphMarkRevision',

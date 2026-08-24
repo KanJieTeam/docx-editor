@@ -258,6 +258,7 @@ export default [
   {
     files: [
       'packages/core/src/editor/chrome-controls.ts',
+      'packages/core/src/editor/paginated-surface-contract.ts',
       'packages/core/src/layout/semantic-table.ts',
       'packages/core/src/store/__tests__/table-resize-ops.test.ts',
       'packages/core/src/store/store/review-reads.ts',
@@ -272,7 +273,6 @@ export default [
       'packages/core/src/editor/surface-pointer.ts',
       'packages/core/src/store/package/ooxml-drawing-rules.ts',
       'packages/core/src/store/store/tree-op-tracked.ts',
-      'packages/core/src/store/store/tree-op-types.ts',
       'packages/react/src/editor/menu/parts.tsx',
     ],
     rules: {
@@ -287,6 +287,7 @@ export default [
       'packages/core/src/editor/docx-editor-images.ts',
       'packages/core/src/store/__tests__/table-row-ops.test.ts',
       'packages/core/src/store/store/tree-package-store.ts',
+      'packages/core/src/store/store/tree-op-types.ts',
     ],
     rules: {
       'max-lines': ['error', { max: 1300, skipBlankLines: false, skipComments: false }],
@@ -302,7 +303,7 @@ export default [
       'packages/react/test/toolbar-composition.test.tsx',
     ],
     rules: {
-      'max-lines': ['error', { max: 1400, skipBlankLines: false, skipComments: false }],
+      'max-lines': ['error', { max: 1500, skipBlankLines: false, skipComments: false }],
     },
   },
 
@@ -376,7 +377,7 @@ export default [
   {
     files: ['packages/core/src/editor/docx-editor.ts'],
     rules: {
-      'max-lines': ['error', { max: 2600, skipBlankLines: false, skipComments: false }],
+      'max-lines': ['error', { max: 2650, skipBlankLines: false, skipComments: false }],
     },
   },
 
@@ -390,7 +391,7 @@ export default [
   {
     files: ['packages/core/src/automation/plan.ts'],
     rules: {
-      'max-lines': ['error', { max: 2900, skipBlankLines: false, skipComments: false }],
+      'max-lines': ['error', { max: 2950, skipBlankLines: false, skipComments: false }],
     },
   },
 

@@ -1,7 +1,4 @@
-// The paginated surface's public contract (paginated-surface seam).
-//
-// This module owns the types a host programs against — options, state, perf counters,
-// the formatting snapshot and the surface interface itself. The composition root in
+// The paginated surface's public contract owns the types a host programs against.
 // paginated-surface.ts implements and re-exports them, so importers keep one entry point.
 
 import type { IndentFormatting } from '../contracts/types.ts';
@@ -409,6 +406,12 @@ export interface PaginatedSurface {
   /** One-based page at the caret, or at the centre of the mounted viewport. */
   currentPage(mode?: 'viewport' | 'caret'): number;
   type(text: string): void;
+  /** Author one explicit tracked text change without changing the editing mode. */
+  proposeTextChange(
+    kind: 'insertion' | 'deletion' | 'replacement',
+    text: string,
+    author?: string
+  ): boolean;
   /**
    * Queue plain typed text for a batched commit at the caret.
    *
@@ -994,7 +997,7 @@ export type OpenPaginatedResult =
 export type {
   ParagraphDisagreements,
   ParagraphFlags,
-  SurfaceParagraphFormat,
-  ParagraphPropertyEdit,
   ParagraphTabStop,
+  ParagraphPropertyEdit,
+  SurfaceParagraphFormat,
 } from './paragraph-format-contract.ts';

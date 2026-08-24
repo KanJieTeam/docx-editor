@@ -321,7 +321,11 @@ export class Paragraph extends ModelObject implements PromisedItem {
     const selected = this.selection(request, ['text', 'uniqueLocalId', ...FORMAT_FIELDS]);
     const handle = this.#handle();
     if (selected.includes('text')) {
-      this.loadTextInto('text', () => ({ op: 'getText', target: handle }));
+      this.loadTextInto('text', () => ({
+        op: 'getText',
+        target: handle,
+        projection: this.revisionTextView(),
+      }));
     }
     if (selected.includes('uniqueLocalId')) {
       this.loadTextInto('uniqueLocalId', () => ({ op: 'getParagraphId', paragraph: handle }));

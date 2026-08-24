@@ -225,7 +225,10 @@ export class Body extends ModelObject {
       op: 'search',
       scope: { body: handle },
       text: searchText,
-      ...(selected === undefined ? {} : { options: selected }),
+      options: {
+        ...(selected ?? {}),
+        projection: this.revisionTextView(),
+      },
     }));
   }
 
@@ -291,7 +294,11 @@ export class Body extends ModelObject {
     const selected = this.selection(request, ['text', 'style']);
     if (selected.includes('text')) {
       const handle = this.#handle();
-      this.loadTextInto('text', () => ({ op: 'getText', target: handle }));
+      this.loadTextInto('text', () => ({
+        op: 'getText',
+        target: handle,
+        projection: this.revisionTextView(),
+      }));
     }
     if (selected.includes('style')) this.#loadStyle();
   }

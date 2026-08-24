@@ -183,7 +183,10 @@ export class Range extends ModelObject implements PromisedItem {
       op: 'search',
       scope: span,
       text: searchText,
-      ...(selected === undefined ? {} : { options: selected }),
+      options: {
+        ...(selected ?? {}),
+        projection: this.revisionTextView(),
+      },
     }));
   }
 
@@ -312,7 +315,7 @@ export class Range extends ModelObject implements PromisedItem {
       const label = `${this.path.label}.text`;
       this.read(
         label,
-        () => ({ op: 'getSpanText', span }),
+        () => ({ op: 'getSpanText', span, projection: this.revisionTextView() }),
         (value) => {
           this.setLoadedProperty('text', hydratedText(value, label));
         }

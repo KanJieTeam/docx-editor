@@ -13,11 +13,13 @@ Production use requires a commercial agreement: licensing@eigenpal.com
 
 import { describe, expect, test } from 'bun:test';
 import { isDocxEditorError } from '../../runtime/errors.ts';
+import { createServer } from '../../runtime/server.ts';
 import {
   EMPTY_BODY,
   NESTED_TABLE_DOCUMENT,
   TABLE_DOCUMENT,
   WITH_FURNITURE,
+  WITH_REVISION_FOOTNOTE,
   docx,
   p,
   pWithId,
@@ -57,6 +59,100 @@ describe('the document and its body', () => {
       return body.text;
     });
     expect(text).toBe('');
+  });
+});
+
+describe('revision text projections', () => {
+  const document = docx(
+    '<w:p><w:r><w:t xml:space="preserve">keep </w:t></w:r>' +
+      '<w:del w:id="1" w:author="Ada"><w:r><w:delText>gone</w:delText></w:r></w:del>' +
+      '<w:ins w:id="2" w:author="Ada"><w:r><w:t>added</w:t></w:r></w:ins></w:p>'
+  );
+
+  test('keeps the Office shape while a runtime selects a consistent vanilla view', async () => {
+    const compatibilityRuntime = await serverRuntime(document);
+    const compatibility = await compatibilityRuntime.run(async (context) => {
+      const body = context.document.body;
+      body.load('text');
+      await context.sync();
+      return body.text;
+    });
+
+    const runtime = await createServer(document, { revisionTextView: 'vanilla' });
+    const result = await runtime.run(async (context) => {
+      const body = context.document.body;
+      body.load('text');
+      const found = body.search('gone');
+      const inserted = body.search('added');
+      found.load('items');
+      inserted.load('items');
+      await context.sync();
+
+      const range = found.items[0]!;
+      range.load('text');
+      await context.sync();
+      const before = {
+        body: body.text,
+        range: range.text,
+        hiddenMatches: inserted.items.length,
+      };
+
+      range.insertText('kept', 'Replace');
+      await context.sync();
+      body.load('text');
+      await context.sync();
+      return { before, after: body.text };
+    });
+
+    expect({ compatibility, ...result }).toEqual({
+      compatibility: 'keep goneadded',
+      before: {
+        body: 'keep gone',
+        range: 'gone',
+        hiddenMatches: 0,
+      },
+      after: 'keep kept',
+    });
+  });
+
+  test('uses the runtime revision view for content-control text', async () => {
+    const controlled = docx(
+      '<w:p><w:sdt><w:sdtPr><w:id w:val="7"/><w:tag w:val="field"/></w:sdtPr>' +
+        '<w:sdtContent><w:r><w:t xml:space="preserve">keep </w:t></w:r>' +
+        '<w:del w:id="1" w:author="Ada"><w:r><w:delText>gone</w:delText></w:r></w:del>' +
+        '<w:ins w:id="2" w:author="Ada"><w:r><w:t>added</w:t></w:r></w:ins>' +
+        '</w:sdtContent></w:sdt></w:p>'
+    );
+    const runtime = await createServer(controlled, { revisionTextView: 'vanilla' });
+    const text = await runtime.run(async (context) => {
+      const controls = context.document.body.contentControls;
+      controls.load();
+      await context.sync();
+      const control = controls.items[0]!;
+      control.load('text');
+      await context.sync();
+      return control.text;
+    });
+
+    expect(text).toBe('keep gone');
+  });
+
+  test('uses the runtime revision view for note text and its body', async () => {
+    const runtime = await createServer(WITH_REVISION_FOOTNOTE, { revisionTextView: 'vanilla' });
+    const text = await runtime.run(async (context) => {
+      const notes = context.document.footnotes;
+      notes.load();
+      await context.sync();
+      const note = notes.items[0]!;
+      note.load('text');
+      const body = note.body;
+      await context.sync();
+      body.load('text');
+      await context.sync();
+      return { note: note.text, body: body.text };
+    });
+
+    expect(text).toEqual({ note: 'keep gone', body: 'keep gone' });
   });
 });
 

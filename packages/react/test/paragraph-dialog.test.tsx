@@ -410,7 +410,9 @@ describe('the Paragraph dialog', () => {
     // reads null on the value side — so a comparator that ignores them hands back the
     // previous slice and the dialog renders a mixed selection as settled.
     const { view, editor, openDialog, close } = mountDialog(
-      p('alpha') + p('two', '<w:spacing w:before="240"/>') + p('three', '<w:spacing w:before="480"/>')
+      p('alpha') +
+        p('two', '<w:spacing w:before="240"/>') +
+        p('three', '<w:spacing w:before="480"/>')
     );
     // First: a lone paragraph that states no spacing. Not a disagreement.
     await act(async () => {

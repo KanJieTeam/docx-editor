@@ -73,6 +73,7 @@ export type {
   DocumentCapabilities,
   DocxEditorRuntime,
   DocxEditorServerRuntime,
+  RevisionTextView,
   RunCallback,
 } from './runtime.ts';
 export type {

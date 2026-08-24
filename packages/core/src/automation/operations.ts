@@ -123,6 +123,8 @@ export type AutomationParagraphRef =
 export interface AutomationSearchOptions {
   readonly matchCase?: boolean;
   readonly matchWholeWord?: boolean;
+  /** Text view to search. `all` preserves the historical behavior. */
+  readonly projection?: AutomationTextProjection;
   /** Not supported; `true` is refused. Punctuation-insensitive matching is not implemented. */
   readonly ignorePunct?: boolean;
   /** Not supported; `true` is refused. Whitespace-insensitive matching is not implemented. */
@@ -132,6 +134,15 @@ export interface AutomationSearchOptions {
   /** Tighten the result cap. Clamped to the engine's own limit; never raised past it. */
   readonly limit?: number;
 }
+
+/**
+ * Which revision text an automation read exposes.
+ *
+ * `all` includes pending insertions, deletions, and both sides of replacements. `vanilla`
+ * describes the document before pending changes are accepted: deletions remain and insertions
+ * are hidden.
+ */
+export type AutomationTextProjection = 'all' | 'vanilla';
 
 /** Where a selection lands. `start`/`end` collapse it to one edge of the span. */
 export type AutomationSelectionMode = 'select' | 'start' | 'end';
@@ -164,9 +175,17 @@ export type AutomationOperation =
    * A story reads as its paragraphs joined by a carriage return — one paragraph mark, one
    * `\r` — which is the separator Word's own text property uses.
    */
-  | { readonly op: 'getText'; readonly target: AutomationHandle }
+  | {
+      readonly op: 'getText';
+      readonly target: AutomationHandle;
+      readonly projection?: AutomationTextProjection;
+    }
   /** Text between two endpoints, with a carriage return at every paragraph mark crossed. */
-  | { readonly op: 'getSpanText'; readonly span: AutomationSpanRef }
+  | {
+      readonly op: 'getSpanText';
+      readonly span: AutomationSpanRef;
+      readonly projection?: AutomationTextProjection;
+    }
   /**
    * A paragraph's own identity as the DOCUMENT writes it (`w14:paraId`).
    *
@@ -206,6 +225,17 @@ export type AutomationOperation =
    * refused: half a deletion is not an outcome this protocol offers.
    */
   | { readonly op: 'replaceSpan'; readonly span: AutomationSpanRef; readonly text: string }
+  /**
+   * Replace a story's complete block structure with fresh plain paragraphs.
+   *
+   * This is the fresh-document operation. It removes tables, content controls, paragraph-level
+   * section marks, comments, and revisions. A body's final page-level section properties survive.
+   */
+  | {
+      readonly op: 'replaceStoryBlocks';
+      readonly body: AutomationHandle;
+      readonly paragraphs: readonly string[];
+    }
   /**
    * Insert a paragraph beside another one. Answers the NEW paragraph's handle.
    *
@@ -322,7 +352,11 @@ export type AutomationOperation =
    * Exactly the same projection as reading `getText` from the body returned by `getNoteBody`,
    * without requiring that intermediate handle: paragraphs joined by one `\r` paragraph mark.
    */
-  | { readonly op: 'getNoteText'; readonly note: AutomationHandle }
+  | {
+      readonly op: 'getNoteText';
+      readonly note: AutomationHandle;
+      readonly projection?: AutomationTextProjection;
+    }
   /** Whether a note is a footnote or an endnote. */
   | { readonly op: 'getNoteKind'; readonly note: AutomationHandle }
   /**
@@ -626,7 +660,11 @@ export type AutomationOperation =
   /** Whether the control removes itself on the first edit (`w:temporary`). */
   | { readonly op: 'getContentControlTemporary'; readonly contentControl: AutomationHandle }
   /** The text the control encloses, as the document reads it. */
-  | { readonly op: 'getContentControlText'; readonly contentControl: AutomationHandle }
+  | {
+      readonly op: 'getContentControlText';
+      readonly contentControl: AutomationHandle;
+      readonly projection?: AutomationTextProjection;
+    }
   /** The paragraphs the control holds, in reading order. Empty for an inline control's own. */
   | { readonly op: 'getContentControlParagraphs'; readonly contentControl: AutomationHandle }
   /**
@@ -810,6 +848,7 @@ export const AUTOMATION_QUERY_OPERATIONS = [
 export const AUTOMATION_COMMAND_OPERATIONS = [
   'insertText',
   'replaceSpan',
+  'replaceStoryBlocks',
   'insertParagraph',
   'splitParagraph',
   'deleteParagraph',

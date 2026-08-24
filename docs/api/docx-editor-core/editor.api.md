@@ -1381,6 +1381,7 @@ export interface PaginatedSurface {
     notePreviewText(scopeId: string): string | null;
     notePropertiesState(): NotePropertiesStateSnapshot | null;
     overlayCoordinates(): SurfaceOverlayCoordinates;
+    proposeTextChange(kind: 'insertion' | 'deletion' | 'replacement', text: string, author?: string): boolean;
     publishedLayout(): SemanticLayout;
     // (undocumented)
     redo(): void;
