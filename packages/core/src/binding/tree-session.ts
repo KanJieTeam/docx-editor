@@ -111,6 +111,7 @@ import {
   refreshParagraphAnchorParts,
   type ParagraphAnchorIndex,
 } from './paragraph-anchors.ts';
+import { directParaIdOf } from './paragraph-anchor-direct-read.ts';
 import {
   readTrackingSettings,
   type DocumentTrackingSettings,
@@ -1318,7 +1319,13 @@ export function openTreeSession(
 
       paragraphAnchors,
 
-      paraIdOf: (nodeId) => paragraphAnchors().paraIdByNode.get(nodeId) ?? null,
+      paraIdOf: (nodeId) =>
+        directParaIdOf(nodeId, {
+          body: bodyStore().part,
+          openStories: packageStore.openStoryParts(),
+          otherStories: furnitureAndNoteParts(),
+          normalize: normalizedForRead,
+        }),
 
       nodeIdOf: (paraId) => paragraphAnchors().nodeByParaId.get(paraId.toUpperCase()) ?? null,
 
