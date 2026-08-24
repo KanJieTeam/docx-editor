@@ -3447,7 +3447,25 @@ export interface ReviewCommentItem {
 }
 
 // @public
-export type ReviewItem = ReviewRevisionItem | ReviewCommentItem;
+export interface ReviewCustomItem {
+    readonly attrs: Readonly<Record<string, string>>;
+    readonly carded: boolean;
+    readonly data?: unknown;
+    readonly detail?: string;
+    readonly icon?: string;
+    readonly id: string;
+    // (undocumented)
+    readonly kind: 'custom';
+    readonly name: string;
+    // (undocumented)
+    readonly range: ReviewRange | null;
+    readonly tag: string;
+    readonly text: string;
+    readonly title: string;
+}
+
+// @public
+export type ReviewItem = ReviewRevisionItem | ReviewCommentItem | ReviewCustomItem;
 
 // @public
 export function reviewItemKey(item: ReviewItem): string;
@@ -3459,7 +3477,14 @@ export function reviewItemRanges(item: ReviewItem): readonly ReviewRange[];
 export interface ReviewModelInput {
     readonly commentsExtendedPart?: OoxmlPart | undefined;
     readonly commentsPart?: OoxmlPart | undefined;
+    readonly customNodePayloads?: ReadonlyMap<string, {
+        readonly nodeId: string;
+        readonly label: string;
+        readonly data: string;
+    }> | undefined;
+    readonly customNodes?: readonly unknown[] | undefined;
     readonly furnitureParts?: readonly OoxmlPart[] | undefined;
+    readonly reportCustomNodeDiagnostic?: ((diagnostic: unknown) => void) | undefined;
     readonly storyPart: OoxmlPart;
 }
 
