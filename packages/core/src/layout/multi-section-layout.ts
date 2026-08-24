@@ -258,6 +258,58 @@ function adoptMultiSectionResult(
 }
 
 /**
+ * The published (remapped + PAGE-field-stamped) sheet a section-local page last produced.
+ *
+ * A rebuilt section remaps EVERY page it laid, including the ones its own incremental pass
+ * carried over by reference — and `remapPage` mints fresh box and furniture wrappers even
+ * when nothing moved. Paint skips a page only by record identity, so a one-character edit
+ * repainted every sheet of its section. Keyed on the section-local record: an edit replaces
+ * it, and any changed publish parameter misses, so the memo can only return a twin the same
+ * inputs would rebuild.
+ */
+interface PublishedPageMemo {
+  readonly globalIndex: number;
+  readonly sheetY: number;
+  readonly pageNumber: number;
+  readonly sectionPageCount: number;
+  readonly format: string | undefined;
+  readonly published: PageRecord;
+}
+const publishedPageMemos = new WeakMap<PageRecord, PublishedPageMemo>();
+
+function publishSectionPage(
+  page: PageRecord,
+  globalIndex: number,
+  sheetY: number,
+  pageNumber: number,
+  sectionPageCount: number,
+  format: string | undefined
+): PageRecord {
+  const memo = publishedPageMemos.get(page);
+  if (
+    memo &&
+    memo.globalIndex === globalIndex &&
+    memo.sheetY === sheetY &&
+    memo.pageNumber === pageNumber &&
+    memo.sectionPageCount === sectionPageCount &&
+    memo.format === format
+  ) {
+    return memo.published;
+  }
+  const remapped = remapPage(page, globalIndex, sheetY);
+  const published = withPageFieldSources([remapped], pageNumber, sectionPageCount, format)[0]!;
+  publishedPageMemos.set(page, {
+    globalIndex,
+    sheetY,
+    pageNumber,
+    sectionPageCount,
+    format,
+    published,
+  });
+  return published;
+}
+
+/**
  * Lay a multi-section part out section by section, with per-section incremental sessions.
  *
  * `w:type` on a section (default `nextPage`) controls whether that section starts on a new
@@ -403,6 +455,20 @@ export function layoutMultiSectionDocument(
     const displayedStart = numbering?.start !== undefined ? numbering.start : nextDisplayed;
     const format = numbering?.fmt;
 
+    // The stack checks prove the sheets did not MOVE; this proves their displayed numbering
+    // did not either. `displayedStart` is inherited through every section before this one, so
+    // a continuous section merging into its host (indices and counts unchanged here) can still
+    // shift a later span's PAGE values. The published pages carry what they were stamped with,
+    // so the first one answers for the whole span.
+    const firstPrevious = prevSpan?.remappedPages[0];
+    const numberingUnchanged =
+      prevSpan === undefined ||
+      prevSpan.remappedPages.length === 0 ||
+      (firstPrevious?.pageFieldSource !== undefined &&
+        firstPrevious.pageFieldSource.pageNumber === displayedStart &&
+        firstPrevious.pageFieldSource.sectionPageCount === prevSpan.remappedPages.length &&
+        firstPrevious.pageFieldSource.format === format);
+
     let remapped: readonly PageRecord[];
     if (continues) {
       // The section's first page is not a sheet: it is the tail of the one before it. Its
@@ -436,7 +502,7 @@ export function layoutMultiSectionDocument(
         remappedAll.push(page);
       }
       nextDisplayed = displayedStart + sectionPageCount;
-    } else if (localUnchanged && stackUnchanged) {
+    } else if (localUnchanged && stackUnchanged && numberingUnchanged) {
       remapped = prevSpan.remappedPages;
       reusedPages += remapped.length;
       for (const page of remapped) {
@@ -448,11 +514,18 @@ export function layoutMultiSectionDocument(
     } else {
       const built: PageRecord[] = [];
       for (const page of laid.pages) {
-        const next = remapPage(page, pages.length + built.length, sheetY);
+        const next = publishSectionPage(
+          page,
+          pages.length + built.length,
+          sheetY,
+          displayedStart + built.length,
+          laid.pages.length,
+          format
+        );
         built.push(next);
         sheetY = next.box.y + next.box.height + 24;
       }
-      remapped = withPageFieldSources(built, displayedStart, built.length, format);
+      remapped = built;
       for (const page of remapped) {
         pages.push(page);
         remappedAll.push(page);
