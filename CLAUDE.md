@@ -31,10 +31,10 @@ One engine. Thin chrome on top.
 | `editor-api`  | `DocxEditor` automation object model, headless/server                                                                                                                                          | published, Pro license         |
 | `pro`         | Review module (comments, tracked changes) + custom nodes, as `EditorModule`s                                                                                                                   | published, Pro license         |
 | `fonts`       | Metric-compatible substitutes for Word's defaults                                                                                                                                              | published                      |
-| `vue`, `nuxt` | WIP, not shipping                                                                                                                                                                              | private                        |
+| `vue`         | The Vue 3 adapter twin, parity-gated against `react`                                                                                                                                           | published                      |
+| `nuxt`        | Nuxt module over the Vue adapter                                                                                                                                                               | WIP, private                   |
 
-React is the only real adapter today. Parity rules below are the target, not the
-state.
+React and Vue both ship; the parity gates below keep them from drifting.
 
 **The engine must resolve to ONE copy.** It holds module-level state — the
 HarfBuzz shaper and its cache budget, the grapheme boundary strategy, layout
@@ -160,10 +160,13 @@ bun run i18n:validate
 openspec validate typed-ooxml-paragraph-editor --strict
 ```
 
-- `bun run lint`'s only errors are the `max-lines` caps: 1000 lines for most files, 2900 for the
-  handful already past it. Nothing else catches them, so adding to a large file passes typecheck
-  and the whole suite and fails CI. Extract; do not raise the cap. It covers `examples/*/src` as
-  well as `packages/*/src` — the demos hit the same cap.
+- `bun run lint`'s errors are the `max-lines` caps (1000 lines for most files, per-file caps up
+  to 3500 for the handful already past it) and the `no-restricted-syntax` bans (HTML-from-strings sinks
+  in `packages/*/src` non-test code, varargs array spread in `core/src/{store,layout}`). Nothing
+  else catches the caps, so adding to a large file passes typecheck and the whole suite and fails
+  CI. Extract; do not raise the cap — `scripts/check-eslint-max-lines-globs.mjs` also fails a cap
+  that drifts more than 150 lines above its file. Lint covers `examples/*/src` as well as
+  `packages/*/src` — the demos hit the same line caps.
 - `bun run test` shards the suite one process per file across a worker pool
   (`scripts/test/run-parallel.mjs`, `--jobs N` to pin the width). That is also
   what CI runs. `bun test` still works and is the one to reach for when you want
@@ -243,9 +246,10 @@ clipboard or print:
 grep -rnE "innerHTML|outerHTML|insertAdjacentHTML|v-html|document\\.write|window\\.open\\(|\\.href\\s*=|font-family:.*\\$\\{" packages --include="*.ts" --include="*.tsx" --include="*.vue" | grep -viE "test|\\.spec\\."
 ```
 
-Fix sibling sinks when you fix one. `openPrintWindow` still builds its popup via
-`document.write` with an unescaped `title`/`content` — a known sink to harden,
-not a reference.
+Fix sibling sinks when you fix one. The HTML sinks in that grep are also lint
+errors (`SECURITY_SINK_SELECTORS` in `eslint.config.js`), so a new one fails
+`bun run lint`; the grep still covers what the AST selectors cannot (`v-html`,
+raw `href` assignment, CSS interpolation).
 
 ## i18n
 
