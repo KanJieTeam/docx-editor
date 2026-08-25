@@ -828,6 +828,77 @@ export function collectExclusionZonesByPage(
   return out;
 }
 
+/**
+ * Zone maps memoized on the pages array plus every input that can move a zone.
+ *
+ * The wrap-exclusion wrapper collects zones from each section's PREVIOUS pages before every
+ * pass, and a multi-section document runs that wrapper once per section per keystroke — for
+ * unchanged sections the pages array comes back by identity, so the collection is a replay.
+ * The column layout is a fresh object per call, so it keys by content, not identity.
+ */
+interface ExclusionZonesMemoEntry {
+  readonly drawingLayout: import('./drawing-layout.ts').InlineDrawingLayoutContext;
+  readonly drawingLayoutEpoch: string | undefined;
+  readonly contentWidth: number;
+  readonly drawingSourceOrder: ReadonlyMap<string, number> | undefined;
+  readonly columnToken: string;
+  readonly zones: ReadonlyMap<number, readonly ExclusionZone[]>;
+}
+
+const exclusionZonesByPageMemos = new WeakMap<
+  readonly import('./semantic-records.ts').PageRecord[],
+  ExclusionZonesMemoEntry
+>();
+
+function columnLayoutToken(layout: ExclusionColumnLayout | undefined): string {
+  if (!layout) return '';
+  return `${layout.columnCount};${layout.columnGapPt};${layout.contentWidth};${(layout.columnLefts ?? []).join(',')};${(layout.columnWidths ?? []).join(',')}`;
+}
+
+export function collectExclusionZonesByPageMemoized(
+  pages: readonly import('./semantic-records.ts').PageRecord[],
+  drawingLayout: import('./drawing-layout.ts').InlineDrawingLayoutContext,
+  /** Projection epoch of the owning part — the context object keeps identity across it. */
+  drawingLayoutEpoch: string | undefined,
+  contentWidth: number,
+  // The source-order LOOKUP is derived here from the keyed map, never passed in: a caller-
+  // supplied closure could disagree with the map the memo keys on, and the key could not see
+  // it — warm passes would then serve zones computed under a different drawing order.
+  drawingSourceOrder: ReadonlyMap<string, number> | undefined,
+  columnLayout?: ExclusionColumnLayout
+): ReadonlyMap<number, readonly ExclusionZone[]> {
+  const columnToken = columnLayoutToken(columnLayout);
+  const cached = exclusionZonesByPageMemos.get(pages);
+  if (
+    cached &&
+    cached.drawingLayout === drawingLayout &&
+    cached.drawingLayoutEpoch === drawingLayoutEpoch &&
+    cached.contentWidth === contentWidth &&
+    cached.drawingSourceOrder === drawingSourceOrder &&
+    cached.columnToken === columnToken
+  ) {
+    return cached.zones;
+  }
+  const zones = collectExclusionZonesByPage(
+    pages,
+    drawingLayout,
+    contentWidth,
+    drawingSourceOrder
+      ? (drawingNodeId: string) => drawingSourceOrder.get(drawingNodeId)
+      : undefined,
+    columnLayout
+  );
+  exclusionZonesByPageMemos.set(pages, {
+    drawingLayout,
+    drawingLayoutEpoch,
+    contentWidth,
+    drawingSourceOrder,
+    columnToken,
+    zones,
+  });
+  return zones;
+}
+
 export function exclusionMapsEqual(
   left: ReadonlyMap<number, readonly ExclusionZone[]>,
   right: ReadonlyMap<number, readonly ExclusionZone[]>

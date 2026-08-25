@@ -7,7 +7,7 @@
 // layout-owned note records. Endnotes reserve nothing on reference pages — they collect at
 // sectEnd / docEnd. Hostile counts and oscillation fail closed with named reasons.
 
-import type { OoxmlNode, OoxmlPart } from '@docx-editor.dev/core/store';
+import type { OoxmlElement, OoxmlNode, OoxmlPart } from '@docx-editor.dev/core/store';
 import { fragmentOwnsPosition, fragmentParagraphs } from './line-segments.ts';
 import { collectNoteReferences } from '../store/package/note-references.ts';
 import type { DocumentSection } from './section-properties.ts';
@@ -384,16 +384,37 @@ function paragraphFragmentsOfBlocks(
 /** Paragraph-id → refs index for linear {@link filterRefsOnPage} over a layout pass. */
 export type PageRefIndex = ReadonlyMap<string, readonly PageRefHit[]>;
 
+/**
+ * Memoized on the hit array's identity: the session memo hands the previous pass's hit array
+ * back by identity when its content is unchanged, so the reserve compute and the attach pass
+ * of every keystroke rebuilt an identical index.
+ */
+const pageRefIndexMemos = new WeakMap<readonly PageRefHit[], PageRefIndex>();
+
 /** Build a reusable paragraph-id index (document order preserved per paragraph). */
 export function buildPageRefIndex(allRefs: readonly PageRefHit[]): PageRefIndex {
+  const cached = pageRefIndexMemos.get(allRefs);
+  if (cached) return cached;
   const map = new Map<string, PageRefHit[]>();
   for (const ref of allRefs) {
     const list = map.get(ref.paragraphId);
     if (list) list.push(ref);
     else map.set(ref.paragraphId, [ref]);
   }
+  pageRefIndexMemos.set(allRefs, map);
   return map;
 }
+
+/**
+ * Per-page answers, memoized on the page's fragments array: a page an incremental pass
+ * carried over keeps its fragments by identity, and one settle walks every page THREE times
+ * (mark sites, reserve compute, attach). Keyed on the index too — a changed hit set publishes
+ * a new index object, which invalidates every entry at once.
+ */
+const pageRefFilterMemos = new WeakMap<
+  readonly BlockFragmentRecord[],
+  { readonly refIndex: PageRefIndex; readonly result: readonly PageRefHit[] }
+>();
 
 /**
  * Collect note references that appear in laid-out body fragments on a page.
@@ -413,6 +434,8 @@ export function filterRefsOnPage(
       fragments.some((fragment) => fragmentOwnsPosition(fragment, ref.paragraphId, ref.atomOffset))
     );
   }
+  const cached = pageRefFilterMemos.get(page.fragments);
+  if (cached && cached.refIndex === refIndex) return cached.result;
   const out: PageRefHit[] = [];
   const claimed = new Set<PageRefHit>();
   for (const fragment of fragments) {
@@ -430,6 +453,7 @@ export function filterRefsOnPage(
       }
     }
   }
+  pageRefFilterMemos.set(page.fragments, { refIndex, result: out });
   return out;
 }
 
@@ -2210,19 +2234,84 @@ function collectBodyNoteReferences(part: OoxmlPart): readonly {
   }));
 }
 
+/**
+ * The retained previous answer per SESSION, content-validated. The map is a pure function of
+ * the section bounds plus each block's paragraph-id list, and a keystroke changes NEITHER —
+ * it replaces one block with a twin carrying the same ids. Rebuilding 10k+ map entries per
+ * keystroke cost more than the lookups the map serves, so the previous answer is kept and
+ * revalidated by identity-diffing the block lists: blocks that changed identity must still
+ * contribute the same ids, or the map rebuilds.
+ *
+ * Keyed weakly on the caller's session object — NOT a module slot — so a disposed editor's
+ * block list and id map die with its session instead of staying pinned until some other
+ * document lays out, and two live editors do not thrash one slot. A call without a session
+ * has no incremental pass to serve and builds fresh.
+ */
+interface ParagraphSectionIndexMemo {
+  blocks: readonly OoxmlElement[];
+  boundsFingerprint: string;
+  map: ReadonlyMap<string, number>;
+}
+
+const paragraphSectionIndexMemos = new WeakMap<object, ParagraphSectionIndexMemo>();
+
+function sectionBoundsFingerprint(
+  sections: readonly DocumentSection[],
+  displayMode: RevisionDisplayMode
+): string {
+  return `${displayMode};${sections.map((section) => `${section.blockStart}-${section.blockEndExclusive}`).join(',')}`;
+}
+
+function blockParagraphIdsEqual(next: OoxmlElement, previous: OoxmlElement): boolean {
+  if (next.kind !== previous.kind) return false;
+  if (next.kind === 'paragraph') return next.id === previous.id;
+  const nextIds = tableParagraphIdsOf(next);
+  const previousIds = tableParagraphIdsOf(previous);
+  if (nextIds.length !== previousIds.length) return false;
+  for (let index = 0; index < nextIds.length; index += 1) {
+    if (nextIds[index] !== previousIds[index]) return false;
+  }
+  return true;
+}
+
 /** Map paragraph id → section index for note numbering / position resolution. */
 function paragraphSectionIndexOf(
   part: OoxmlPart,
   sections: readonly DocumentSection[],
-  displayMode: RevisionDisplayMode
+  displayMode: RevisionDisplayMode,
+  /** The caller's layout session, as the memo's weak key; absent means no reuse. */
+  memoHost?: object
 ): ReadonlyMap<string, number> {
-  const map = new Map<string, number>();
   // IN THE SAME MODE the section bounds were counted in. `blockStart`/`blockEndExclusive`
   // index a mode-filtered block list, and a resolved view has fewer blocks — a paragraph a
   // tracked mark merged away is gone from it. Indexing an All Markup list with those bounds
   // put paragraphs in the wrong section, which renumbers a footnote in a section nobody
   // edited.
   const blocks = storyBlocks(part, displayMode);
+  const boundsFingerprint = sectionBoundsFingerprint(sections, displayMode);
+  const memo = memoHost ? paragraphSectionIndexMemos.get(memoHost) : undefined;
+  if (
+    memo &&
+    memo.boundsFingerprint === boundsFingerprint &&
+    memo.blocks.length === blocks.length
+  ) {
+    let reusable = true;
+    for (let index = 0; index < blocks.length; index += 1) {
+      const block = blocks[index]!;
+      const previous = memo.blocks[index]!;
+      if (block === previous) continue;
+      if (!blockParagraphIdsEqual(block, previous)) {
+        reusable = false;
+        break;
+      }
+    }
+    if (reusable) {
+      // Re-anchor on the fresh list so the next keystroke diffs against it, not a stale one.
+      memo.blocks = blocks;
+      return memo.map;
+    }
+  }
+  const map = new Map<string, number>();
   for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex += 1) {
     const section = sections[sectionIndex]!;
     for (let i = section.blockStart; i < section.blockEndExclusive; i += 1) {
@@ -2237,6 +2326,7 @@ function paragraphSectionIndexOf(
       for (const id of tableParagraphIdsOf(block)) map.set(id, sectionIndex);
     }
   }
+  if (memoHost) paragraphSectionIndexMemos.set(memoHost, { blocks, boundsFingerprint, map });
   return map;
 }
 
@@ -2258,6 +2348,41 @@ function tableParagraphIdsOf(table: OoxmlNode): readonly string[] {
   walk(table, 0);
   tableParagraphIdMemos.set(table, ids);
   return ids;
+}
+
+/**
+ * The note-reserve slice of one section's layout context key.
+ *
+ * `pageBound` is EXCLUSIVE and names the highest page slot the pass can read plus one — the
+ * pass reads reserves at consecutive PASS-LOCAL page slots as it opens pages
+ * (`pageBottomReserves?.get(pages.length)`), so every entry at or past the bound is
+ * unreadable by it and must stay OUT of the key. Folding the whole document-wide map in
+ * (the previous behaviour) meant a reserve on one section's pages changed every other
+ * section's context, and the open's second reflow pass re-placed every section instead of
+ * only the reserved ones.
+ *
+ * KNOWN MISALIGNMENT, tracked as issue #460: {@link computeFootnoteReserves} keys the map by
+ * DOCUMENT page index while the pass reads pass-local slots, so in a multi-section document
+ * the two spaces disagree for every section after the first. This slice deliberately matches
+ * what the pass READS, not what the computer meant — soundness of the memo requires exactly
+ * that, and fixing the read side is a layout-output change that belongs to #460, not to a
+ * key refactor whose contract is byte-identical output.
+ *
+ * Entries are sorted by page slot so two content-equal maps render one canonical key
+ * regardless of insertion order. `Infinity` folds the whole map (a pass with no prior page
+ * count cannot bound its reads).
+ */
+export function notesReserveContextKey(
+  reserves: ReadonlyMap<number, number> | undefined,
+  pageBound: number
+): string {
+  if (!reserves) return '';
+  const entries: [number, number][] = [];
+  for (const [pageSlot, height] of reserves) {
+    if (pageSlot < pageBound) entries.push([pageSlot, height]);
+  }
+  entries.sort((a, b) => a[0] - b[0]);
+  return `|nr:${entries.map(([pageSlot, height]) => `${pageSlot}=${height}`).join(',')}`;
 }
 
 /** Drop non-positive heights so missing and zero compare equal. */
@@ -2351,7 +2476,8 @@ export function layoutSemanticDocumentWithNotes<
     part,
     sections,
     (optionsWithLists as { displayMode?: RevisionDisplayMode }).displayMode ??
-      DEFAULT_REVISION_DISPLAY_MODE
+      DEFAULT_REVISION_DISPLAY_MODE,
+    optionsWithLists.session
   );
   const builtHits = buildPageRefHits(packageRefs, paragraphSectionIndex);
   // The session memo hands back the PREVIOUS pass's hit array and provisional marks by

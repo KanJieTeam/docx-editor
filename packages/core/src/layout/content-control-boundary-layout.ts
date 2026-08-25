@@ -34,65 +34,9 @@ import {
   type SemanticLayout,
 } from './semantic-records.ts';
 
-/**
- * Fingerprint of every control wrapper's chrome metadata — not its content.
- *
- * Changing alias/tag/lock/type/placeholder/binding without touching nested paragraphs still
- * changes this token, which is folded into the layout producer.
- */
-export function contentControlContextToken(part: OoxmlPart): string {
-  // Parts are immutable (edits publish a new part object), so the token is a pure function
-  // of the part reference. Without the memo this whole-tree walk ran on EVERY layout pass —
-  // including no-change passes that reuse every page.
-  const cached = contentControlContextTokens.get(part);
-  if (cached !== undefined) return cached;
-  const token = computeContentControlContextToken(part);
-  contentControlContextTokens.set(part, token);
-  return token;
-}
+import { contentControlContextToken } from './content-control-context-token.ts';
 
-const contentControlContextTokens = new WeakMap<OoxmlPart, string>();
-const contentControlSubtreeTokens = new WeakMap<OoxmlElement, string>();
-
-function computeContentControlContextToken(part: OoxmlPart): string {
-  const tokenOf = (node: OoxmlNode, depth: number): string => {
-    if (node.kind === 'textValue') return '';
-    // Paragraph/table nodes are immutable and structurally shared across text edits. Cache
-    // their complete depth-zero result so a new part revision does not re-walk every run.
-    if (depth === 0 && (node.kind === 'paragraph' || node.kind === 'table')) {
-      const cached = contentControlSubtreeTokens.get(node);
-      if (cached !== undefined) return cached;
-    }
-    let token: string;
-    if (isContentControl(node)) {
-      if (depth >= MAX_SDT_NESTING) return '';
-      const properties = contentControlPropertiesOf(node);
-      const own = [
-        node.id,
-        propertyVal(properties, 'alias') ?? '',
-        propertyVal(properties, 'tag') ?? '',
-        parseContentControlLock(propertyVal(properties, 'lock')),
-        mapContentControlType(properties),
-        propertyChild(properties, 'showingPlcHdr') ? '1' : '0',
-        propertyChild(properties, 'dataBinding') ? '1' : '0',
-      ].join(':');
-      const nested = contentControlContentChildren(node)
-        .map((inner) => tokenOf(inner, depth + 1))
-        .filter((entry) => entry.length > 0);
-      token = [own, ...nested].join('|');
-    } else {
-      token = node.children
-        .map((child) => tokenOf(child, depth))
-        .filter((entry) => entry.length > 0)
-        .join('|');
-    }
-    if (depth === 0 && (node.kind === 'paragraph' || node.kind === 'table')) {
-      contentControlSubtreeTokens.set(node, token);
-    }
-    return token;
-  };
-  return tokenOf(part.root, 0);
-}
+export { contentControlContextToken };
 
 /** Addressable UTF-16 length of an inline node — mirrors the store / layout offset model. */
 function addressableInlineLength(node: OoxmlNode): number {
@@ -132,10 +76,60 @@ export interface CollectedControlIndex {
 
 const collectedControlIndexes = new WeakMap<OoxmlPart, CollectedControlIndex>();
 
+/** Same references, same order — the identity comparison every retained memo here uses. */
+export function sameRefs<T>(left: readonly T[], right: readonly T[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+/**
+ * The retained previous index, content-validated: the index is a pure function of the
+ * per-top-level-block control lists, and a keystroke outside any control leaves every one of
+ * those lists identical (the edited block's list is the shared empty constant). Rebuilding
+ * the sets and the sorted needed-token for a control-heavy document on every fresh part cost
+ * more than the walk the per-block memo already saves.
+ *
+ * Keyed weakly on the story's FIRST block node rather than held in a module slot, so a
+ * closed document's index dies with its tree instead of staying pinned until some other
+ * document lays out, and two live editors do not thrash one slot (the `list-resolve.ts`
+ * anchor idiom). An edit to the first block itself only misses once, never mixes — the
+ * lists are still compared reference-for-reference.
+ */
+const collectedIndexByAnchor = new WeakMap<
+  OoxmlNode,
+  {
+    readonly lists: readonly (readonly CollectedControl[])[];
+    readonly index: CollectedControlIndex;
+  }
+>();
+
+function firstStoryChildOf(part: OoxmlPart): OoxmlNode | null {
+  for (const story of storyRootsOf(part)) {
+    if (story.root.kind === 'textValue') continue;
+    for (const child of story.root.children) {
+      if (child.kind !== 'textValue') return child;
+    }
+  }
+  return null;
+}
+
 export function collectedControlIndexOf(part: OoxmlPart): CollectedControlIndex {
   const cached = collectedControlIndexes.get(part);
   if (cached !== undefined) return cached;
-  const controls = collectControls(part);
+  const lists = collectControlLists(part);
+  const anchor = firstStoryChildOf(part);
+  const slot = anchor ? collectedIndexByAnchor.get(anchor) : undefined;
+  if (slot && sameRefs(slot.lists, lists)) {
+    collectedControlIndexes.set(part, slot.index);
+    return slot.index;
+  }
+  const controls: CollectedControl[] = [];
+  for (const list of lists) {
+    for (const control of list) controls.push(control);
+  }
   const neededBlockIds = new Set<string>();
   const neededParagraphIds = new Set<string>();
   for (const control of controls) {
@@ -148,11 +142,14 @@ export function collectedControlIndexOf(part: OoxmlPart): CollectedControlIndex 
     neededParagraphIds,
     neededToken: `${[...neededBlockIds].sort().join(',')};${[...neededParagraphIds].sort().join(',')}`,
   };
+  if (anchor) collectedIndexByAnchor.set(anchor, { lists, index });
   collectedControlIndexes.set(part, index);
   return index;
 }
 
-function collectControls(part: OoxmlPart): CollectedControl[] {
+const EMPTY_CONTROLS: readonly CollectedControl[] = Object.freeze([]);
+
+function collectControlLists(part: OoxmlPart): readonly (readonly CollectedControl[])[] {
   const out: CollectedControl[] = [];
 
   const collectBlocks = (nodes: readonly OoxmlNode[], into: string[]): void => {
@@ -271,26 +268,30 @@ function collectControls(part: OoxmlPart): CollectedControl[] {
   // Per top-level block, memoized on the immutable node: at body level the depth is 0 and
   // the lock stack is empty, so a block's entries are a pure function of its subtree. A
   // keystroke publishes a new part whose body children are all shared but one — without
-  // this the whole document re-walked per pass.
+  // this the whole document re-walked per pass. An empty answer is the SHARED constant, so
+  // the retained-index slot can identity-compare a replaced control-free block.
   // EVERY story the part holds, not a `w:body` child. A header's root is `w:hdr` and a note
   // part's stories hang off `w:footnote` elements, so looking for `body` collected nothing
   // from either — which is why a content control in a header had no record at all, and the
   // caret's geometry then matched whichever BODY control sat at the same page coordinates.
+  const lists: (readonly CollectedControl[])[] = [];
   for (const story of storyRootsOf(part)) {
     if (story.root.kind === 'textValue') continue;
     for (const child of story.root.children) {
       if (child.kind === 'textValue') continue;
       const cached = topLevelBlockControls.get(child);
       if (cached !== undefined) {
-        for (const entry of cached) out.push(entry);
+        lists.push(cached);
         continue;
       }
       const before = out.length;
       walkBlocks([child], 0, []);
-      topLevelBlockControls.set(child, Object.freeze(out.slice(before)));
+      const collected = out.length === before ? EMPTY_CONTROLS : Object.freeze(out.slice(before));
+      topLevelBlockControls.set(child, collected);
+      lists.push(collected);
     }
   }
-  return out;
+  return lists;
 }
 
 const topLevelBlockControls = new WeakMap<OoxmlNode, readonly CollectedControl[]>();
@@ -620,32 +621,50 @@ function fragmentsForInlineControl(
     });
 }
 
+/**
+ * Wrapper chrome (alias/tag/type/placeholder/binding), memoized per immutable control node:
+ * one settle builds a record per control per pass, and re-reading `w:sdtPr` for hundreds of
+ * unchanged controls was a measurable share of the boundary attach.
+ */
+interface ControlChromeMetadata {
+  readonly alias?: string;
+  readonly tag?: string;
+  readonly controlType: ContentControlBoundaryRecord['controlType'];
+  readonly placeholder: boolean;
+  readonly bound: boolean;
+}
+
+const controlChromeMemos = new WeakMap<OoxmlElement, ControlChromeMetadata>();
+
+function controlChromeOf(control: OoxmlElement): ControlChromeMetadata {
+  const cached = controlChromeMemos.get(control);
+  if (cached !== undefined) return cached;
+  const properties = contentControlPropertiesOf(control);
+  const alias = propertyVal(properties, 'alias');
+  const tag = propertyVal(properties, 'tag');
+  const chrome: ControlChromeMetadata = {
+    ...(alias !== undefined ? { alias } : {}),
+    ...(tag !== undefined ? { tag } : {}),
+    controlType: mapContentControlType(properties),
+    placeholder: propertyChild(properties, 'showingPlcHdr') !== undefined,
+    bound: propertyChild(properties, 'dataBinding') !== undefined,
+  };
+  controlChromeMemos.set(control, chrome);
+  return chrome;
+}
+
 function boundaryRecordOf(
   collected: CollectedControl,
   geometry: PlacedGeometryIndex,
   work?: ContentControlBoundaryWork
 ): ContentControlBoundaryRecord {
-  const properties = contentControlPropertiesOf(collected.control);
-  const alias = propertyVal(properties, 'alias');
-  const tag = propertyVal(properties, 'tag');
-  const lock = collected.lockStack[collected.lockStack.length - 1] ?? 'unlocked';
   const fragments =
     collected.level === 'inline' && collected.paragraphId && collected.range
       ? fragmentsForInlineControl(collected.paragraphId, collected.range, geometry, work)
       : fragmentsForBlockControl(collected.blockIds, geometry, work);
-  return {
-    id: collected.control.id,
-    ...(alias !== undefined ? { alias } : {}),
-    ...(tag !== undefined ? { tag } : {}),
-    controlType: mapContentControlType(properties),
-    lock,
-    effectiveLock: effectiveContentControlLock(collected.lockStack),
-    placeholder: propertyChild(properties, 'showingPlcHdr') !== undefined,
-    bound: propertyChild(properties, 'dataBinding') !== undefined,
-    nestingDepth: collected.nestingDepth,
-    level: collected.level,
-    fragments,
-  };
+  // One source for the chrome fields: a field added to the record has one place to be
+  // forgotten, not two, and the no-geometry path can never drift from this one.
+  return { ...recordWithoutGeometry(collected), fragments };
 }
 
 function sameGeometryFragments(
@@ -922,18 +941,16 @@ export function contentControlHoldingParagraph(
 }
 
 function recordWithoutGeometry(collected: CollectedControl): ContentControlBoundaryRecord {
-  const properties = contentControlPropertiesOf(collected.control);
-  const alias = propertyVal(properties, 'alias');
-  const tag = propertyVal(properties, 'tag');
+  const chrome = controlChromeOf(collected.control);
   return {
     id: collected.control.id,
-    ...(alias !== undefined ? { alias } : {}),
-    ...(tag !== undefined ? { tag } : {}),
-    controlType: mapContentControlType(properties),
+    ...(chrome.alias !== undefined ? { alias: chrome.alias } : {}),
+    ...(chrome.tag !== undefined ? { tag: chrome.tag } : {}),
+    controlType: chrome.controlType,
     lock: collected.lockStack[collected.lockStack.length - 1] ?? 'unlocked',
     effectiveLock: effectiveContentControlLock(collected.lockStack),
-    placeholder: propertyChild(properties, 'showingPlcHdr') !== undefined,
-    bound: propertyChild(properties, 'dataBinding') !== undefined,
+    placeholder: chrome.placeholder,
+    bound: chrome.bound,
     nestingDepth: collected.nestingDepth,
     level: collected.level,
     fragments: [],
