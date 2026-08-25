@@ -141,6 +141,7 @@ export {
 } from './chrome-controls.ts';
 export {
   mountPaginatedSurface,
+  type DrawingSelectionIntent,
   type OpenPaginatedResult,
   type PaginatedSurface,
   type PaginatedSurfaceOptions,
@@ -227,6 +228,7 @@ export {
   cssPixelsToLayoutPoints,
   layoutPointsToCssPixels,
   overlayFrameToSheetCssPixels,
+  overlayHostOrigin,
   resizePreservesAspect,
   surfacePaintScale,
   finalizeImageOverlayInteraction,

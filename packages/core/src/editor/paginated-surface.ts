@@ -96,6 +96,7 @@ import {
 import { tryCreateBrowserCanvasContext } from './browser-canvas-context.ts';
 import type {
   ContentControlOps,
+  DrawingSelectionIntent,
   OpenPaginatedResult,
   PaginatedSurface,
   PaginatedSurfaceOptions,
@@ -148,6 +149,7 @@ import {
   type SurfaceProperty,
 } from './surface-formatting.ts';
 import { createPointerController, type PointerController } from './surface-pointer.ts';
+import { selectionsEqual } from './dom-selection.ts';
 import { createSurfaceSelectionSync } from './surface-selection-sync.ts';
 import { createSurfaceStructure } from './surface-structure.ts';
 // Deep import, not the store barrel: re-exporting a bound from there pulls the whole store
@@ -183,6 +185,7 @@ import type { OoxmlPart } from '../store/package/ooxml-tree.ts';
 export type {
   ContentControlOps,
   ContentControlSurfaceState,
+  DrawingSelectionIntent,
   OpenPaginatedResult,
   PaginatedSurface,
   PaginatedSurfaceOptions,
@@ -227,6 +230,13 @@ export function mountPaginatedSurface(
   const runtimeOptions = options as PaginatedSurfaceOptions & {
     readonly onTrackedChange?: () => void;
     readonly reviewAuthorSlots?: StableReviewAuthorSlots;
+    /**
+     * Start with this drawing-selection intent. The facade's font-load remount carries the
+     * old surface's intent through here, because its caret restore is a same-position
+     * `setSelection` whenever the saved caret sits at the mount default — which must stay
+     * `none` for a plain open, and so cannot restore a genuinely selected drawing.
+     */
+    readonly initialDrawingSelectionIntent?: DrawingSelectionIntent;
   };
   const opened = openTreeSession(
     bytes,
@@ -391,6 +401,34 @@ export function mountPaginatedSurface(
     anchor: { paragraphId: firstParagraph, offset: 0 },
     head: { paragraphId: firstParagraph, offset: 0 },
   };
+  /**
+   * How the current selection came to address a drawing — Word's object-selection rule.
+   *
+   * A caret at a drawing's anchor offset is a TEXT caret unless something selected the
+   * object: a pointer press on the painted drawing (`pointer`, carrying its id), or an
+   * explicit host selection write that moved the caret (`programmatic`). Typing, caret keys,
+   * and a press on anything else return it to `none`, so typing beside an anchored image
+   * never rings it — and a fresh mount starts at `none`, so a document whose first run
+   * anchors a drawing at offset zero does not open with the image selected.
+   */
+  let drawingIntent: DrawingSelectionIntent = runtimeOptions.initialDrawingSelectionIntent ?? {
+    kind: 'none',
+  };
+  /** Move the intent and report once when it changes — the flip is observable state. */
+  function setDrawingIntent(next: DrawingSelectionIntent, report: boolean): void {
+    if (
+      next.kind === drawingIntent.kind &&
+      (next.kind !== 'pointer' ||
+        (drawingIntent.kind === 'pointer' && next.drawingNodeId === drawingIntent.drawingNodeId))
+    ) {
+      return;
+    }
+    drawingIntent = next;
+    // Some transitions land on the exact offsets the selection already holds — a press on
+    // the drawing at the untouched mount caret adopts an equal selection and publishes
+    // nothing — so the flip must report itself for hosts to show or hide the ring.
+    if (report) options.onChange?.(currentState());
+  }
   /** Sibling of `selection`: rectangle of table cells, or null for ordinary text. */
   let cellSelection: CellSelection | null = null;
   let lastRejection: string | null = null;
@@ -2923,6 +2961,10 @@ export function mountPaginatedSurface(
       if (next) {
         retireActivationPin();
         selection = next;
+        // An edit placed a TEXT caret — typing beside an anchored image must not ring it.
+        // Image property edits commit with no selectionAfter, so a resize or move drag
+        // keeps its object selection, exactly as Word does.
+        setDrawingIntent({ kind: 'none' }, false);
         desiredX = null;
         caretFollowPending = true;
       }
@@ -2965,18 +3007,14 @@ export function mountPaginatedSurface(
   }
 
   function setSelection(next: SemanticSelection, keepDesiredX = false): void {
+    // Compared BEFORE the flush below, which can itself move the caret.
+    const moved = !selectionsEqual(next, selection);
     // Buffered typing lands at the OLD caret before a MOVE takes effect —
     // typing then clicking must not teleport the typed text to the click. A
     // same-position set (the selection mirror re-adopting the caret it painted,
     // which a browser echoes after every keystroke) is not a move and must not
     // break the batch.
-    if (
-      typeBuffer.length > 0 &&
-      (next.anchor.paragraphId !== selection.anchor.paragraphId ||
-        next.anchor.offset !== selection.anchor.offset ||
-        next.head.paragraphId !== selection.head.paragraphId ||
-        next.head.offset !== selection.head.offset)
-    ) {
+    if (typeBuffer.length > 0 && moved) {
       flushTypeBuffer();
     }
     // Moving the caret discards a stored caret format — Word's rule. Landing back on the
@@ -4506,7 +4544,15 @@ export function mountPaginatedSurface(
     ...structure,
     ...format,
 
-    setSelection: (next) => setSelection(next),
+    setSelection: (next) => {
+      // An explicit host write that MOVES the caret is an intentional selection — a test or
+      // an automation host addressing a drawing's anchor means the drawing. A same-position
+      // write stays inert: the font-load remount restores the saved caret through here
+      // during a plain open, and that restore must not select a drawing the user never did
+      // (the carried initialDrawingSelectionIntent already preserves a real one).
+      if (!selectionsEqual(next, selection)) setDrawingIntent({ kind: 'programmatic' }, false);
+      setSelection(next);
+    },
 
     revealPage(pageIndex, options) {
       // Flushed like its siblings below: a page the deferred pass creates is not findable
@@ -4596,6 +4642,8 @@ export function mountPaginatedSurface(
     retainedSelection: () => retainedSelection,
 
     publishedLayout: () => currentLayout,
+
+    drawingSelectionIntent: () => drawingIntent,
 
     overlayCoordinates: () =>
       Object.freeze({
@@ -5062,6 +5110,9 @@ export function mountPaginatedSurface(
       // would silence the last keystrokes for an onChange-driven host.
       flushToPaint();
       document.removeEventListener('selectionchange', onSelectionChange);
+      pagesLayer.removeEventListener('pointerdown', onDrawingPointerGesture, { capture: true });
+      pagesLayer.removeEventListener('keydown', onDrawingKeyGesture, { capture: true });
+      pagesLayer.removeEventListener('beforeinput', onDrawingKeyGesture, { capture: true });
       pagesLayer.removeEventListener('keydown', onKeyDown);
       pagesLayer.removeEventListener('beforeinput', onBeforeInput as EventListener);
       pagesLayer.removeEventListener('copy', onCopy as EventListener);
@@ -5575,6 +5626,41 @@ export function mountPaginatedSurface(
   // Selection lives on the document, so this is where the browser reports it changing —
   // whatever produced it: a drag, a double-click, Select All, or a caret move.
   document.addEventListener('selectionchange', onSelectionChange);
+  // Word's object-selection gestures. A primary press on a painted drawing selects THAT
+  // drawing; a primary press anywhere else deselects. Only this listener can tell a click
+  // ON the drawing from the untouched mount caret at the same offsets. A key that moves or
+  // types (including Escape, which deselects an object in Word) returns the intent to
+  // `none`; a lone modifier or ContextMenu leaves an existing selection alone — Word keeps
+  // the object selected under its context menu. `beforeinput` covers virtual keyboards
+  // that type without a keydown.
+  const NON_DESELECTING_KEYS = new Set([
+    'Shift',
+    'Control',
+    'Alt',
+    'Meta',
+    'CapsLock',
+    'NumLock',
+    'ScrollLock',
+    'ContextMenu',
+  ]);
+  const onDrawingPointerGesture = (event: Event): void => {
+    if (event instanceof PointerEvent && event.button !== 0) return;
+    const element = event.target instanceof Element ? event.target : null;
+    const drawingId = element
+      ?.closest<HTMLElement>('[data-drawing-node-id]')
+      ?.getAttribute('data-drawing-node-id');
+    setDrawingIntent(
+      drawingId ? { kind: 'pointer', drawingNodeId: drawingId } : { kind: 'none' },
+      true
+    );
+  };
+  const onDrawingKeyGesture = (event: Event): void => {
+    if (event instanceof KeyboardEvent && NON_DESELECTING_KEYS.has(event.key)) return;
+    setDrawingIntent({ kind: 'none' }, true);
+  };
+  pagesLayer.addEventListener('pointerdown', onDrawingPointerGesture, { capture: true });
+  pagesLayer.addEventListener('keydown', onDrawingKeyGesture, { capture: true });
+  pagesLayer.addEventListener('beforeinput', onDrawingKeyGesture, { capture: true });
   pagesLayer.addEventListener('keydown', onKeyDown);
   pagesLayer.addEventListener('beforeinput', onBeforeInput as EventListener);
   pagesLayer.addEventListener('copy', onCopy as EventListener);
