@@ -58,16 +58,17 @@ describe('how this package asks for the engine', () => {
     expect(manifest.devDependencies?.['@docx-editor.dev/core']).toBe('workspace:*');
   });
 
-  test('the declared range admits the workspace engine it is built against', () => {
-    // A caret range that fell behind the engine's major would make installs resolve a
-    // SECOND, older engine next to the host's — the exact two-copies failure above.
-    const range = manifest.peerDependencies!['@docx-editor.dev/core']!;
-    // The optional suffix admits changesets pre-release mode (^3.0.0-next.0).
-    const match = /^\^(\d+)\.(\d+)\.\d+(?:-[0-9A-Za-z.-]+)?$/.exec(range);
+  test('the engine peer requires the minor it ships with', () => {
+    // A tilde range on the engine's current minor: patch drift is allowed, a different minor
+    // is not, so the automation host never attaches to an engine minor it did not ship with.
+    // The floor patch may lag within the minor because in-range releases do not rewrite the
+    // range.
+    const range = manifest.peerDependencies?.['@docx-editor.dev/core'];
+    const match = /^~(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/.exec(range ?? '');
     expect(match).not.toBeNull();
-    const [rangeMajor, rangeMinor] = [Number(match![1]), Number(match![2])];
-    const [coreMajor, coreMinor] = core.version.split('.').map(Number);
-    expect(rangeMajor).toBe(coreMajor);
-    expect(rangeMinor).toBeLessThanOrEqual(coreMinor!);
+    const [major, minor, patch] = core.version.split('.').map(Number);
+    expect(Number(match![1])).toBe(major!);
+    expect(Number(match![2])).toBe(minor!);
+    expect(Number(match![3])).toBeLessThanOrEqual(patch!);
   });
 });
