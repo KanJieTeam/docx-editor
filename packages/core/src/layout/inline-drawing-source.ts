@@ -496,6 +496,19 @@ function createPartDrawingContextSlot(options: {
   };
 }
 
+/**
+ * Monotonic PROCESS-WIDE slot mint, folded into `cacheTokenForPart`: a slot's own epoch
+ * counters restart at zero when a reset recreates it, so `part|0|0|N` would recur and an
+ * epoch-keyed consumer (the section prepass memo, {@link tableDrawingTokenCache}) could
+ * validate against a stale token. A fresh mint per created slot makes every recreation
+ * observably different, which fails safe — one extra rebuild, never a stale reuse.
+ *
+ * Process-wide, not per-bundle: {@link tableDrawingTokenCache} is module-level, so two
+ * bundles that see the same node objects must never emit the same epoch string for
+ * different resource states.
+ */
+let slotMintCounter = 0;
+
 export function createInlineDrawingLayoutBundle(
   options: CreateInlineDrawingLayoutBundleOptions
 ): InlineDrawingLayoutBundle {
@@ -508,12 +521,6 @@ export function createInlineDrawingLayoutBundle(
     });
   const slots = new Map<string, PartDrawingContextSlot>();
   const partByName = new Map<string, OoxmlPart>();
-  // Monotonic per-bundle slot mint, folded into `cacheTokenForPart`: a slot's own epoch
-  // counters restart at zero when a reset recreates it, so `part|0|0|N` would recur and an
-  // epoch-keyed consumer (the section prepass memo) could validate against a stale token.
-  // A fresh mint per created slot makes every recreation observably different, which fails
-  // safe — one extra rebuild, never a stale reuse.
-  let slotMints = 0;
   const slotMintBySlot = new WeakMap<PartDrawingContextSlot, number>();
   const handlesByKey = new Map<string, ValidatedImageBytesHandle>();
   const releaseTokensByKey = new Map<string, ValidatedImageBytesReleaseToken>();
@@ -561,8 +568,8 @@ export function createInlineDrawingLayoutBundle(
       forgetReadyHandle,
     });
     slots.set(ownerPartName, slot);
-    slotMints += 1;
-    slotMintBySlot.set(slot, slotMints);
+    slotMintCounter += 1;
+    slotMintBySlot.set(slot, slotMintCounter);
     return slot;
   };
 
@@ -674,6 +681,36 @@ export function paragraphDrawingLayoutTokenFromContext(
     .sort()
     .join(';');
 }
+
+/**
+ * `drawingTokenForTableBlock` memoized per (immutable table node, drawing epoch).
+ *
+ * The table token exists to VALIDATE the prepass memo, so it is recomputed before every
+ * memo hit — which walked every row and cell of every table on every layout pass. The
+ * token is a pure function of the table subtree (node identity) and the part's drawing
+ * projection/resource state, and `drawingLayoutEpoch` already stands in for the latter
+ * (it moves whenever any projection or resource in the part does). No epoch means the
+ * caller cannot see resource moves, so the recompute path is kept — the same rule the
+ * section prepass memo follows.
+ */
+export function drawingTokenForTableBlockMemo(
+  table: OoxmlNode,
+  epoch: string | undefined,
+  drawingTokenForParagraph: (paragraph: OoxmlNode) => string
+): string {
+  if (epoch === undefined) return drawingTokenForTableBlock(table, drawingTokenForParagraph);
+  const cached = tableDrawingTokenCache.get(table);
+  if (cached && cached.epoch === epoch) return cached.token;
+  const token = drawingTokenForTableBlock(table, drawingTokenForParagraph);
+  tableDrawingTokenCache.set(table, { epoch, token });
+  return token;
+}
+
+/** Aggregated drawing token per immutable table node, valid for one drawing epoch. */
+const tableDrawingTokenCache = new WeakMap<
+  OoxmlNode,
+  { readonly epoch: string; readonly token: string }
+>();
 
 /** Aggregate per-paragraph drawing tokens for a table subtree (cache + incremental keys). */
 export function drawingTokenForTableBlock(

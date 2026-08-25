@@ -138,6 +138,12 @@ const revisionItemsCache = createRecentRootCache<{
 }>(8);
 
 function computeRevisionItemsOf(part: OoxmlPart): ReviewRevisionItem[] {
+  // Sites FIRST, and the site index only when there is at least one. `locateSites` merges
+  // an O(document) index per fresh root, and a structural keystroke on an untracked
+  // document paid that merge for a list this function was about to answer "empty" over.
+  // The site walk itself is per-subtree memoized, so it is the cheap half.
+  const sites = collectRevisionSites(part);
+  if (sites.length === 0) return [];
   const located = locateSites(part);
   const byAddress = new Map<
     string,
@@ -157,7 +163,7 @@ function computeRevisionItemsOf(part: OoxmlPart): ReviewRevisionItem[] {
     }
   >();
 
-  for (const site of collectRevisionSites(part)) {
+  for (const site of sites) {
     const id = wmlAttribute(site.node, 'id');
     if (id === undefined) continue;
     // `@w:author` is REQUIRED by `CT_TrackChange`, and files from other generators omit it
@@ -892,14 +898,49 @@ export function deepParagraphOrderOfPart(part: OoxmlPart): ReadonlyMap<string, n
   const cached = deepParagraphOrderCache.get(part.root);
   if (cached) return cached;
   const order = new Map<string, number>();
-  const walk = (node: OoxmlNode, depth: number): void => {
-    if (node.kind === 'textValue' || depth > 64) return;
-    if (node.kind === 'paragraph' && !order.has(node.id)) order.set(node.id, order.size);
-    for (const child of node.children) walk(child, depth + 1);
-  };
-  walk(part.root, 0);
+  for (const id of subtreeDeepParagraphIds(part.root, 0)) {
+    if (!order.has(id)) order.set(id, order.size);
+  }
   deepParagraphOrderCache.set(part.root, order);
   return order;
+}
+
+/** One shared empty list for the subtrees that hold no paragraph. */
+const EMPTY_DEEP_PARAGRAPH_IDS: readonly string[] = Object.freeze([]);
+
+/**
+ * Deep paragraph ids under one immutable node, in document order, memoized per node.
+ *
+ * The deep order re-derives per fresh root, and a structural keystroke re-walked every
+ * node of the document — every run of every paragraph — to relist ids that did not move.
+ * Composing from per-subtree memos re-walks only the rebuilt spine.
+ *
+ * The entry remembers the depth it was computed at, because the 64-level cap makes the
+ * list depth-dependent: an op can republish a shared subtree at a different depth (an
+ * unwrap rebuilds only the spine ABOVE it), and serving a list computed under the old
+ * cap would diverge from a cold walk on hostile >64-deep nesting. A depth mismatch just
+ * recomputes, so the memo stays exactly the cold walk's answer.
+ */
+const subtreeDeepParagraphIdsCache = new WeakMap<
+  OoxmlNode,
+  { readonly depth: number; readonly ids: readonly string[] }
+>();
+
+function subtreeDeepParagraphIds(node: OoxmlNode, depth: number): readonly string[] {
+  if (node.kind === 'textValue' || depth > 64) return EMPTY_DEEP_PARAGRAPH_IDS;
+  const cached = subtreeDeepParagraphIdsCache.get(node);
+  if (cached && cached.depth === depth) return cached.ids;
+  let found: string[] | null = null;
+  if (node.kind === 'paragraph') (found ??= []).push(node.id);
+  for (const child of node.children) {
+    const ids = subtreeDeepParagraphIds(child, depth + 1);
+    if (ids.length === 0) continue;
+    found ??= [];
+    for (const id of ids) found.push(id);
+  }
+  const result: readonly string[] = found ?? EMPTY_DEEP_PARAGRAPH_IDS;
+  subtreeDeepParagraphIdsCache.set(node, { depth, ids: result });
+  return result;
 }
 
 /** The deep paragraph order per part root, bounded like the shallow one above. */
