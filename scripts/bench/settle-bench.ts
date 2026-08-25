@@ -16,6 +16,18 @@
 //   bun scripts/bench/settle-bench.ts --json > /tmp/settle-before.json
 //   bun scripts/bench/settle-bench.ts --compare /tmp/settle-before.json
 //   bun scripts/bench/settle-bench.ts --key enter   # structural keystrokes (splitParagraph)
+//   bun scripts/bench/settle-bench.ts --burst 40    # buffered typing under input pressure
+//
+// Beyond the per-keystroke medians, the report carries `taskGap`: the longest stretches the
+// main thread stayed occupied during the measured window, sampled by a setTimeout(0)
+// heartbeat. Settle medians say how long the pipeline takes; task gaps say how long a NEW
+// keystroke would have waited — the headless proxy for browser input delay. Wall-clock,
+// reported and compared, never pinned.
+//
+// `--burst N` additionally runs N characters through `enqueueType` while a stubbed
+// `navigator.scheduling.isInputPending` answers true, which is the only way the surface's
+// input-pressure lanes engage under happy-dom. The burst section reports total time,
+// observed flush count (published revisions), and the task gaps inside the burst.
 
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 if (!GlobalRegistrator.isRegistered) GlobalRegistrator.register();
@@ -36,11 +48,28 @@ interface Args {
   compare?: string;
   /** 'enter' sends a structural keystroke (splitParagraph) instead of typing 'x'. */
   key: 'x' | 'enter';
+  /** When positive, also run this many buffered characters under stubbed input pressure. */
+  burst: number;
 }
 
 interface TimingSummary {
   medianMs: number;
   p95Ms: number;
+}
+
+interface TaskGapSummary {
+  p95Ms: number;
+  maxMs: number;
+}
+
+interface BurstReport {
+  keys: number;
+  totalMs: number;
+  /** Commit-revision advances during the burst — how often the buffer flushed. */
+  flushes: number;
+  /** How often the surface consulted the stubbed isInputPending; zero fails the run. */
+  pressureChecks: number;
+  taskGap: TaskGapSummary;
 }
 
 interface SettleReport {
@@ -54,6 +83,9 @@ interface SettleReport {
   settle: TimingSummary;
   layout: TimingSummary;
   paint: TimingSummary;
+  /** Main-thread occupancy during the measured keystrokes; absent in baselines that predate it. */
+  taskGap?: TaskGapSummary;
+  burst?: BurstReport;
   work: {
     placed: number;
     total: number;
@@ -71,6 +103,7 @@ function parseArgs(argv: string[]): Args {
     warmup: 3,
     json: false,
     key: 'x',
+    burst: 0,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index]!;
@@ -83,7 +116,8 @@ function parseArgs(argv: string[]): Args {
       if (key !== 'x' && key !== 'enter')
         throw new Error(`--key must be 'x' or 'enter', got ${key}`);
       args.key = key;
-    } else if (!value.startsWith('--')) args.fixture = resolve(value);
+    } else if (value === '--burst') args.burst = Number(argv[++index]);
+    else if (!value.startsWith('--')) args.fixture = resolve(value);
     else throw new Error(`unknown option ${value}`);
   }
   if (!Number.isInteger(args.keystrokes) || args.keystrokes < 1) {
@@ -92,27 +126,179 @@ function parseArgs(argv: string[]): Args {
   if (!Number.isInteger(args.warmup) || args.warmup < 0) {
     throw new Error('--warmup must be a non-negative integer');
   }
+  if (!Number.isInteger(args.burst) || args.burst < 0) {
+    throw new Error('--burst must be a non-negative integer');
+  }
   return args;
 }
 
+/**
+ * Gaps below this are heartbeat cadence, not occupancy: the settle loops add ~25 idle
+ * sub-millisecond ticks per keystroke, which would put every real stall above the 95th
+ * percentile and make `p95Ms` a number about the timer queue. Only occupancy gaps are
+ * recorded, so the summary quantifies stalls — and an empty list means none happened.
+ */
+const OCCUPANCY_GAP_FLOOR_MS = 5;
+
+/**
+ * A setTimeout(0) heartbeat: the gap between consecutive fires is how long the main thread
+ * stayed occupied — the time a keystroke arriving in that window would have waited. The
+ * settle loop pumps the same timer queue, so the heartbeat interleaves with it and a long
+ * flush task shows up as one long gap.
+ */
+function startTaskGapSampler(): { stop: () => void; gaps: number[] } {
+  const gaps: number[] = [];
+  let last = performance.now();
+  let stopped = false;
+  let handle: ReturnType<typeof setTimeout>;
+  const beat = (): void => {
+    if (stopped) return;
+    const nowMs = performance.now();
+    const gap = nowMs - last;
+    if (gap >= OCCUPANCY_GAP_FLOOR_MS) gaps.push(gap);
+    last = nowMs;
+    handle = setTimeout(beat, 0);
+  };
+  handle = setTimeout(beat, 0);
+  return {
+    stop: () => {
+      stopped = true;
+      clearTimeout(handle);
+    },
+    gaps,
+  };
+}
+
+function taskGapSummary(gaps: readonly number[]): TaskGapSummary {
+  if (gaps.length === 0) return { p95Ms: 0, maxMs: 0 };
+  let max = 0;
+  for (const gap of gaps) if (gap > max) max = gap;
+  return { p95Ms: p95(gaps), maxMs: max };
+}
+
 const tick = (): Promise<void> => new Promise((done) => setTimeout(done, 0));
+
+/** Keys enqueued per macrotask during a burst. The type-flush timer and this loop's own
+ * tick share the timer queue, and the flush timer is armed first — one key per task would
+ * therefore flush every key alone and never exercise the multi-character buffer. Several
+ * keys per task is also what hardware key repeat produces when a flush holds the thread. */
+const BURST_KEYS_PER_TASK = 3;
+
+/**
+ * Buffered typing under asserted input pressure: `enqueueType` several characters per task
+ * while a stubbed `navigator.scheduling.isInputPending` answers true, release the pressure,
+ * then settle. This is the scenario where the surface's pressure-aware lanes (deferred
+ * paint, and any future flush split) actually engage under happy-dom.
+ */
+async function runBurst(surface: PaginatedSurface, keys: number): Promise<BurstReport> {
+  let pressure = true;
+  let pressureChecks = 0;
+  const nav = globalThis.navigator as Navigator & {
+    scheduling?: { isInputPending?: (options?: { includeContinuous?: boolean }) => boolean };
+  };
+  const hadScheduling = Object.prototype.hasOwnProperty.call(nav, 'scheduling');
+  const previous = nav.scheduling;
+  Object.defineProperty(nav, 'scheduling', {
+    value: {
+      isInputPending: () => {
+        pressureChecks += 1;
+        return pressure;
+      },
+    },
+    configurable: true,
+  });
+
+  const sampler = startTaskGapSampler();
+  try {
+    // The revision is the commit clock (one flush commits once), so counting by DELTA
+    // catches two flushes landing between two observations. Deferred paint never moves it,
+    // which is why the settle tail below also watches the published paint timing.
+    let revision = surface.state().revision;
+    let flushes = 0;
+    let enqueued = 0;
+    const startedAt = performance.now();
+    while (enqueued < keys) {
+      const chunk = Math.min(BURST_KEYS_PER_TASK, keys - enqueued);
+      for (let key = 0; key < chunk; key += 1) surface.enqueueType('x');
+      enqueued += chunk;
+      await tick();
+      const next = surface.state().revision;
+      if (next > revision) {
+        flushes += next - revision;
+        revision = next;
+      }
+    }
+    pressure = false;
+    // The shared settle, watching the paint clock too: under pressure the render defers to
+    // a task that never moves the commit revision, and totalMs must include that paint.
+    const settledAt = await settle(surface, {
+      watchPaint: true,
+      onRevisionAdvance: (delta) => {
+        flushes += delta;
+      },
+    });
+    if (pressureChecks === 0) {
+      throw new Error(
+        'the isInputPending stub was never consulted; the pressure lanes did not engage'
+      );
+    }
+    return {
+      keys,
+      totalMs: settledAt - startedAt,
+      flushes,
+      pressureChecks,
+      taskGap: taskGapSummary(sampler.gaps),
+    };
+  } finally {
+    sampler.stop();
+    if (hadScheduling) {
+      Object.defineProperty(nav, 'scheduling', { value: previous, configurable: true });
+    } else {
+      delete (nav as { scheduling?: unknown }).scheduling;
+    }
+  }
+}
+
+interface SettleOptions {
+  quiet?: number;
+  maxMs?: number;
+  /** Count each commit-revision advance; the delta catches commits between observations. */
+  onRevisionAdvance?: (delta: number) => void;
+  /** Also treat a published paint (perf.paintMs move) as a change: under input pressure the
+   * render defers to a task that never bumps the commit revision, and a caller timing the
+   * whole pipeline must include it. */
+  watchPaint?: boolean;
+}
 
 /**
  * Wait until the surface state stops changing for `quiet` consecutive macrotasks, and
  * return the timestamp of the LAST observed change — the moment the keystroke settled.
  * The quiet tail itself is idle waiting, not latency, so it is excluded from the sample.
+ * Every settle in a report goes through this ONE definition of "stopped changing".
  */
-async function settle(surface: PaginatedSurface, quiet = 25, maxMs = 120_000): Promise<number> {
+async function settle(surface: PaginatedSurface, options: SettleOptions = {}): Promise<number> {
+  const quiet = options.quiet ?? 25;
+  const maxMs = options.maxMs ?? 120_000;
   const start = performance.now();
   let lastRevision = surface.state().revision;
+  let lastPaintMs = surface.state().perf.paintMs;
   let lastChangeAt = performance.now();
   let quietTicks = 0;
   while (quietTicks < quiet) {
     if (performance.now() - start > maxMs) throw new Error('settle timeout');
     await tick();
-    const revision = surface.state().revision;
-    if (revision !== lastRevision) {
-      lastRevision = revision;
+    const state = surface.state();
+    let moved = false;
+    if (state.revision !== lastRevision) {
+      if (state.revision > lastRevision) options.onRevisionAdvance?.(state.revision - lastRevision);
+      lastRevision = state.revision;
+      moved = true;
+    }
+    if (options.watchPaint && state.perf.paintMs !== lastPaintMs) {
+      lastPaintMs = state.perf.paintMs;
+      moved = true;
+    }
+    if (moved) {
       lastChangeAt = performance.now();
       quietTicks = 0;
     } else {
@@ -182,17 +368,27 @@ async function run(args: Args): Promise<SettleReport> {
     const settleMs: number[] = [];
     const layoutMs: number[] = [];
     const paintMs: number[] = [];
-    for (let index = 0; index < args.keystrokes; index += 1) {
-      const typedAt = performance.now();
-      press();
-      const settledAt = await settle(surface);
-      settleMs.push(settledAt - typedAt);
-      const perf = surface.state().perf;
-      layoutMs.push(perf.layoutMs);
-      paintMs.push(perf.paintMs);
+    const sampler = startTaskGapSampler();
+    try {
+      for (let index = 0; index < args.keystrokes; index += 1) {
+        const typedAt = performance.now();
+        press();
+        const settledAt = await settle(surface);
+        settleMs.push(settledAt - typedAt);
+        const perf = surface.state().perf;
+        layoutMs.push(perf.layoutMs);
+        paintMs.push(perf.paintMs);
+      }
+    } finally {
+      // A settle timeout must not leave the self-rescheduling heartbeat firing during unwind.
+      sampler.stop();
     }
 
+    // Snapshot BEFORE the burst: `work` and `pages` are the measured keystrokes' evidence,
+    // and a burst-run baseline must stay comparable to a burst-free one.
     const state = surface.state();
+
+    const burst = args.burst > 0 ? await runBurst(surface, args.burst) : undefined;
     return {
       schema: 1,
       fixture: args.fixture,
@@ -204,6 +400,8 @@ async function run(args: Args): Promise<SettleReport> {
       settle: { medianMs: median(settleMs), p95Ms: p95(settleMs) },
       layout: { medianMs: median(layoutMs), p95Ms: p95(layoutMs) },
       paint: { medianMs: median(paintMs), p95Ms: p95(paintMs) },
+      taskGap: taskGapSummary(sampler.gaps),
+      ...(burst ? { burst } : {}),
       work: {
         placed: state.perf.placed,
         total: state.perf.total,
@@ -230,6 +428,19 @@ function printHuman(report: SettleReport): void {
   console.log(line('settle', report.settle));
   console.log(line('layout', report.layout));
   console.log(line('paint ', report.paint));
+  if (report.taskGap) {
+    console.log(
+      `  task gap p95 ${report.taskGap.p95Ms.toFixed(1)} ms, max ${report.taskGap.maxMs.toFixed(1)} ms`
+    );
+  }
+  if (report.burst) {
+    console.log(
+      `  burst ${report.burst.keys} keys in ${report.burst.totalMs.toFixed(1)} ms, ` +
+        `${report.burst.flushes} flushes, ${report.burst.pressureChecks} pressure checks, ` +
+        `task gap p95 ${report.burst.taskGap.p95Ms.toFixed(1)} ms, ` +
+        `max ${report.burst.taskGap.maxMs.toFixed(1)} ms`
+    );
+  }
   const work = report.work;
   console.log(
     `  work  placed ${work.placed}/${work.total}, reused ${work.reusedPages} pages, ` +
@@ -241,12 +452,33 @@ function printComparison(baseline: SettleReport, current: SettleReport): void {
   if (baseline.fixtureSha256 !== current.fixtureSha256) {
     throw new Error('the baseline was taken from different document bytes; refusing to compare');
   }
+  // Optional-field presence handles additive growth WITHIN a schema; a schema move means a
+  // field was renamed or re-scoped, and diffing across it would print numbers from
+  // mismatched shapes.
+  if (baseline.schema !== current.schema) {
+    throw new Error(
+      `the baseline is schema ${baseline.schema} and this run is schema ${current.schema}; refusing to compare`
+    );
+  }
   const delta = (before: number, after: number): string =>
     `${(((after - before) / before) * 100).toFixed(1)}%`;
   console.log('comparison (negative is faster):');
   console.log(`  settle ${delta(baseline.settle.medianMs, current.settle.medianMs)}`);
   console.log(`  layout ${delta(baseline.layout.medianMs, current.layout.medianMs)}`);
   console.log(`  paint  ${delta(baseline.paint.medianMs, current.paint.medianMs)}`);
+  if (baseline.taskGap && current.taskGap) {
+    // A zero baseline p95 means no occupancy stall crossed the floor there; a percentage
+    // against zero is meaningless, so print the absolute values instead of a ratio.
+    if (baseline.taskGap.p95Ms > 0) {
+      console.log(`  task gap p95 ${delta(baseline.taskGap.p95Ms, current.taskGap.p95Ms)}`);
+    } else {
+      console.log(
+        `  task gap p95 ${baseline.taskGap.p95Ms.toFixed(1)} -> ${current.taskGap.p95Ms.toFixed(1)} ms (baseline had no stalls; no ratio)`
+      );
+    }
+  } else {
+    console.log('  task gap    (baseline predates the sampler; no comparison)');
+  }
   const before = baseline.work;
   const after = current.work;
   console.log(
