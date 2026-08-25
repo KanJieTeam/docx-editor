@@ -27,6 +27,7 @@ import {
   type TreeModelChange,
 } from '@docx-editor.dev/core/store';
 import { retractedLengthOf } from '../store/store/tree-op-retraction.ts';
+import { retractsOwnParagraphMark } from '../store/store/tree-op-tracked.ts';
 import { syncActiveFieldShading } from './surface-field-shading.ts';
 import {
   createLayoutScheduler,
@@ -3999,36 +4000,23 @@ export function mountPaginatedSurface(
       // puts the text where the removed characters used to be rather than where the user
       // was typing.
       const plan = deleteSelectionPlan();
-      const start = plan.collapseTo;
+      // In SUGGESTING the deletion keeps the characters it strikes, so the replacement goes
+      // after them — only then are the two halves adjacent, which is what lets the pane
+      // fold them into one `Replaced "x" with "y"` card. The plan's `replaceAt` owns that
+      // rule for every replacing lane, including where the range spans paragraph marks.
+      const target = plan.replaceAt ?? plan.collapseTo;
       // Consume the stored caret format (armed only at a collapsed caret, so it cannot
       // coexist with the delete ops below): the typed range gets the caret run's own
       // properties plus the armed ones, in the SAME transaction — one undo step.
-      const pendingOps = consumePendingFormatOps(start.paragraphId, start.offset, text.length);
-      // In SUGGESTING the deletion keeps its characters, so the selection's start offset is
-      // still the start of the struck words — inserting there put the replacement BEFORE
-      // them. Word puts it after, and only then are the two halves adjacent, which is what
-      // lets the pane fold them into one `Replaced "x" with "y"` card. Mid-sentence
-      // replacements were showing as two unrelated decisions, and a reviewer could accept
-      // one half.
-      //
-      // It keeps only the characters it STRIKES. Whatever of the range is this author's own
-      // pending insertion is RETRACTED instead — those characters leave the paragraph — so
-      // the offset past the selection is past the end of what the insert will find there.
-      // Typing over your own suggestion was refused as `offset-out-of-range`, and since a
-      // refusal takes the whole transaction, the keystroke did nothing at all.
-      const struck = editingMode === 'suggest' ? orderedRange() : null;
-      const insertAt =
-        struck && struck.to.paragraphId === start.paragraphId
-          ? struck.to.offset - retractedByOwnInsertion(struck.from, struck.to)
-          : start.offset;
+      const pendingOps = consumePendingFormatOps(target.paragraphId, target.offset, text.length);
       const insertOps: TreeDocOp[] = [
         ...plan.ops,
-        { op: 'insertText', paragraphId: start.paragraphId, offset: insertAt, text },
+        { op: 'insertText', paragraphId: target.paragraphId, offset: target.offset, text },
       ];
       const redoMark = {
-        paragraphId: start.paragraphId,
-        start: insertAt + text.length,
-        end: insertAt + text.length,
+        paragraphId: target.paragraphId,
+        start: target.offset + text.length,
+        end: target.offset + text.length,
       };
       commit(
         () =>
@@ -4038,7 +4026,7 @@ export function mountPaginatedSurface(
             selectionMark(),
             redoMark
           ),
-        () => collapsedAt({ paragraphId: start.paragraphId, offset: insertAt + text.length })
+        () => collapsedAt({ paragraphId: target.paragraphId, offset: target.offset + text.length })
       );
     },
     proposeTextChange: (kind, text, author) => commitProposedTextChange(kind, text, author),
@@ -4157,11 +4145,12 @@ export function mountPaginatedSurface(
     },
 
     splitParagraph() {
-      // Enter REPLACES a selection, like every other insertion, and splits at its START —
-      // splitting at the head left the selected text in place and cut the paragraph at
-      // whichever end the user happened to drag to.
+      // Enter REPLACES a selection, like every other insertion — splitting at the head left
+      // the selected text in place and cut the paragraph at whichever end the user happened
+      // to drag to. `replaceAt` puts the break AFTER the words a suggestion strikes, so the
+      // strike and the proposed break read as one decision instead of two.
       const plan = deleteSelectionPlan();
-      const position = plan.collapseTo;
+      const position = plan.replaceAt ?? plan.collapseTo;
       const before = new Set(session.paragraphIdsIn(storyScope()));
       // Word carries the typing format across Enter: bold armed before the split applies
       // to the first characters typed in the new paragraph.
@@ -5114,6 +5103,14 @@ export function mountPaginatedSurface(
    * deleted vetoes the whole transaction.
    */
   function deleteSelectionPlan(): RangeDeletionPlan {
+    // Every replacing lane reads `replaceAt` from the plan it already holds, so the landing
+    // rule cannot be skipped by a lane that never heard of it — that is how tabs, breaks and
+    // the PAGE field each kept landing in FRONT of the words a suggestion strikes.
+    const plan = rangeDeletionPlan();
+    return { ...plan, replaceAt: replacementTarget(plan) };
+  }
+
+  function rangeDeletionPlan(): RangeDeletionPlan {
     // Every edit op builds its plan from here first, so this is where queued
     // typing must land: a plan computed against the pre-buffer selection would
     // edit beside text the user has already typed. (No-op mid-flush.)
@@ -5176,7 +5173,101 @@ export function mountPaginatedSurface(
    */
   function replacementOffset(from: SemanticPosition, to: SemanticPosition): number {
     if (editingMode !== 'suggest' || from.paragraphId !== to.paragraphId) return from.offset;
-    return to.offset - retractedByOwnInsertion(from, to);
+    // A range end INSIDE a pre-existing deletion aims the insert at the interior of that
+    // `w:del`: the store relocates it past the deletion, the caret math does not hear about
+    // it, and the next keystroke lands before the previous one. Map past the old deletion
+    // FIRST; the retracted characters all sit before it, so the subtraction still holds.
+    const past = positionPastDeletion(currentLayout, to);
+    return past.offset - retractedByOwnInsertion(from, past);
+  }
+
+  /**
+   * Where a replacement for the current selection lands, as a full position.
+   *
+   * In editing mode the range simply goes and `collapseTo` is the spot. In suggesting the
+   * struck characters STAY, so the replacement belongs after them — past the range END,
+   * minus whatever of the range was this author's own pending insertion, which leaves. A
+   * range spanning paragraph marks keeps every paragraph (the marks become merge
+   * proposals), so the end lives in the LAST paragraph, after its struck head.
+   *
+   * Falling back to the range START for a spanning selection put the insert on the front
+   * edge of the fresh `w:del`, where the store relocates it past the deletion — but the
+   * caret math never heard about the relocation, so the caret came to rest INSIDE the
+   * struck words, and the next keystroke relocated to the same spot, landing BEFORE the
+   * previous one: a typed replacement came out reversed, parked after the first struck
+   * paragraph instead of the last.
+   */
+  function replacementTarget(plan: RangeDeletionPlan): SemanticPosition {
+    const start = plan.collapseTo;
+    if (editingMode !== 'suggest' || cellSelection) return start;
+    const { from, to } = orderedRange();
+    // Collapsed: `collapseTo` already sits past any deletion the caret rested in.
+    if (from.paragraphId === to.paragraphId && from.offset === to.offset) return start;
+    if (from.paragraphId === to.paragraphId) {
+      return { paragraphId: to.paragraphId, offset: replacementOffset(from, to) };
+    }
+    // A fully covered table is REMOVED, not struck, so a last paragraph INSIDE one does not
+    // survive the transaction — an insert naming it would veto the whole edit. The range
+    // start is the position `collapseTo` guarantees survives. A removed block elsewhere in
+    // the range leaves the last paragraph standing, so only its own ancestry decides.
+    const removedBlocks = new Set(
+      plan.ops.flatMap((op) => (op.op === 'deleteBlock' ? [op.blockId] : []))
+    );
+    // A pure ancestry read: `partOfNodeId`, not `partFor`, which would retain a story store.
+    const part = partOfNodeId(session, to.paragraphId) ?? session.part();
+    if (removedBlocks.size > 0) {
+      for (
+        let node = parentNodeOf(part, to.paragraphId);
+        node;
+        node = parentNodeOf(part, node.id)
+      ) {
+        if (removedBlocks.has(node.id)) return start;
+      }
+    }
+    // A planned join whose mark is this author's OWN pending insertion REALLY joins — the
+    // break retracts and the second paragraph leaves the tree (`tree-op-apply.ts`), so an
+    // insert naming it would veto the whole transaction: typing over a selection spanning
+    // your own pending Enter did nothing at all. Walk back to the paragraph that survives
+    // as the merged host, and count each folded member's struck length into its offsets.
+    // The merged mark is always the SECOND paragraph's (`withSectionMarkOf`), so each
+    // member's ORIGINAL mark decides whether the member after it folds in.
+    const author = options.author?.trim();
+    if (!author) return start;
+    const joinedSecondIds = new Set(
+      plan.ops.flatMap((op) => (op.op === 'joinParagraphs' ? [op.secondId] : []))
+    );
+    const order = paragraphOrder();
+    const fromIndex = order.indexOf(from.paragraphId);
+    const toIndex = order.indexOf(to.paragraphId);
+    if (fromIndex === -1 || toIndex === -1) return start;
+    const markRetracts = (paragraphId: string): boolean => {
+      const node = findNode(part, paragraphId);
+      return node?.kind === 'paragraph' && retractsOwnParagraphMark(node, author);
+    };
+    let hostIndex = toIndex;
+    while (
+      hostIndex > fromIndex &&
+      joinedSecondIds.has(order[hostIndex]!) &&
+      markRetracts(order[hostIndex - 1]!)
+    ) {
+      hostIndex -= 1;
+    }
+    let offset = 0;
+    for (let index = hostIndex; index <= toIndex; index += 1) {
+      const id = order[index]!;
+      const coveredFrom = {
+        paragraphId: id,
+        offset: id === from.paragraphId ? from.offset : 0,
+      };
+      const coveredTo =
+        id === to.paragraphId
+          ? positionPastDeletion(currentLayout, to)
+          : { paragraphId: id, offset: textOf(id).length };
+      if (index === hostIndex) offset += coveredFrom.offset;
+      offset +=
+        coveredTo.offset - coveredFrom.offset - retractedByOwnInsertion(coveredFrom, coveredTo);
+    }
+    return { paragraphId: order[hostIndex]!, offset };
   }
 
   function retractedByOwnInsertion(from: SemanticPosition, to: SemanticPosition): number {
@@ -5256,28 +5347,22 @@ export function mountPaginatedSurface(
     // paragraph at every newline offset in a single pass — one rebuild of the body's child
     // sequence, however many paragraphs the clipboard carried.
     const plan = deleteSelectionPlan();
-    const start = plan.collapseTo;
+    // WHERE THE REPLACEMENT GOES, the same question `type()` answers: in suggesting mode a
+    // deletion keeps the characters it strikes, so the replacement belongs AFTER them.
+    // Pasting at the range start put the new text in front of the struck words and left
+    // the caret inside it, so the next keystroke landed mid-word.
+    const target = plan.replaceAt ?? plan.collapseTo;
     const joined = lines.join('');
     const ops: TreeDocOp[] = [...plan.ops];
-    // WHERE THE REPLACEMENT GOES, the same question `type()` answers. In suggesting mode a
-    // deletion keeps the characters it strikes, so the replacement belongs AFTER them — and
-    // keeps only those, since whatever of the range was this author's own pending insertion
-    // is retracted and leaves. Pasting at the range start put the new text in front of the
-    // struck words and left the caret inside it, so the next keystroke landed mid-word.
-    const struck = editingMode === 'suggest' ? orderedRange() : null;
-    const insertAt =
-      struck && struck.to.paragraphId === start.paragraphId
-        ? struck.to.offset - retractedByOwnInsertion(struck.from, struck.to)
-        : start.offset;
     // Plain text pasted at a caret takes the armed typing format, like typed text — Word
     // formats a plain paste as if you had typed it. Written over the PRE-SPLIT offsets, so
     // the op runs before `splitParagraphMany` cuts the paragraph up.
-    const pendingOps = consumePendingFormatOps(start.paragraphId, insertAt, joined.length);
+    const pendingOps = consumePendingFormatOps(target.paragraphId, target.offset, joined.length);
     if (joined.length > 0) {
       ops.push({
         op: 'insertText',
-        paragraphId: start.paragraphId,
-        offset: insertAt,
+        paragraphId: target.paragraphId,
+        offset: target.offset,
         text: joined,
       });
       ops.push(...pendingOps);
@@ -5286,10 +5371,10 @@ export function mountPaginatedSurface(
     let consumed = 0;
     for (let index = 0; index < lines.length - 1; index += 1) {
       consumed += lines[index]!.length;
-      boundaries.push(insertAt + consumed);
+      boundaries.push(target.offset + consumed);
     }
     if (boundaries.length > 0) {
-      ops.push({ op: 'splitParagraphMany', paragraphId: start.paragraphId, offsets: boundaries });
+      ops.push({ op: 'splitParagraphMany', paragraphId: target.paragraphId, offsets: boundaries });
     }
     if (ops.length === 0) return;
 
@@ -5301,7 +5386,7 @@ export function mountPaginatedSurface(
     // the clamp, which is where this lane started.
     const redoMark =
       boundaries.length === 0
-        ? caretMark({ paragraphId: start.paragraphId, offset: insertAt + lastLine.length })
+        ? caretMark({ paragraphId: target.paragraphId, offset: target.offset + lastLine.length })
         : undefined;
     const withoutFormat = ops.filter((op) => !pendingOps.includes(op));
     commit(
@@ -5309,8 +5394,8 @@ export function mountPaginatedSurface(
       () => {
         if (boundaries.length === 0) {
           return collapsedAt({
-            paragraphId: start.paragraphId,
-            offset: insertAt + lastLine.length,
+            paragraphId: target.paragraphId,
+            offset: target.offset + lastLine.length,
           });
         }
         // The caret lands at the end of the pasted text: in the LAST minted paragraph, right
