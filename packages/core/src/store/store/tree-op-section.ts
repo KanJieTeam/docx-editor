@@ -33,11 +33,15 @@ import {
 } from './tree-op-section-address.ts';
 import type {
   OoxmlProperty,
+  RevisionAttributionInput,
   TabStopWrite,
   TreeDocOp,
   TreeOpEffect,
   TreeOpResult,
 } from './tree-op-types.ts';
+import { ownProposedMark, withPropertyChangeRecord } from './tree-op-tracked-properties.ts';
+import { build } from './tree-op-tracked.ts';
+import { nextRevisionId } from './tree-op-revision-ids.ts';
 import {
   TEXT_DEPS,
   attributeValueOf,
@@ -821,14 +825,17 @@ const AFTER_PARAGRAPH_MARK = new Set(['sectPr', 'pPrChange']);
  * a FLAT property bag and the mark's own run properties are children.
  *
  * An empty `properties` removes the element rather than leaving an empty `w:rPr`, so a
- * cleared mark digests identically to one that never had any.
+ * cleared mark digests identically to one that never had any — unless a tracked format
+ * change put a `w:rPrChange` there, which is the one child that keeps the container alive
+ * with nothing else in it.
  */
 export function applySetParagraphMarkProperties(
   part: OoxmlPart,
   paragraph: OoxmlParagraphNode,
   properties: readonly OoxmlProperty[],
   options: EditOptions | undefined,
-  nextId: () => string
+  nextId: () => string,
+  revision?: RevisionAttributionInput
 ): TreeOpResult {
   const effect: TreeOpEffect = {
     dirty: [paragraph.id],
@@ -844,19 +851,46 @@ export function applySetParagraphMarkProperties(
   // The mark is a run property container like any other: what the op names is rewritten,
   // and what it cannot name — a `w:rStyle` character style, `w:lang`, a revision record —
   // stays where it was authored.
-  const children = mergedPropertyChildren(
-    existing?.children ?? [],
+  const prior = existing?.children ?? [];
+  let children: readonly OoxmlNode[] = mergedPropertyChildren(
+    prior,
     properties,
     RUN_VOCABULARY,
     nextId
   );
+  // The mark's tracked format change is `w:pPr/w:rPr/w:rPrChange` (§17.13.5.31) — the same
+  // element a run writes, over `CT_ParaRPrOriginal` rather than `CT_RPrOriginal`. It is what
+  // keeps a list marker's face reversible when a whole-paragraph format is proposed.
+  //
+  // Skipped on a mark THIS author proposed adding, the run rule one level up: rejecting that
+  // `w:ins` runs the paragraph into the next one and takes the mark's properties with it, so
+  // a record of what they used to be decides nothing. The mark never existed for anyone else.
+  if (revision && !ownProposedMark(prior, revision.author)) {
+    children = withPropertyChangeRecord({
+      container: 'runProperties',
+      prior,
+      next: children,
+      revision,
+      mint: nextId,
+      // The transaction's minter when it lent one, else a lazy walk of this part.
+      nextRevisionId: () => options?.revisionIds?.() ?? nextRevisionId(part)(),
+    });
+  }
 
   if (children.length === 0) {
     if (!existing) return ok(part, effect);
     return fromEdit(removeNode(part, existing.id, options), effect);
   }
 
-  const rPr = sectionElement(existing?.id ?? nextId(), 'rPr', [], children);
+  // THE TYPED KIND, and an EXISTING container rewritten in place — the same rule
+  // `applySetRunProperties` states for a run's own `w:rPr`, and the one the `w:pPr` branch
+  // below states for the paragraph. Layout finds the mark's revisions and its format record by
+  // `kind === 'runProperties'` with no name fallback, so minting a generic replacement made
+  // one Bold press over a paragraph hide somebody's struck pilcrow and change bar — and hide
+  // the mark format record the very same press had just written.
+  const rPr = existing
+    ? ({ ...existing, children } as OoxmlNode)
+    : build(nextId(), 'runProperties', 'rPr', [], children);
   if (existing) return fromEdit(replaceNode(part, existing.id, rPr, options), effect);
   if (pPr) {
     const before = pPr.children.findIndex(
@@ -867,16 +901,7 @@ export function applySetParagraphMarkProperties(
   }
   // The TYPED kind: every reader finds paragraph properties by
   // `kind === 'paragraphProperties'`, so a generic `w:pPr` is invisible to all of them.
-  const created = {
-    id: nextId(),
-    kind: 'paragraphProperties',
-    namespaceUri: WML_NAMESPACE_URI,
-    localName: 'pPr',
-    prefix: 'w',
-    namespaceBindings: [],
-    attributes: [],
-    children: [rPr],
-  } as unknown as OoxmlNode;
+  const created = build(nextId(), 'paragraphProperties', 'pPr', [], [rPr]);
   // `w:pPr` must be the paragraph's FIRST child per the schema.
   return fromEdit(insertChildren(part, paragraph.id, 0, [created], options), effect);
 }

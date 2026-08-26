@@ -21,6 +21,8 @@ import { validatePackageInvariants } from '../package/package-edit.ts';
 import { settingsPartOf } from '../package/note-properties.ts';
 import { ORIGIN_IDS } from '../registry/frozen-ids.ts';
 import { formsProtectionRefusal } from './tree-op-content-controls.ts';
+import { nextRevisionId } from './tree-op-revision-ids.ts';
+import { PROPERTY_CHANGE_WRAPPER_OF_OP } from './tree-op-tracked-properties.ts';
 import { applyTreeOp, type ImpactClass, type TreeDocOp, type TreeOpRejection } from './tree-ops.ts';
 
 /** A selection the caller wants restored when an entry is undone or redone. */
@@ -411,6 +413,51 @@ export class TreeDocumentStore {
     let explicitSelectionAfter: SelectionMark | null = null;
     let opCaret: SelectionMark | null = null;
 
+    /**
+     * ONE `@w:id` for the format records of this transaction, per part and per WRAPPER NAME.
+     *
+     * Two problems, one answer. `nextRevisionId` walks the whole part, and a formatting write
+     * emits an op per RUN — so a Select All + Bold in suggesting mode paid a document-wide
+     * walk thousands of times over, quadratic in document size. And one press is ONE decision:
+     * cards group on `localName` plus the address, so a fresh id per record turned a two-
+     * paragraph Bold into seven cards the reviewer had to answer one at a time, where Word
+     * writes one. A revision spanning many elements that share an id is the shape this module
+     * is built around.
+     *
+     * PER WRAPPER NAME because the grouping is, and the CARD is not. `w:rPrChange` and
+     * `w:pPrChange` are both `format` revisions, so two cards built from one address carry the
+     * same key — one of them unreachable in the rail, both matched by `setActiveReviewItem`,
+     * and React handed two children under one key. Worse, `resolveRevisions` matches on the
+     * address alone unless the op names an element, and the chrome path never does: answering
+     * the run's card silently answered a paragraph-property change the reviewer never saw.
+     *
+     * Shared only across the property ops, and dropped the moment anything else runs —
+     * including `applyPackage`. Those ops MINT ids and never import one, so an id taken before
+     * the first of them is still free when the last lands. A paste carries its own revision
+     * ids, so an id that survived one would be an address the document had just started using.
+     */
+    const revisionIdOfGroup = new Map<string, { id: string | null }>();
+    const sharedRevisionIds = (op: TreeDocOp, part: OoxmlPart): (() => string) | null => {
+      const wrapper = PROPERTY_CHANGE_WRAPPER_OF_OP.get(op.op);
+      if (wrapper === undefined) {
+        revisionIdOfGroup.clear();
+        return null;
+      }
+      const key = `${part.name}\u0000${wrapper}`;
+      let group = revisionIdOfGroup.get(key);
+      if (!group) {
+        group = { id: null };
+        revisionIdOfGroup.set(key, group);
+      }
+      // Taken LAZILY on the first record actually written, so an untracked format — the
+      // common case — never pays the walk at all. AGAINST THIS OP'S OWN PART, not the one
+      // that happened to open the group: an op that records nothing (a run inside this
+      // author's own `w:ins`) opens it against a part that does not yet hold the other
+      // wrapper's id, and minting from that snapshot later handed both wrappers one address.
+      const held = group;
+      return (): string => (held.id ??= nextRevisionId(part)());
+    };
+
     const applyToPart = (partName: string, op: TreeDocOp): boolean => {
       if (failure) return false;
       const target = working.parts.get(partName);
@@ -434,7 +481,11 @@ export class TreeDocumentStore {
       // many-op transaction quadratic in document size, and nothing between here and the
       // commit can observe the intermediate parts. Op-level input validation still runs
       // inside `applyTreeOp` before any tree work.
-      const result = applyTreeOp(target, op, { deferValidation: true });
+      const revisionIds = sharedRevisionIds(op, target);
+      const result = applyTreeOp(target, op, {
+        deferValidation: true,
+        ...(revisionIds ? { revisionIds } : {}),
+      });
       if (!result.ok) {
         failure = { reason: result.reason, ...(result.detail ? { detail: result.detail } : {}) };
         return false;
@@ -471,6 +522,10 @@ export class TreeDocumentStore {
       applyTo: (partName, op) => applyToPart(partName, op),
       applyPackage: (edit) => {
         if (failure) return false;
+        // The SECOND write channel, and it imports whole parts — a pasted fragment carries
+        // its own revision ids. The shared id is taken from the part it first saw, so it goes
+        // here for the same reason a non-property op drops it.
+        revisionIdOfGroup.clear();
         const next = edit(working);
         if (next === working) return true;
         for (const [name, part] of next.parts) {

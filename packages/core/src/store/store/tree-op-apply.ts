@@ -42,6 +42,12 @@ import {
   retractsOwnParagraphMark,
 } from './tree-op-tracked-marks.ts';
 import {
+  insideOwnInsertion,
+  ownProposedMark,
+  withPropertyChangeRecord,
+} from './tree-op-tracked-properties.ts';
+import { nextRevisionId } from './tree-op-revision-ids.ts';
+import {
   isValidParaId,
   mintParaId,
   mintedParagraphIdentityAttributes,
@@ -64,6 +70,7 @@ import {
   inlineContainerOf,
   innermostContentControlAround,
   isContentControlNode,
+  isParagraphMarkRevision,
   isParagraphPropertiesNode,
   isRunPropertiesNode,
   isShowingPlaceholder,
@@ -121,6 +128,7 @@ import { applyInsertTable } from './tree-op-insert-table.ts';
 import { applyReplaceStoryBlocks } from './tree-op-story-replace.ts';
 import type {
   OoxmlProperty,
+  RevisionAttributionInput,
   TreeDocOp,
   TreeOpEffect,
   TreeOpRejection,
@@ -413,7 +421,14 @@ export function applyTreeOp(part: OoxmlPart, op: TreeDocOp, options?: EditOption
     case 'setListLevel':
       return applySetListLevel(part, paragraph, op.level, options, nextId);
     case 'setParagraphMarkProperties':
-      return applySetParagraphMarkProperties(part, paragraph, op.properties, options, nextId);
+      return applySetParagraphMarkProperties(
+        part,
+        paragraph,
+        op.properties,
+        options,
+        nextId,
+        op.revision
+      );
     case 'setListNumbering':
       return applySetListNumbering(part, paragraph, op.numId, op.level ?? 0, options, nextId);
     case 'setParagraphTabStops':
@@ -521,16 +536,36 @@ export function applyTreeOp(part: OoxmlPart, op: TreeDocOp, options?: EditOption
         op.end,
         op.properties,
         options,
-        op.targetRunIds
+        op.targetRunIds,
+        op.revision
       );
     case 'setParagraphProperties': {
       const existing = paragraphPropertiesNodeOf(paragraph);
-      const children = mergedPropertyChildren(
-        existing?.children ?? [],
+      const prior = existing?.children ?? [];
+      let children: readonly OoxmlNode[] = mergedPropertyChildren(
+        prior,
         op.properties,
         PARAGRAPH_VOCABULARY,
         nextId
       );
+      // A tracked paragraph-property change records what `w:pPr` held in a `w:pPrChange`
+      // (§17.13.5.29), so Reject restores the alignment, indents and style it replaced.
+      //
+      // Skipped on a paragraph whose mark THIS author proposed adding, the same rule the run
+      // and mark writes apply: rejecting that `w:ins` runs the paragraph into the next one and
+      // takes its properties with it, so a record of what they used to be decides nothing.
+      const markProperties = namedChild(existing, 'rPr')?.children ?? [];
+      if (op.revision && !ownProposedMark(markProperties, op.revision.author)) {
+        children = withPropertyChangeRecord({
+          container: 'paragraphProperties',
+          prior,
+          next: children,
+          revision: op.revision,
+          mint: nextId,
+          // The transaction's minter when it lent one, else a lazy walk of this part.
+          nextRevisionId: () => options?.revisionIds?.() ?? nextRevisionId(part)(),
+        });
+      }
       const effect: TreeOpEffect = {
         dirty: [paragraph.id],
         created: [],
@@ -3114,14 +3149,6 @@ function applyJoin(
   return result;
 }
 
-/** `EG_ParaRPrTrackChanges` — the four revisions a paragraph mark can carry (§17.13.5). */
-const MARK_REVISION_NAMES: ReadonlySet<string> = new Set(['ins', 'del', 'moveFrom', 'moveTo']);
-
-const isMarkRevision = (node: OoxmlNode): boolean =>
-  node.kind !== 'textValue' &&
-  node.namespaceUri === WML_NAMESPACE_URI &&
-  MARK_REVISION_NAMES.has(node.localName);
-
 /**
  * The join survivor, carrying the TRACKED STATE of the mark that survives.
  *
@@ -3144,10 +3171,10 @@ function withSectionMarkOf(
 ): OoxmlNode & { readonly children: readonly OoxmlNode[] } {
   const secondMarkRevisions = (
     namedChild(paragraphPropertiesNodeOf(second), 'rPr')?.children ?? []
-  ).filter(isMarkRevision);
+  ).filter(isParagraphMarkRevision);
   const survivorHasMarkRevision = (
     namedChild(paragraphPropertiesNodeOf(first), 'rPr')?.children ?? []
-  ).some(isMarkRevision);
+  ).some(isParagraphMarkRevision);
   const withMark =
     secondMarkRevisions.length > 0 || survivorHasMarkRevision
       ? withMarkRevisionsOf(first, secondMarkRevisions, nextId)
@@ -3231,7 +3258,7 @@ function withMarkRevisionsOf(
     };
   }
   const existingRPr = namedChild(pPr, 'rPr');
-  const keptFace = (existingRPr?.children ?? []).filter((child) => !isMarkRevision(child));
+  const keptFace = (existingRPr?.children ?? []).filter((child) => !isParagraphMarkRevision(child));
   const rebuiltRPr =
     existingRPr === undefined
       ? carried.length > 0
@@ -3275,7 +3302,8 @@ function applySetRunProperties(
   end: number,
   properties: readonly OoxmlProperty[],
   options?: EditOptions,
-  targetRunIds?: readonly string[]
+  targetRunIds?: readonly string[],
+  revision?: RevisionAttributionInput
 ): TreeOpResult {
   const effect: TreeOpEffect = {
     dirty: [paragraph.id],
@@ -3310,17 +3338,42 @@ function applySetRunProperties(
     }
   }
   const nextId = createNodeIdAllocator(current);
+  // ONE id for the whole op, taken LAZILY: `nextRevisionId` walks the part, and a write that
+  // records nothing — every run inside this author's own `w:ins` — must not pay it. One id,
+  // not one per run, because the op's records are one decision.
+  //
+  // The TRANSACTION's id is preferred when it lent one, which widens that from the op to the
+  // press: formatting emits an op per run, and the walk is document-wide
+  // (`EditOptions.revisionIds`).
+  let ownId: string | null = null;
+  const mintRevisionId = (): string =>
+    options?.revisionIds?.() ?? (ownId ??= nextRevisionId(current)());
   for (const runId of runIds) {
     const run = findNode(current, runId);
     if (!run || run.kind !== 'run') continue;
     const existing = runPropertiesNodeOf(run);
     const content = run.children.filter((child) => !isRunPropertiesNode(child));
-    const children = mergedPropertyChildren(
-      existing?.children ?? [],
+    const prior = existing?.children ?? [];
+    let children: readonly OoxmlNode[] = mergedPropertyChildren(
+      prior,
       properties,
       RUN_VOCABULARY,
       nextId
     );
+    // A tracked format change keeps the run's NEW properties and records the old ones in a
+    // `w:rPrChange`, so Reject restores them. Skipped inside this author's own `w:ins`: the
+    // whole run is already their proposal, and rejecting it takes words and formatting
+    // together (#495).
+    if (revision && !insideOwnInsertion(current, run.id, revision.author)) {
+      children = withPropertyChangeRecord({
+        container: 'runProperties',
+        prior,
+        next: children,
+        revision,
+        mint: nextId,
+        nextRevisionId: mintRevisionId,
+      });
+    }
     if (children.length === 0) {
       if (!existing) continue;
       const cleared = replaceChildren(current, run.id, content, options);

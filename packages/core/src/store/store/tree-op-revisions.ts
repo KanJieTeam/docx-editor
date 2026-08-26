@@ -31,8 +31,11 @@ import {
   type OoxmlPart,
 } from '../package/ooxml-tree.ts';
 import { isContentRevisionKind } from '../package/ooxml-shared.ts';
+import { isWmlNamed } from './tree-op-tracked.ts';
 import { isContentControl } from '../package/content-control-walk.ts';
 import { DEPENDENCY_KEY_IDS } from '../registry/frozen-ids.ts';
+import { isParagraphMarkRevision } from './tree-op-nodes.ts';
+import { PROPERTY_CHANGE_WRAPPER_OF_OP, recordedProperties } from './tree-op-tracked-properties.ts';
 import { scopedRevisionRoot } from './tree-op-revision-scope.ts';
 import type { RevisionAddress } from './tree-op-types.ts';
 import type { TreeOpEffect, TreeOpRejection } from './tree-op-validate.ts';
@@ -59,8 +62,14 @@ const REFUSED_REVISION_NAMES: ReadonlySet<string> = new Set([
   'sectPrChange',
 ]);
 
-/** Property-change wrappers this pass does resolve: the run and paragraph property records. */
-const PROPERTY_CHANGE_NAMES: ReadonlySet<string> = new Set(['rPrChange', 'pPrChange']);
+/**
+ * Property-change wrappers this pass does resolve: the run and paragraph property records.
+ *
+ * Taken FROM the write side's own table rather than restated. Two lists of these names drift,
+ * and a name in one but not the other is a record this pass would either refuse to resolve or
+ * descend into as if its copies were decisions.
+ */
+const PROPERTY_CHANGE_NAMES: ReadonlySet<string> = new Set(PROPERTY_CHANGE_WRAPPER_OF_OP.values());
 
 /** The two members of `EG_ParaRPrTrackChanges` that record a MOVE of the paragraph mark. */
 const MARK_MOVE_NAMES: ReadonlySet<string> = new Set(['moveFrom', 'moveTo']);
@@ -268,6 +277,21 @@ function collectRevisionSitesIn(part: OoxmlPart, scopeRootId?: string): Revision
           nesting,
         });
       }
+      // A CHANGE RECORD'S CONTENTS ARE A COPY, NOT A DECISION. `CT_ParaRPrOriginal` admits
+      // `EG_ParaRPrTrackChanges` and `CT_PPrBase` admits `w:numPr/w:ins`, so a Word-written
+      // record legitimately holds revision elements — and they are the container as it WAS,
+      // already answered by accepting or rejecting the record around them.
+      //
+      // Descending classified those copies as sites of their own. A `w:ins` inside
+      // `w:pPr/w:rPr/w:rPrChange/w:rPr` has parent `rPr` and grandparent `rPrChange`, so it
+      // read as a misplaced mark, and one refused site refuses the whole decision: Accept All
+      // and Reject All failed for EVERY revision in a document Word had written normally,
+      // with a reason no reviewer can act on.
+      //
+      // OUTSIDE the addressed-site branch, because a wrapper missing `@w:id` or `@w:author` is
+      // still a record. `CT_TrackChange` requires the author and other generators omit it
+      // anyway, so an unaddressed record is an ordinary file — and it reached the same refusal.
+      if (PROPERTY_CHANGE_NAMES.has(node.localName)) return;
     }
     // Only a CONTENT wrapper deepens the count. A structural or property-change revision
     // encloses no run content, so counting it would rank an unrelated site as nested.
@@ -519,22 +543,6 @@ function withDeletedTextRestored(node: OoxmlNode): OoxmlNode {
   return rebuilt;
 }
 
-/**
- * The properties a change wrapper recorded, for a reject.
- *
- * `w:rPrChange` holds a `w:rPr`, `w:pPrChange` a `w:pPr`. Their children are the previous
- * state of the container the wrapper sits in.
- */
-function recordedProperties(node: OoxmlElement): readonly OoxmlNode[] | null {
-  const inner = node.localName === 'rPrChange' ? 'rPr' : 'pPr';
-  for (const child of node.children) {
-    if (child.kind === 'textValue') continue;
-    if (child.namespaceUri === WML_NAMESPACE_URI && child.localName === inner)
-      return child.children;
-  }
-  return null;
-}
-
 interface RebuildPlan {
   /** Wrapper node id → what to do with it. */
   readonly actions: ReadonlyMap<string, Resolution>;
@@ -553,14 +561,6 @@ interface RebuildPlan {
   readonly mergeForward: ReadonlySet<string>;
   /** Tracked inserted rows rejected, or tracked deleted rows accepted. */
   readonly removeRows: ReadonlySet<string>;
-}
-
-function isWmlNamed(node: OoxmlNode, localName: string): boolean {
-  return (
-    node.kind !== 'textValue' &&
-    node.namespaceUri === WML_NAMESPACE_URI &&
-    node.localName === localName
-  );
 }
 
 /**
@@ -696,13 +696,49 @@ function rebuild(node: OoxmlNode, plan: RebuildPlan): OoxmlNode[] {
       // deletes a SECTION BREAK: page size, margins and per-section header/footer references
       // go with it, and every following paragraph reflows into the previous section.
       //
-      // `CT_RPrChange` is the opposite case: `CT_RPrOriginal` genuinely is the whole `w:rPr`
-      // content minus the change wrapper, so there wholesale replacement is correct.
-      const preserved =
-        restoring.localName === 'pPrChange'
-          ? node.children.filter((child) => isWmlNamed(child, 'rPr') || isWmlNamed(child, 'sectPr'))
-          : [];
-      return [{ ...node, children: [...recorded, ...preserved] } as OoxmlElement];
+      // `CT_RPrChange` is nearly the opposite case: `CT_RPrOriginal` genuinely is the whole
+      // `w:rPr` content minus the change wrapper, so wholesale replacement is right — EXCEPT
+      // on a paragraph MARK, whose `w:pPr/w:rPr` also holds `EG_ParaRPrTrackChanges`. Those
+      // are somebody's pending decision about the paragraph BREAK, and it may have been taken
+      // after this format change was proposed. Restoring the container from the record alone
+      // deleted them, so rejecting a formatting suggestion silently answered an unrelated one.
+      //
+      // The LIVE ones win and the recorded copies are dropped. Both halves are load-bearing:
+      // `CT_ParaRPrOriginal` admits `w:ins`, so a Word-written record legitimately carries one,
+      // and keeping both emits two `w:ins` in a container whose schema allows one — a `w:pPr`
+      // Word reports as unreadable. A run's own `w:rPr` holds no such children either way.
+      //
+      // THE PRESERVED CHILDREN GO THROUGH THE PLAN. They are live sites, not copies: THIS
+      // resolution may also be removing one of them, and lifting them out verbatim made
+      // Reject All report success over a paragraph-mark revision it had just been asked to
+      // reject — the reviewer saw an empty pane and a tracked change still in the file.
+      if (restoring.localName === 'pPrChange') {
+        const preserved = rebuildChildren(
+          node.children.filter((child) => isWmlNamed(child, 'rPr') || isWmlNamed(child, 'sectPr')),
+          plan
+        );
+        // `w:rPr` and `w:sectPr` CLOSE `CT_PPr`, so they follow the recorded base — and the
+        // record's own copies of them go, or a malformed `CT_PPrBase` holding either produces
+        // a `w:pPr` with two, which the tree invariants refuse and the reviewer sees as a
+        // Reject that failed on a file Word opens.
+        const base = recorded.filter(
+          (child) => !isWmlNamed(child, 'rPr') && !isWmlNamed(child, 'sectPr')
+        );
+        return [{ ...node, children: [...base, ...preserved] } as OoxmlElement];
+      }
+      const liveMarks = rebuildChildren(
+        node.children.filter((child) => isParagraphMarkRevision(child)),
+        plan
+      );
+      // `EG_ParaRPrTrackChanges` OPENS `CT_ParaRPr`, so the live marks lead — and the copies
+      // inside the record go, or the container ends up with two `w:ins` where its schema
+      // allows one.
+      return [
+        {
+          ...node,
+          children: [...liveMarks, ...recorded.filter((child) => !isParagraphMarkRevision(child))],
+        } as OoxmlElement,
+      ];
     }
   }
 
