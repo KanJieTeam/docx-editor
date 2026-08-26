@@ -10,7 +10,7 @@ import type {
   ImageContext,
   SelectedImageState,
 } from '../contracts/editor.ts';
-import { lineAtPosition } from '../layout/index.ts';
+import { geometryOfSection, lineAtPosition } from '../layout/index.ts';
 import { lineAtIndexedPosition } from '../layout/paragraph-lines.ts';
 import type { AnchoredDrawingRecord, InlineDrawingRecord } from '../layout/drawing-layout.ts';
 import { findDrawingOverlayFrameInLayout } from '../layout/semantic-hit-test.ts';
@@ -496,7 +496,7 @@ function asyncImageExecutionGate(surface: PaginatedSurface | null): ExecResult |
     return {
       ok: false,
       code: 'invalidArgs',
-      reason: 'image property edits are not supported in suggesting mode',
+      reason: 'image changes are not supported in suggesting mode',
     };
   }
   return null;
@@ -598,7 +598,7 @@ export function gateImageCommand(
     return {
       ok: false,
       code: 'invalidArgs',
-      reason: 'image property edits are not supported in suggesting mode',
+      reason: 'image changes are not supported in suggesting mode',
     };
   }
   switch (command.type) {
@@ -897,6 +897,36 @@ export function execImageCommand(
 }
 
 /**
+ * Scale a natural extent down to fit where the caret flows, preserving aspect ratio —
+ * Word's insert behavior: an image that fits keeps its size, a wider or taller one lands at
+ * the width of its cell, column, or page. Only ever shrinks.
+ *
+ * Width fits the caret LINE's measure, not the section box alone: a table cell or a text
+ * column is narrower than the page, and layout hard-clips an inline drawing that overflows
+ * its box. `geometryOfSection` carries layout's own degenerate-margins fallback, so a page
+ * whose margins swallow it still fits against the box it actually paginates into.
+ */
+function fitInsertExtent(
+  surface: PaginatedSurface,
+  paragraphId: string,
+  offset: number,
+  widthPoints: number,
+  heightPoints: number
+): { readonly widthPoints: number; readonly heightPoints: number } {
+  const geometry = geometryOfSection(surface.sectionPropertiesAt(paragraphId));
+  const contentWidth = geometry.width - geometry.margin.left - geometry.margin.right;
+  const contentHeight = geometry.height - geometry.margin.top - geometry.margin.bottom;
+  const line = lineAtIndexedPosition(surface.layout(), paragraphId, offset);
+  const flowWidth =
+    line && line.box.width > 0 ? Math.min(line.box.width, contentWidth) : contentWidth;
+  const scale = Math.min(1, flowWidth / widthPoints, contentHeight / heightPoints);
+  if (scale >= 1) return { widthPoints, heightPoints };
+  // ONE shared scale, unrounded: independent per-axis rounding or floors distort an
+  // extreme-aspect image (a hairline rule, a tall banner).
+  return { widthPoints: widthPoints * scale, heightPoints: heightPoints * scale };
+}
+
+/**
  * Run an insert or replace, re-checking the same gates {@link canExecuteImageCommand} applies.
  *
  * Async because image bytes must be decoded to derive their natural extent before the drawing can
@@ -923,13 +953,20 @@ export async function executeImageCommand(
     ) {
       return { ok: false, code: 'notFound', reason: 'stale package revision' };
     }
+    const fitted = fitInsertExtent(
+      surface,
+      anchor.paragraphId,
+      anchor.offset,
+      command.widthPoints,
+      command.heightPoints
+    );
     const result = await surface.insertImage({
       paragraphId: anchor.paragraphId,
       offset: anchor.offset,
       bytes: command.data,
       mime: command.mime,
-      widthPoints: command.widthPoints,
-      heightPoints: command.heightPoints,
+      widthPoints: fitted.widthPoints,
+      heightPoints: fitted.heightPoints,
       expectedPackageRevision: expectedRevision,
       commitGuard: () => isStaleImageMutation(editor, pre) === null,
       ...(command.title !== undefined ? { title: command.title } : {}),
