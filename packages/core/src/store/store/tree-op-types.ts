@@ -139,50 +139,12 @@ export interface OoxmlProperty {
   readonly attributes?: Readonly<Record<string, string>>;
 }
 
-/**
- * The identity of one revision WITHIN a part: `@w:id`, `@w:author` and `@w:date` together.
- *
- * `@w:id` is not unique and not author-scoped, so `(part, id)` alone would merge two authors'
- * distinct revisions; and one logical revision — a tracked row insertion — is deliberately
- * many elements sharing an id, which a uniqueness rule could not express at all.
- */
-/**
- * How a tracked change is addressed: its numeric id plus the PART it lives in.
- *
- * Both, always — `@w:id` is unique only within a part, so an id alone names two revisions in any
- * package with a header or a comments part.
- */
-export interface RevisionAddress {
-  readonly id: string;
-  readonly author: string;
-  /** Absent when the file wrote no `@w:date`; part of the identity either way. */
-  readonly date?: string;
-}
-
-/** Who a tracked edit is attributed to. `CT_TrackChange` requires an author. */
-/** The author and timestamp a tracked edit is recorded under. */
-export interface RevisionAttributionInput {
-  readonly author: string;
-  /** ISO-8601. Omitted writes no `@w:date`. */
-  readonly date?: string;
-}
-
-/**
- * Whether an attribution cannot serialize, spelled ONCE for every validator.
- *
- * `CT_TrackChange` makes `@w:author` required, so an absent or whitespace-only author is a
- * proposal no reader can attribute or resolve. Callers whose op makes the attribution
- * OPTIONAL pass `op.revision` and skip the check when it is undefined; callers that require
- * one refuse undefined themselves. The guard used to be copy-pasted per op, and the copies
- * drifted: table rows refused a whitespace-only author while text inserts accepted it.
- */
-export function invalidRevisionAttribution(revision: RevisionAttributionInput): boolean {
-  return (
-    typeof revision.author !== 'string' ||
-    revision.author.trim().length === 0 ||
-    (revision.date !== undefined && typeof revision.date !== 'string')
-  );
-}
+import type { RevisionAddress, RevisionAttributionInput } from './tree-op-revision-attribution.ts';
+export {
+  invalidRevisionAttribution,
+  type RevisionAddress,
+  type RevisionAttributionInput,
+} from './tree-op-revision-attribution.ts';
 
 /**
  * Every mutation the store accepts, as one JSON-safe discriminated union.
@@ -524,11 +486,20 @@ export type TreeDocOp =
       /**
        * End a section AT this paragraph: mint a `w:pPr/w:sectPr` cloning the governing
        * section's effective page setup, so the blocks up to and including this paragraph
-       * become their own section (a next-page section break). The paragraph must not
-       * already carry one.
+       * become their own section. The paragraph must not already carry one.
        */
       readonly op: 'setSectionMark';
       readonly paragraphId: string;
+      /**
+       * Where the section that STARTS after this mark begins — Word's Breaks menu.
+       *
+       * `w:type` states how a section starts relative to the previous one (§17.6.22), so it
+       * is written on the section FOLLOWING the mark, never on the minted one, which keeps
+       * the cloned type because it starts where the section it was cut from did. `'nextPage'`
+       * clears `w:type` (absent IS nextPage), so a next-page break inside a continuous
+       * section really starts a page. Omitted leaves the following section untouched.
+       */
+      readonly breakType?: 'nextPage' | 'continuous';
     }
   | {
       /**

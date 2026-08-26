@@ -4132,6 +4132,7 @@ export type TreeDocOp = {
     readonly pageHeightTwips?: number;
     readonly pageWidthTwips?: number;
 } | {
+    readonly breakType?: 'nextPage' | 'continuous';
     readonly op: 'setSectionMark';
     readonly paragraphId: string;
 } | {

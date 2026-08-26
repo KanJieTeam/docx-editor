@@ -201,6 +201,7 @@ export type {
   SurfaceParagraphFormat,
   ParagraphPropertyEdit,
   ParagraphTabStop,
+  SectionBreakInsertType,
   SurfaceFormatting,
 } from './paginated-surface-contract.ts';
 
@@ -889,6 +890,23 @@ export function mountPaginatedSurface(
     // asks. Without it, bulleting or indenting one selected column also hit the cells between
     // its corners in document order.
     selectedCells: () => cellSelection?.cellIds,
+    editingMode: () => editingMode,
+    publishRefusal: (reason) => {
+      lastRejection = reason;
+      // Published like every other early-return refusal in this file. It does not EMIT: the
+      // facade treats a publish that moves neither the selection nor the pending format as
+      // quiet, which a refusal is. What it does do is invalidate the version-cached
+      // `snapshot()`, so the reason is there the moment anyone reads it. Stored alone it was
+      // not — the snapshot kept its stale value until an unrelated tick bumped the version,
+      // and then delivered a section break's message on a caret move.
+      options.onChange?.(currentState());
+    },
+    // RAW, on purpose: `orderedRange()` flushes pending input, and this is asked from `can`.
+    caretParagraphId: () =>
+      selection.anchor.paragraphId === selection.head.paragraphId &&
+      selection.anchor.offset === selection.head.offset
+        ? selection.head.paragraphId
+        : null,
     layout: () => currentLayout,
     // Structural edits at the caret KEEP the armed typing format, the way Word does: a
     // Shift+Enter line break, a Tab, a page break or turning the paragraph into a list item

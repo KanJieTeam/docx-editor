@@ -1381,7 +1381,7 @@ export interface PaginatedSurface {
     insertPageBreak(): void;
     insertPageField(field: 'PAGE' | 'NUMPAGES' | 'SECTIONPAGES' | 'PAGE_X_OF_Y'): boolean;
     insertPlainText(text: string): void;
-    insertSectionBreak(): boolean;
+    insertSectionBreak(breakType?: SectionBreakInsertType): boolean;
     insertTab(): void;
     insertTable(rows: number, cols: number): boolean;
     insertToc(): boolean;
@@ -1428,6 +1428,7 @@ export interface PaginatedSurface {
         sectionIndex: number;
         sectionStart: number;
     };
+    sectionBreakRefusal(breakType?: SectionBreakInsertType): string | null;
     sectionProperties(): SectionProperties;
     sectionPropertiesAt(paragraphId: string): SectionProperties;
     selectAll(): void;
@@ -1789,6 +1790,9 @@ export type SectionAnchor =
 | {
     readonly kind: 'unaddressable';
 };
+
+// @public
+export type SectionBreakInsertType = 'nextPage' | 'continuous';
 
 // @public
 export interface SectionProperties {
