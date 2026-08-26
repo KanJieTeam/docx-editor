@@ -125,6 +125,7 @@ import {
   createKeyDownHandler,
 } from './surface-input.ts';
 import { insertableText } from './clipboard-plain-text.ts';
+import { createNextStyleWrites } from './surface-next-style.ts';
 import {
   createFurnitureSource,
   createNotesLayoutInput,
@@ -686,6 +687,14 @@ export function mountPaginatedSurface(
 
   // Style and numbering indexes are identity-memoized and shared by every story.
   const { styleCascade, numberingIndex, defaultTabStopPt } = createSurfaceStyleDeps(session);
+  // Word's "style for following paragraph". Its own lane, because it is a question about
+  // `styles.xml` rather than about the selection an Enter is standing in.
+  const nextStyle = createNextStyleWrites({
+    styleCascade,
+    // A pure read: `partOfNodeId`, never `partFor`, which would permanently retain a story
+    // store just to answer what style a paragraph is in.
+    partOf: (paragraphId) => partOfNodeId(session, paragraphId) ?? session.part(),
+  });
   let onDrawingResourcesChanged: (() => void) | null = null;
   const decodePort =
     options.imageDecodePort ??
@@ -2900,13 +2909,24 @@ export function mountPaginatedSurface(
     });
   }
 
+  /**
+   * The author this edit will be attributed to, or undefined when it lands untracked.
+   *
+   * `CT_TrackChange` makes `@w:author` required, so with no author there is nothing valid
+   * to write. The edit lands untracked rather than being refused: losing the user's typing
+   * to a missing configuration value would be the worse failure. ONE answer, because a
+   * lane that decides what to write by re-deriving this condition drifts from the lane
+   * that decides how to attribute it.
+   */
+  function trackedAuthorOrNone(): string | undefined {
+    const author = options.author?.trim();
+    return editingMode === 'suggest' && author ? author : undefined;
+  }
+
   /** Suggesting attributes text and structural row edits as Word tracked changes. */
   function trackedOps(ops: readonly TreeDocOp[]): TreeDocOp[] {
-    const author = options.author?.trim();
-    // `CT_TrackChange` makes `@w:author` required, so with no author there is nothing valid
-    // to write. The edit lands untracked rather than being refused: losing the user's typing
-    // to a missing configuration value would be the worse failure.
-    if (editingMode !== 'suggest' || !author) return [...ops];
+    const author = trackedAuthorOrNone();
+    if (author === undefined) return [...ops];
     return attributeTrackedOps(ops, { author, date: trackedDate() });
   }
 
@@ -4400,6 +4420,12 @@ export function mountPaginatedSurface(
       // Word carries the typing format across Enter: bold armed before the split applies
       // to the first characters typed in the new paragraph.
       const armed = armedAtCaret() ?? undefined;
+      // Word's `w:next`: Enter at the END of a paragraph starts one in the style that
+      // paragraph's style names as its follower, which is what stops a heading from being
+      // followed by a second heading.
+      const tailStyleId = splitEndsTheParagraph(position)
+        ? nextStyle.followerStyleId(position.paragraphId)
+        : undefined;
       commit(
         () =>
           applyOps(
@@ -4409,6 +4435,7 @@ export function mountPaginatedSurface(
                 op: 'splitParagraph',
                 paragraphId: position.paragraphId,
                 offset: position.offset,
+                tailStyleId,
               },
             ],
             selectionMark()
@@ -5370,6 +5397,36 @@ export function mountPaginatedSurface(
     return side === 'before'
       ? inlineControlEndingAt(paragraph, position.offset)
       : inlineControlStartingAt(paragraph, position.offset);
+  }
+
+  /**
+   * Whether this Enter ends the paragraph it leaves behind, so Word's follower style applies
+   * to the one it starts.
+   *
+   * A REPLACING Enter has two positions, not one: the split point, and the end of the text
+   * the same transaction deletes. Everything between them goes — including whole paragraphs,
+   * which the plan joins into the first — so what survives after the break is whatever
+   * followed the range's END. Select a heading's last word and press Enter, and Word gives
+   * you a body paragraph; reading only the split point said "not at the end" and gave a
+   * second heading.
+   *
+   * Declines outright for a SUGGESTED break and for a CELL RECTANGLE. A suggested break
+   * proposes a `w:ins` mark on the head, and rejecting it merges the paragraphs back keeping
+   * the SURVIVING tail's `w:pPr` — a tail in the follower style would demote the heading the
+   * reviewer took the break back from. Word records a `w:pPrChange` for that case, and this
+   * engine has no tracked paragraph-property write. A rectangle is not the range it stands
+   * in for, so its ends do not describe what the plan deletes.
+   */
+  function splitEndsTheParagraph(position: SemanticPosition): boolean {
+    if (trackedAuthorOrNone() !== undefined || cellSelection) return false;
+    const range = orderedRange();
+    const collapsed =
+      range.from.paragraphId === range.to.paragraphId && range.from.offset === range.to.offset;
+    // A collapsed caret may have been relocated past struck text on its way into the plan,
+    // so the split point is the plan's position rather than the selection's.
+    return collapsed
+      ? nextStyle.atParagraphEnd(position.paragraphId, position.offset)
+      : nextStyle.atParagraphEnd(range.to.paragraphId, range.to.offset);
   }
 
   /**
