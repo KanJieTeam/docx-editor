@@ -4350,6 +4350,7 @@ export type TreeDocOp = {
     readonly offset: number;
     readonly op: 'insertDrawing';
     readonly paragraphId: string;
+    readonly revision?: RevisionAttributionInput;
 } | {
     readonly drawingNodeId: string;
     readonly op: 'replaceDrawingResource';
@@ -4636,6 +4637,7 @@ export class TreePackageStore {
     compositionSessionOpen(): boolean;
     currentPackage(): OoxmlPackage;
     deleteImage(scope: StoryScope, drawingNodeId: string): ImageIntentResult;
+    deleteImageTracked(scope: StoryScope, drawingNodeId: string, revision: RevisionAttributionInput): ImageIntentResult;
     embedExternalImage(scope: StoryScope, drawingNodeId: string, url: string, port: ExternalImageFetchPort, signal: AbortSignal, decodePort: ImageDecodePort): Promise<ImageIntentResult>;
     // (undocumented)
     endComposition(): void;
