@@ -221,6 +221,12 @@
       "id": 211263178,
       "signed_at": "2026-08-10T08:11:30Z",
       "pull_request_no": 264
+    },
+    {
+      "name": "tao-hpu",
+      "id": 1250043,
+      "signed_at": "2026-08-27T18:50:34Z",
+      "pull_request_no": 539
     }
   ]
 }
