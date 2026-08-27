@@ -1021,11 +1021,34 @@ export function caretBoxOnLine(
     // Subtracting `leading` alone was right only while every rule put its extra above — the
     // rules that put it below leave `leading` at zero, so the whole spaced box read as text.
     const leading = line.leading ?? 0;
-    return {
-      x: line.contentX,
-      y: line.box.y + leading,
-      height: Math.max(0, line.box.height - leading - (line.trailingSpacing ?? 0)),
-    };
+    const band = Math.max(0, line.box.height - leading - (line.trailingSpacing ?? 0));
+    // A line with NO BOX AT ALL — height zero, not merely a box its spacing consumes — is
+    // the empty `w:p` a cell must end with after a nested table. It takes no flow height, so
+    // there is no band to size a caret from, and falling through to zero paints a 0px caret
+    // while the pages layer keeps the native one transparent: the user types blind into a
+    // paragraph they cannot see. The ascent the line was measured at is what a caret in it
+    // should be, and it survives the collapse for exactly this.
+    //
+    // Drawn ENDING at the collapse point, not starting from it. The line sits on the cell's
+    // content bottom, so growing downward puts the whole caret outside the row and over
+    // whatever block follows the table. Growing upward puts it inside the row that owns the
+    // paragraph, which is the invariant worth having and the one the tests pin.
+    //
+    // It does land in the band the preceding table occupies, and horizontally wherever the
+    // terminator's OWN `w:ind` and `w:jc` put it — so a centred or indented terminator puts
+    // the caret over that table's text. That is not a placement bug to route around: it is
+    // where the text a keystroke produces will appear. Neither alternative is available
+    // either, because the paragraph's own band is empty by construction and a table that
+    // fills the cell leaves no column beside it.
+    //
+    // Restricted to a zero box on purpose. A spanless line whose `leading` and
+    // `trailingSpacing` happen to consume it is an ordinary spaced empty paragraph that
+    // still occupies its row, and it keeps the answer it has always had.
+    if (band <= 0 && line.box.height <= 0) {
+      const fallback = Math.max(0, line.baseline);
+      return { x: line.contentX, y: line.box.y - fallback, height: fallback };
+    }
+    return { x: line.contentX, y: line.box.y + leading, height: band };
   }
   let chosen = spans[0]!;
   for (let index = 0; index < spans.length; index += 1) {

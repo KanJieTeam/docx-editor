@@ -109,8 +109,13 @@ interface Scenario {
 
 const SCENARIOS: readonly Scenario[] = [
   {
+    // 0.6, for the reason the structural pair below carries: this counter is dominated by
+    // WHERE the paragraph sits, not by what a keystroke costs. Swept across fractions it
+    // ranges 1..10 on this branch and 1..8 on the sources before it, and 0.5 is a fraction
+    // where the two 500-page fixtures put the paragraph on a page boundary. At 0.6 both land
+    // on 2 — the same number the gate held before the line box changed.
     name: 'steady-middle-text',
-    fraction: 0.5,
+    fraction: 0.6,
     target: 'any-paragraph',
     op: ({ paragraphId }) => ({ op: 'insertText', paragraphId, offset: 0, text: 'X' }),
   },
@@ -141,15 +146,21 @@ const SCENARIOS: readonly Scenario[] = [
   // paragraph at the caret, Backspace at a paragraph start joins it into the
   // one before. Both change the BLOCK COUNT, which is what distinguishes them
   // from every scenario above.
+  //
+  // 0.6, and the pair moves together so both still address one site. At 0.5 the paragraph
+  // the two 500-page fixtures pick sits on a page boundary, so Enter pushes a line across
+  // it and pays a whole unit reflow — 44 blocks rather than the 4 it costs anywhere else.
+  // Baselining that would leave the gate permitting an 11x regression in Enter's
+  // incremental cost, which is the one thing it exists to catch.
   {
     name: 'enter-split-middle',
-    fraction: 0.5,
+    fraction: 0.6,
     target: 'adjacent-body-pair',
     op: ({ paragraphId }) => ({ op: 'splitParagraph', paragraphId, offset: 10 }),
   },
   {
     name: 'backspace-join-middle',
-    fraction: 0.5,
+    fraction: 0.6,
     target: 'adjacent-body-pair',
     op: ({ paragraphId, nextParagraphId }) => ({
       op: 'joinParagraphs',
@@ -165,9 +176,15 @@ const SCENARIOS: readonly Scenario[] = [
   },
   // Ctrl+Enter: adds one whole sheet, so every page below moves without changing.
   // The scenario that proves whole-page tail reuse (a shifted tail must not re-place).
+  //
+  // 0.6, not 0.5. Whether a page break ADDS a sheet depends on where its paragraph sits:
+  // at 0.5 the two generated 500-page fixtures put it at the top of a page, where a break
+  // is a no-op, and both gates went from proving the remap to proving nothing. The
+  // synthetic units end on a forced page start, so slack inside a unit can also swallow the
+  // break; 0.6 lands past that on all three fixtures and each one gains exactly one sheet.
   {
     name: 'page-break-middle',
-    fraction: 0.5,
+    fraction: 0.6,
     target: 'adjacent-body-pair',
     op: ({ paragraphId }) => ({ op: 'insertPageBreak', paragraphId, offset: 0 }),
   },

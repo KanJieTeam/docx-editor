@@ -27,6 +27,7 @@ import {
   EMPTY_TABLE_CELL_STYLE_FORMATTING,
   EMPTY_TABLE_FORMATTING,
   cascadeTableFormatting,
+  tableStyleAffectsCells,
   tableCellStyleFormatting,
   type StyleCascadeTable,
   type TableCellStyleFormatting,
@@ -50,6 +51,25 @@ import {
   type CellWidthClaim,
   type PreferredWidth,
 } from './table-widths.ts';
+import {
+  CELL_PAD,
+  DEFAULT_CELL_MARGINS,
+  MAX_CELL_MARGIN_PT,
+  mergeMargins,
+  readMarginSides,
+  type CellMarginsPt,
+} from './table-cell-margins.ts';
+
+// Cell padding is its own unit (`table-cell-margins.ts`); re-exported here because this is
+// where the published table surface lives.
+export {
+  CELL_PAD,
+  DEFAULT_CELL_MARGINS,
+  MAX_CELL_MARGIN_PT,
+  mergeMargins,
+  readMarginSides,
+  type CellMarginsPt,
+};
 
 export {
   AUTO_PREFERRED_WIDTH,
@@ -64,15 +84,6 @@ export {
  * empty cell box rather than recursing.
  */
 export const MAX_TABLE_NESTING = 16;
-
-/**
- * Fallback cell padding in points (60 twips) when neither `tblCellMar` nor `tcMar` authors
- * a side. Matches the historical uniform `CELL_PAD` inset.
- */
-export const CELL_PAD = 3;
-
-/** Soft ceiling on a single margin side (~22"). */
-const MAX_CELL_MARGIN_PT = 31_680 / 20;
 
 /**
  * Soft ceiling on an authored `w:trHeight` (~22"). Hostile `w:val` otherwise becomes a
@@ -183,22 +194,6 @@ export interface TableAnchorFrames {
  */
 const MAX_TABLE_FLOAT_OFFSET_PT = 31_680 / 20;
 
-/** Resolved cell padding in points, after the table default and any per-cell override. */
-export interface CellMarginsPt {
-  readonly top: number;
-  readonly right: number;
-  readonly bottom: number;
-  readonly left: number;
-}
-
-/** Word's own default cell padding, applied where a table declares no `w:tblCellMar`. */
-export const DEFAULT_CELL_MARGINS: CellMarginsPt = {
-  top: CELL_PAD,
-  right: CELL_PAD,
-  bottom: CELL_PAD,
-  left: CELL_PAD,
-};
-
 /**
  * One cell in the resolved table structure.
  *
@@ -222,7 +217,7 @@ export interface SemanticTableCell {
   readonly vMergeContinue: boolean;
   /** `w:vAlign` — defaults to top when omitted/unrecognised. */
   readonly vAlign: CellVerticalAlign;
-  /** Resolved per-side margins (tcMar over tblCellMar over CELL_PAD). */
+  /** Resolved per-side margins (tcMar over tblCellMar over the table style over Word's default). */
   readonly margins: CellMarginsPt;
   /** Three-state authored `tcBorders` (omitted / none / edge). */
   readonly borders: CellBorderBox;
@@ -313,7 +308,7 @@ export interface SemanticTableStructure {
   readonly layoutFixed: boolean;
   /** Table-level `tblBorders` (three-state, including insideH/insideV). */
   readonly tableBorders: TableBorderBox;
-  /** Table-level `tblCellMar` defaults (per-side, CELL_PAD when a side is omitted). */
+  /** Table-level `tblCellMar` defaults (per-side, Word's own default when a side is omitted). */
   readonly defaultMargins: CellMarginsPt;
 }
 
@@ -402,49 +397,6 @@ function readRowHeight(rowProperties: OoxmlElement | undefined): TableRowHeight 
   // Omitted hRule + present val → atLeast (Word), not ECMA's auto-with-ignored-val.
   const effective: 'atLeast' | 'exact' = rule === 'exact' ? 'exact' : 'atLeast';
   return { rule: effective, valuePt };
-}
-
-function twipsSide(node: OoxmlElement | undefined): number | undefined {
-  if (!node) return undefined;
-  const raw = attributeValue(node, 'w');
-  if (raw === undefined || !/^\d{1,9}$/.test(raw)) return undefined;
-  const twips = Number(raw);
-  if (!Number.isFinite(twips) || twips < 0) return undefined;
-  const pt = twips / 20;
-  return pt > MAX_CELL_MARGIN_PT ? MAX_CELL_MARGIN_PT : pt;
-}
-
-/**
- * Read `tblCellMar` / `tcMar`. Each omitted side stays undefined so callers can fall back
- * per-side (tcMar → tblCellMar → CELL_PAD).
- */
-function readMarginSides(container: OoxmlElement | undefined): Partial<CellMarginsPt> {
-  if (!container) return {};
-  // `w:start`/`w:end` are the direction-relative spellings, and the ISO Strict `CT_TcMar` /
-  // `CT_TblCellMar` declare only those. Reading `w:left`/`w:right` alone put the text of a
-  // Strict-authored cell at the fallback pad instead of its authored inset.
-  const top = twipsSide(childNamed(container, 'top'));
-  const left = twipsSide(childNamed(container, 'left') ?? childNamed(container, 'start'));
-  const bottom = twipsSide(childNamed(container, 'bottom'));
-  const right = twipsSide(childNamed(container, 'right') ?? childNamed(container, 'end'));
-  return {
-    ...(top === undefined ? {} : { top }),
-    ...(left === undefined ? {} : { left }),
-    ...(bottom === undefined ? {} : { bottom }),
-    ...(right === undefined ? {} : { right }),
-  };
-}
-
-function mergeMargins(
-  tableDefaults: CellMarginsPt,
-  cellOverride: Partial<CellMarginsPt>
-): CellMarginsPt {
-  return {
-    top: cellOverride.top ?? tableDefaults.top,
-    right: cellOverride.right ?? tableDefaults.right,
-    bottom: cellOverride.bottom ?? tableDefaults.bottom,
-    left: cellOverride.left ?? tableDefaults.left,
-  };
 }
 
 /**
@@ -830,8 +782,13 @@ function readTableStructureUncached(
   // up to 4096 distinct sets, so the memo stops growing at the ceiling and later cells simply
   // resolve unmemoized — same bounded per-cell work either way.
   const styleByConditions = new Map<string, TableCellStyleFormatting>();
+  // Word's `TableNormal` states `w:tblPr` and nothing else, and every table now resolves it,
+  // so the identity check against `EMPTY_TABLE_FORMATTING` that used to short-circuit here
+  // stopped firing — every cell of every unstyled table flattened a chain that could only
+  // ever answer "nothing". Ask what the style actually contributes to a CELL instead.
+  const cellStyleMaterial = tableStyleAffectsCells(tableStyle);
   const styleFormattingFor = (conditions: readonly string[]): TableCellStyleFormatting => {
-    if (tableStyle === EMPTY_TABLE_FORMATTING) return EMPTY_TABLE_CELL_STYLE_FORMATTING;
+    if (!cellStyleMaterial) return EMPTY_TABLE_CELL_STYLE_FORMATTING;
     const key = conditions.join('|');
     const cached = styleByConditions.get(key);
     if (cached) return cached;

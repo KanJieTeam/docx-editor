@@ -39,7 +39,12 @@ import type {
 import { paragraphLayoutKey, type ParagraphLayoutCache } from './layout-cache.ts';
 import { alignDrawings, alignSpans, breakParagraph, type PendingLine } from './paragraph-flow.ts';
 import { mergeBoundariesOf, remapMergedLines } from './merged-paragraph-ranges.ts';
-import { paragraphMergeGroupOf } from './story-roots.ts';
+import { isEmptyCellTerminator, paragraphMergeGroupOf } from './story-roots.ts';
+import {
+  publishDeferredRowAnchors,
+  rowDepsForAnchors,
+  type DeferredRowAnchor,
+} from './table-anchor-republish.ts';
 import {
   markRevisionFields,
   paragraphMarkFormatRevisionOf,
@@ -299,6 +304,15 @@ export interface CellPlaceCursor {
   readonly lineIndex: number;
   readonly previousSpaceAfter: number;
   readonly paragraphFragmentIndex: number;
+  /**
+   * Did the block before `blockIndex` actually PUT a table on the page?
+   *
+   * Carried rather than re-derived, because the only thing left to re-derive it from is the
+   * source node's kind — and a `w:tbl` past the nesting ceiling, or one with no `w:tr` at
+   * all, is a table that emits nothing. Reading the kind on a continuation would let the
+   * terminator collapse behind a table that never appeared on that page.
+   */
+  readonly precededByEmittedTable: boolean;
 }
 
 export function initialCellCursors(row: SemanticTableRow): CellPlaceCursor[] {
@@ -307,122 +321,8 @@ export function initialCellCursors(row: SemanticTableRow): CellPlaceCursor[] {
     lineIndex: 0,
     previousSpaceAfter: 0,
     paragraphFragmentIndex: 0,
+    precededByEmittedTable: false,
   }));
-}
-
-function anchorPublishSink(
-  deps: TableFlowDeps
-): ((drawings: readonly AnchoredDrawingRecord[]) => void) | undefined {
-  return deps.publishAnchoredDrawings ?? deps.collectAnchoredDrawings;
-}
-
-type DeferredRowAnchor = {
-  readonly paragraph: OoxmlNode;
-  readonly paragraphId: string;
-  readonly paragraphBox: LayoutBox;
-  readonly lines: readonly LineRecord[];
-  readonly cellOriginX: number;
-  readonly cellContentWidth: number;
-};
-
-function publishDeferredRowAnchors(
-  deferredRowAnchors: readonly DeferredRowAnchor[],
-  cells: readonly TableCellFragmentRecord[],
-  rowTop: number,
-  rowHeight: number,
-  deps: TableFlowDeps
-): void {
-  const publish = anchorPublishSink(deps);
-  if (
-    deferredRowAnchors.length === 0 ||
-    !publish ||
-    !deps.inlineDrawingLayout ||
-    !deps.anchorFrameBase ||
-    !deps.pageContentClip
-  ) {
-    return;
-  }
-  for (const pending of deferredRowAnchors) {
-    let paragraphBox: LayoutBox | null = null;
-    let cellFrameBox: LayoutBox | null = null;
-    let lines: readonly LineRecord[] = pending.lines;
-    for (const cell of cells) {
-      for (const block of cell.blocks) {
-        if (block.kind === 'paragraph' && block.paragraphId === pending.paragraphId) {
-          paragraphBox = block.box;
-          lines = block.lines;
-          cellFrameBox = cell.box;
-          break;
-        }
-      }
-      if (paragraphBox) break;
-    }
-    if (!paragraphBox) continue;
-    const cellBox =
-      cellFrameBox ??
-      Object.freeze({
-        x: pending.cellOriginX,
-        y: rowTop,
-        width: pending.cellContentWidth,
-        height: rowHeight,
-      });
-    publish(
-      publishAnchoredDrawingsForParagraph({
-        paragraph: pending.paragraph,
-        paragraphId: pending.paragraphId,
-        paragraphBox,
-        lines,
-        drawingLayout: deps.inlineDrawingLayout,
-        frameBase: deps.anchorFrameBase(),
-        columnBox: deps.columnBoxForParagraph?.(paragraphBox) ?? paragraphBox,
-        cellBox,
-        pageClip: deps.pageContentClip(),
-        measurer: deps.measurer,
-        ...(deps.layoutTextboxStoryFor ? { layoutTextboxStory: deps.layoutTextboxStoryFor } : {}),
-        ...(deps.displayMode ? { displayMode: deps.displayMode } : {}),
-      })
-    );
-  }
-}
-
-function rowDepsForAnchors(
-  deps: TableFlowDeps,
-  deferredRowAnchors: DeferredRowAnchor[]
-): {
-  readonly rowDeps: TableFlowDeps;
-  readonly flushDeferred: (
-    cells: readonly TableCellFragmentRecord[],
-    rowTop: number,
-    rowHeight: number
-  ) => void;
-} {
-  const publishAnchoredDrawings = anchorPublishSink(deps);
-  const parentDefer = deps.deferAnchoredDrawings;
-  if (!publishAnchoredDrawings && !parentDefer) {
-    return { rowDeps: deps, flushDeferred: () => {} };
-  }
-  const rowDeps: TableFlowDeps = {
-    ...deps,
-    publishAnchoredDrawings,
-    collectAnchoredDrawings: undefined,
-    deferAnchoredDrawings: (pending) => {
-      deferredRowAnchors.push(pending);
-    },
-  };
-  const flushDeferred = (
-    cells: readonly TableCellFragmentRecord[],
-    rowTop: number,
-    rowHeight: number
-  ): void => {
-    if (deferredRowAnchors.length === 0) return;
-    if (publishAnchoredDrawings && !deps.anchorDeferOnly) {
-      publishDeferredRowAnchors(deferredRowAnchors, cells, rowTop, rowHeight, deps);
-    } else if (parentDefer) {
-      for (const pending of deferredRowAnchors) parentDefer(pending);
-    }
-    deferredRowAnchors.length = 0;
-  };
-  return { rowDeps, flushDeferred };
 }
 
 function sumCols(cols: readonly number[], from: number, to: number): number {
@@ -456,6 +356,23 @@ function placeCellParagraph(
     readonly includeAfter?: boolean;
     /** When false, omit the bottom border (paragraph continues). */
     readonly includeBottomBorder?: boolean;
+    /**
+     * The empty `w:p` a cell must end with when its content ends with a `w:tbl`: placed at
+     * `top` so it stays addressable, but charged nothing — no spacing, no rules, no line
+     * box. Word and LibreOffice both draw it that way.
+     */
+    readonly collapseHeight?: boolean;
+    /**
+     * How much flowed content sits above the collapse point inside this cell.
+     *
+     * The caret for a collapsed terminator is drawn upward from the collapse point, sized off
+     * the line's published `baseline`. That ascent comes from the paragraph MARK's own
+     * `w:rPr` and has nothing to do with the rows above it, so a 36 pt mark over a 6 pt
+     * nested row — or any terminator in a cell shorter than its own ascent — drew a caret
+     * that started above the page. Only the caller knows the band, so it passes it and the
+     * published baseline is clamped into it.
+     */
+    readonly collapseBandAbove?: number;
     /** What the table style says about this cell's paragraphs (17.7.6.6). */
     readonly tableCellStyle?: TableCellStyleFormatting;
   }
@@ -586,15 +503,47 @@ function placeCellParagraph(
   const maxBottom = options?.maxBottom ?? Number.POSITIVE_INFINITY;
   const includeAfter = options?.includeAfter ?? true;
   const includeBottomBorder = options?.includeBottomBorder ?? true;
+  // ONE question, asked once, so the next kind of furniture is caught by construction rather
+  // than arriving as the third late special case. The caller settles POSITION — last block of
+  // a cell, behind a table that actually emitted, structurally empty. What decides whether
+  // the collapse is SAFE is resolved here, and the line runs between two kinds of thing:
+  //
+  //   sized OFF the line box   borders, shading — a zero box paints a zero band, which is
+  //                            what "occupies no space" should look like. These collapse.
+  //   own intrinsic size       a list marker glyph, and the pilcrow and change bar a tracked
+  //                            `w:ins`/`w:del` on the paragraph MARK publishes. A zero box
+  //                            does not hide these, it MISPLACES them — paint centres the
+  //                            marker half a line above its row and drops the change bar
+  //                            entirely. These block the collapse.
+  //
+  // The mark revisions are read only in All Markup — that is the only view where the pilcrow
+  // and the change bar exist. In the resolved or original view a terminator whose mark is
+  // tracked-INSERTED publishes neither, so blocking there would keep a line Word's accept-all
+  // output does not have. (A tracked DELETE is a different case and never reaches here: the
+  // resolved view merges that paragraph away upstream.)
+  //
+  // Called behind the position gate, not before it. This runs for every paragraph of every
+  // cell on every placement pass — trial rows and continuations included — and each call is
+  // two `find` scans over `w:pPr` and `w:rPr`, which `||` would not short-circuit because
+  // `listItem` is undefined for the non-list paragraphs that are the overwhelming majority.
+  // The same pair of calls further down is gated on `showsMarkup` for exactly this reason.
+  const publishesPlacedGlyphs = (): boolean =>
+    listItem !== undefined ||
+    (deps.displayMode === 'all-markup' &&
+      (paragraphMarkRevisionsOf(paragraph).length > 0 ||
+        paragraphMarkFormatRevisionOf(paragraph) !== null));
+  const collapseHeight = (options?.collapseHeight ?? false) && !publishesPlacedGlyphs();
 
   const appliedBefore =
-    lineStart === 0 ? collapsedSpaceBefore(spacing.before, previousSpaceAfter) : 0;
+    lineStart === 0 && !collapseHeight
+      ? collapsedSpaceBefore(spacing.before, previousSpaceAfter)
+      : 0;
   const fragmentX = originX + indent.left;
   // The top rule and its gap are flow height above the first line, exactly as the bottom rule
   // is flow height below the last — so the cell's content band has to reserve it or a boxed
   // paragraph's frame paints over the cell's own top border. Reserved on the FIRST fragment
   // only: a paragraph continued onto the next page opens once, the way it closes once.
-  const topExtent = lineStart === 0 ? paragraphBorderExtentPt(borders.top) : 0;
+  const topExtent = lineStart === 0 && !collapseHeight ? paragraphBorderExtentPt(borders.top) : 0;
   const rawRecords: LineRecord[] = [];
   let y = top + appliedBefore + topExtent;
   let nextLineIndex = lineStart;
@@ -604,13 +553,18 @@ function placeCellParagraph(
     const pendingLine = lines[lineIndex]!;
     const isLastLine = lineIndex === lines.length - 1;
     const borderExtra =
-      isLastLine && includeBottomBorder && bottomBorder ? paragraphBorderExtentPt(bottomBorder) : 0;
-    const afterExtra = isLastLine && includeAfter ? spacing.after : 0;
-    const skipBefore =
-      pageZones.length > 0
+      isLastLine && includeBottomBorder && bottomBorder && !collapseHeight
+        ? paragraphBorderExtentPt(bottomBorder)
+        : 0;
+    const afterExtra = isLastLine && includeAfter && !collapseHeight ? spacing.after : 0;
+    const skipBefore = collapseHeight
+      ? 0
+      : pageZones.length > 0
         ? topAndBottomSkipBeforeLine(y, pendingLine.height, pageZones)
         : (pendingLine.exclusionSkipBefore ?? 0);
-    const lineBottom = y + skipBefore + pendingLine.height + borderExtra + afterExtra;
+    const lineBottom = collapseHeight
+      ? y
+      : y + skipBefore + pendingLine.height + borderExtra + afterExtra;
     if (lineBottom > maxBottom + 0.001) {
       break;
     }
@@ -683,16 +637,22 @@ function placeCellParagraph(
         x: originX + indent.left,
         y,
         width: available,
-        height: pendingLine.height,
+        // ZERO-height, not just zero flow: selection bands, `paragraphShadingBox` and
+        // `caretBoxOnLine` all read this box, so a line that keeps its height while the cell
+        // stops at `y` paints caret and highlight below the row. It costs the terminator its
+        // caret until something is typed into it, which un-collapses it.
+        height: collapseHeight ? 0 : pendingLine.height,
       },
       contentX: alignedSpans[0]?.box.x ?? lineIndent + alignOffset,
-      baseline: pendingLine.baseline,
-      leading: pendingLine.leading,
-      trailingSpacing: pendingLine.trailingSpacing,
+      baseline: collapseHeight
+        ? Math.max(0, Math.min(pendingLine.baseline, options?.collapseBandAbove ?? 0))
+        : pendingLine.baseline,
+      leading: collapseHeight ? 0 : pendingLine.leading,
+      trailingSpacing: collapseHeight ? 0 : pendingLine.trailingSpacing,
       ...(pendingLine.deletedRanges ? { deletedRanges: pendingLine.deletedRanges } : {}),
       ...(pendingLine.anchorRevisions ? { anchorRevisions: pendingLine.anchorRevisions } : {}),
     });
-    y += pendingLine.height;
+    if (!collapseHeight) y += pendingLine.height;
     nextLineIndex = lineIndex + 1;
     fitted = true;
   }
@@ -743,7 +703,11 @@ function placeCellParagraph(
     });
     contentTop = ruleY;
   }
-  if (complete && includeBottomBorder && bottomBorder) {
+  // Gated on `collapseHeight` exactly as the fit test is: charging the rule here after the
+  // fit test charged nothing grows `contentBottom` past the row, and past `maxBottom` on a
+  // page's last row. `topExtent` drops the top rule for the same reason, and the two edges
+  // have to agree or a boxed terminator paints half its frame.
+  if (complete && includeBottomBorder && bottomBorder && !collapseHeight) {
     const closeStroke = paragraphBorderStrokeWidthPt(bottomBorder);
     const ruleY = linesBottom + bottomBorder.spacePt;
     const box = {
@@ -800,7 +764,7 @@ function placeCellParagraph(
       },
     });
   }
-  const appliedAfter = complete && includeAfter ? spacing.after : 0;
+  const appliedAfter = complete && includeAfter && !collapseHeight ? spacing.after : 0;
   const bottom = contentBottom + appliedAfter;
   // Shading fills the FRAME when there is one (a side rule is what makes it a box), and the
   // line area otherwise — the body flow's rule, stated once more for the cell lane.
@@ -949,6 +913,7 @@ export function flowBlocksInBox(
       lineIndex: 0,
       previousSpaceAfter: 0,
       paragraphFragmentIndex: 0,
+      precededByEmittedTable: false,
     }
   );
   return { blocks: bounded.blocks, bottom: bounded.bottom };
@@ -963,7 +928,9 @@ function flowBlocksInBoxBounded(
   depth: number,
   deps: TableFlowDeps,
   cursor: CellPlaceCursor,
-  tableCellStyle?: TableCellStyleFormatting
+  tableCellStyle?: TableCellStyleFormatting,
+  /** True for a `w:tc`: its last block may be the empty terminator a nested table forces. */
+  inTableCell = false
 ): {
   readonly blocks: BlockFragmentRecord[];
   readonly bottom: number;
@@ -980,6 +947,8 @@ function flowBlocksInBoxBounded(
   let paragraphFragmentIndex = cursor.paragraphFragmentIndex;
   let fitted = false;
   let nestedSplitBlocked = false;
+  // Carried across page cuts by the cursor; never re-derived from the source node's kind.
+  let lastEmittedTable = cursor.precededByEmittedTable;
 
   while (blockIndex < blocks.length) {
     const block = blocks[blockIndex]!;
@@ -992,6 +961,7 @@ function flowBlocksInBoxBounded(
       // Nested tables are atomic across row splits: place wholly or stop before them.
       const nested = emitNestedTable(block, left, right, y, depth + 1, deps);
       if (!nested) {
+        lastEmittedTable = false;
         blockIndex += 1;
         continue;
       }
@@ -1004,16 +974,33 @@ function flowBlocksInBoxBounded(
       fragments.push(nested.fragment);
       y = nested.bottom;
       fitted = true;
+      lastEmittedTable = true;
       blockIndex += 1;
       lineIndex = 0;
       continue;
     }
     if (block.kind !== 'paragraph') {
+      lastEmittedTable = false;
       blockIndex += 1;
       lineIndex = 0;
       continue;
     }
 
+    // POSITION only. Whether this paragraph may actually collapse is one question about what
+    // it would publish, and `placeCellParagraph` is where every answer to it already lives —
+    // see `publishesPlacedGlyphs` there. Deciding it in two places is how the list marker and
+    // the tracked paragraph mark each arrived as their own late special case.
+    //
+    // `lastEmittedTable` rather than the source node's kind: `emitNestedTable` returns null
+    // for a `w:tbl` past the nesting ceiling and for one with no `w:tr` at all (schema-valid,
+    // `EG_ContentRowContent` is minOccurs=0), and the walk simply steps over it. Collapsing
+    // behind a table that produced nothing leaves the row with no content and no terminator,
+    // which paints as a hairline.
+    const collapsible =
+      inTableCell &&
+      blockIndex === blocks.length - 1 &&
+      lastEmittedTable &&
+      isEmptyCellTerminator(block);
     const placed = placeCellParagraph(
       block,
       left,
@@ -1027,6 +1014,8 @@ function flowBlocksInBoxBounded(
         maxBottom,
         includeAfter: true,
         includeBottomBorder: true,
+        collapseHeight: collapsible,
+        collapseBandAbove: y - top,
         ...(tableCellStyle ? { tableCellStyle } : {}),
       }
     );
@@ -1038,6 +1027,7 @@ function flowBlocksInBoxBounded(
     fitted = true;
     if (placed.complete) {
       previousSpaceAfter = placed.spaceAfter;
+      lastEmittedTable = false;
       blockIndex += 1;
       lineIndex = 0;
       paragraphFragmentIndex = 0;
@@ -1051,6 +1041,7 @@ function flowBlocksInBoxBounded(
           lineIndex: placed.nextLineIndex,
           previousSpaceAfter: 0,
           paragraphFragmentIndex: paragraphFragmentIndex + 1,
+          precededByEmittedTable: lastEmittedTable,
         },
         complete: false,
         fitted: true,
@@ -1067,6 +1058,7 @@ function flowBlocksInBoxBounded(
       lineIndex,
       previousSpaceAfter,
       paragraphFragmentIndex,
+      precededByEmittedTable: lastEmittedTable,
     },
     complete: blockIndex >= blocks.length,
     fitted,
@@ -1204,17 +1196,22 @@ export function layoutRowFragmentBounded(
   let anyNestedBlocked = false;
   // Grow from the row top. Empty / vMerge-continue cells contribute one default line plus
   // THEIR authored insets below; fitted cells contribute measured content only. Seeding with
-  // `defaultLineHeight + 2 * CELL_PAD` used to force ~20pt rows even when tcMar was tighter
+  // `defaultLineHeight + 2 * pad` used to force ~20pt rows even when tcMar was tighter
   // and the cell's own line was shorter — nested tables picked that up as blank bottom pad.
   let rowBottom = rowTop;
 
   for (let cellIndex = 0; cellIndex < row.cells.length; cellIndex += 1) {
     const cell = row.cells[cellIndex]!;
-    const cursor = cursors[cellIndex] ?? {
+    // Typed, not inferred: without `noUncheckedIndexedAccess` the indexed read is already
+    // non-nullable, so TypeScript discards the right operand's type and a member missing
+    // from it goes unreported — `precededByEmittedTable` would arrive as `undefined` wearing
+    // a `boolean`, and the collapse would silently never fire for that cell.
+    const cursor: CellPlaceCursor = cursors[cellIndex] ?? {
       blockIndex: 0,
       lineIndex: 0,
       previousSpaceAfter: 0,
       paragraphFragmentIndex: 0,
+      precededByEmittedTable: false,
     };
     // The grid column is decided once, at read time, where `w:gridBefore` is known and the
     // row's TOTAL span is bounded (a row of maximum-span cells would otherwise walk millions
@@ -1263,7 +1260,8 @@ export function layoutRowFragmentBounded(
           depth,
           flowDeps,
           cursor,
-          cell.styleFormatting
+          cell.styleFormatting,
+          true
         );
         blocks = flow.blocks;
         contentBottom = flow.bottom;

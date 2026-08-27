@@ -14,6 +14,37 @@
 // reports them, otherwise a bounded size×1.15 / 0.8 fallback. Paint consumes the
 // layout-published line height as an explicit pixel value — never CSS `line-height:
 // normal` — so this module must not mount a DOM probe or call `getBoundingClientRect`.
+//
+// The line box here does NOT match `shaped-measurer.ts` exactly, and it cannot. That matters
+// more than it sounds: `resolveDefaultSurfaceMeasurer` hands this measurer to the surface as
+// the WHOLE document's whenever a 2d context exists and no shaper was injected, so the
+// residual below is the amount by which one file paginates differently with HarfBuzz loaded
+// and without it.
+//
+// Word's single-spaced line box is ascent + descent + `hhea.lineGap`, which the shaped path
+// reads straight out of the font. `TextMetrics` reports no leading at all — there is no
+// `fontBoundingBoxLeading`, and the one place a browser sums the three is CSS `line-height:
+// normal`, which this module may not reach for. Canvas cannot even say WHETHER a face has a
+// gap, so "use the face box when it is already complete" is not implementable here.
+//
+// What the face box IS is a lower bound on Word's box, because the term it omits is
+// non-negative. The height below is therefore the larger of that bound and the deterministic
+// 1.15 em floor — a trade, not an agreement. Measured in Chrome against the five shipped
+// faces at 10/20/40/80 px, error against Word's own number:
+//
+//   face                face box alone     with the floor
+//   Liberation Sans     -3.3 .. -4.3%      0.0%
+//   Liberation Serif    -2.2 .. -4.3%      0.0%
+//   Carlito             -1.7 .. +6.5%      unchanged
+//   Caladea              0.0 .. +4.3%      unchanged
+//   Liberation Mono     -2.9 .. +1.5%      +1.5%
+//
+// The floor is the better trade — worst case 4.3% down to 1.5%, and the two faces carrying
+// Arial's and Times New Roman's gaps come exactly onto Word's number — but it is not free:
+// Liberation Mono is 1.1328 em, under the floor, so a Liberation Mono document paginates at
+// 1.15 em per line here against the shaper's 1.1328. Closing that needs the gap from
+// somewhere other than canvas. Chrome also rounds `fontBoundingBox*` to whole pixels, which
+// is why the face box alone wanders at small sizes.
 
 import type { TextMeasurer } from './semantic-records.ts';
 import type { ResolvedRunStyle } from './run-style.ts';
@@ -284,10 +315,13 @@ export function tryCreateCanvasMeasurer(options: CanvasMeasurerOptions = {}): Te
       if (typeof ascent === 'number' && Number.isFinite(ascent) && ascent > 0) {
         baseline = ascent / scale;
         if (typeof descent === 'number' && Number.isFinite(descent) && descent >= 0) {
-          // Canvas reports the face box (ascent + descent). That is also Word's line-box
-          // basis: `hhea.lineGap` is external leading and must not inflate every line.
+          // Canvas reports the face box (ascent + descent) and no leading, so it is a LOWER
+          // BOUND on Word's ascent + descent + `hhea.lineGap`: short by the gap for a face
+          // that carries one, exact for a face that does not. Take the larger of it and the
+          // deterministic 1.15 em floor, which is Word's own ratio for the gapped faces.
+          // See the module header for the measured error per face.
           const box = (ascent + descent) / scale;
-          if (box > 0) height = box;
+          if (box > 0) height = Math.max(box, height);
         }
       }
       if (!(height > 0)) height = size * 1.15;

@@ -1,9 +1,10 @@
 // Exact line metrics and advances, from the font itself (task 7.7).
 //
 // Every host-side measurement is a fraction out, and the fraction is not cosmetic. Word
-// derives single line spacing from the font's ascent and descent. `hhea.lineGap` is external
-// leading: Word does not add it to the line box. Including it makes every line a fraction too
-// tall, and that fraction accumulates until text paginates earlier than Word.
+// derives single line spacing from the face's ascent, descent AND `hhea.lineGap` — the same
+// total GDI reports as `tmHeight + tmExternalLeading`. Dropping the gap makes every line of a
+// face that has one a fraction too short, and that fraction accumulates until text paginates
+// later than Word.
 //
 // The font bytes carry the exact numbers, and the shaper already reads them. This adapts
 // that shaper to the semantic layout lane's `TextMeasurer` port, so the lane stays DOM-free
@@ -80,6 +81,33 @@ export interface ShapedMeasurerOptions {
   readonly script?: string;
   readonly language?: string;
 }
+
+/**
+ * Ceiling on `hhea.lineGap`, as a multiple of the face's own ascent + descent.
+ *
+ * The gap is file-derived, signed, and unbounded in the format, so an embedded font is a
+ * lever on every line box in the document. Measured over all twenty faces this engine ships,
+ * the largest real gap is Liberation Serif's 87/2268 = 0.038 face boxes; Liberation Sans is
+ * 0.029 and Carlito, Caladea and Liberation Mono declare none at all. Even a font with
+ * unusually generous leading is a few percent, not a multiple.
+ *
+ * 0.5 therefore clears the largest face this engine ships by 13x — no real document can
+ * reach it — while capping the worst case an attacker can produce at 1.5x the face box. A
+ * full face box would have allowed 2x, which is a usable layout blow-up from a file.
+ */
+const MAX_LINE_GAP_FACE_BOXES = 0.5;
+
+/**
+ * Ceiling on a face's own ascent + descent, as a multiple of the size it is drawn at.
+ *
+ * Measured over the twenty faces this engine ships plus the test corpus, the largest face
+ * box is Carlito's 1.2207 em; Caladea is 1.15, Liberation Mono 1.1328, Liberation Sans
+ * 1.1172, Liberation Serif 1.1074. Faces built for scripts with tall ascenders reach about
+ * 2 em, so 4 clears every real face by a wide margin — it exists only so a font declaring a
+ * huge `hhea.ascender` over a tiny `head.unitsPerEm` cannot make one run a page. With the
+ * gap ceiling above it, the worst line box a file can ask for is 6 em.
+ */
+const MAX_FACE_BOX_EM = 4;
 
 /** Super and subscript draw at three quarters, so they measure at three quarters. */
 const sizeFactorOf = (style: ResolvedRunStyle): number =>
@@ -235,11 +263,38 @@ export function createShapedMeasurer(options: ShapedMeasurerOptions): TextMeasur
         const shaped = shape(' ', font, style);
         const ascent = shaped.metrics.ascent / fixedPointScale;
         const descent = shaped.metrics.descent / fixedPointScale;
-        // `lineGap` is external leading. Word's line box uses the face ascent + descent;
-        // adding the gap again makes Arial/Liberation Sans about 2.9% too tall per line.
-        const height = ascent + descent;
+        // Word's single-spaced line box is ascent + descent + lineGap, and the leading sits
+        // BELOW the descent — the same total GDI reports as `tmHeight + tmExternalLeading`.
+        // Dropping the gap is what made a 10 pt Arial line 11.17 pt where Word draws 11.50
+        // (Liberation Sans and Liberation Serif both carry Arial's and Times New Roman's own
+        // gap, so both land on Word's 1.1499 em). Faces with no gap — Carlito, Caladea,
+        // Liberation Mono — are unaffected, which is why the error only showed on the two
+        // faces that have one.
+        //
+        // BOUNDED IN THE EM, because all three numbers are `hhea` int16 read from a font a
+        // DOCX can embed and nothing downstream bounds a line box. The shaper admits any
+        // safe integer over any `upem > 0`, so `ascender = 32767` over `upem = 16` is a face
+        // box of ~2048 em on its own — bounding the gap against the face box alone would
+        // have clamped one attacker-controlled number against another.
+        //
+        // The face box is clamped first, absolutely, against the drawn size. Ascent and
+        // descent scale together so the baseline stays where it sits inside the box. Then
+        // the gap: non-negative, because external leading is non-negative on Windows and in
+        // GDI and a face declaring `lineGap = -(ascender - descender) + 1` would otherwise
+        // give every run in that family a one-unit line that the `height > 0` guard does not
+        // catch; and at most half a face box above.
+        const baseSizePt = halfPoints / 2;
+        const rawFaceBox = ascent + descent;
+        const faceBoxCeiling = baseSizePt * MAX_FACE_BOX_EM;
+        const squeeze = rawFaceBox > faceBoxCeiling ? faceBoxCeiling / rawFaceBox : 1;
+        const faceBox = rawFaceBox * squeeze;
+        const lineGap = Math.min(
+          Math.max(0, shaped.metrics.lineGap / fixedPointScale),
+          faceBox * MAX_LINE_GAP_FACE_BOXES
+        );
+        const height = faceBox + lineGap;
         if (height > 0) {
-          metrics = { height, baseline: ascent };
+          metrics = { height, baseline: ascent * squeeze };
         } else {
           metrics = fallback.lineMetrics(style);
           scalable = false;

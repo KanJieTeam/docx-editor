@@ -96,22 +96,22 @@ const EXPECTED_DEFAULT: Readonly<Record<string, Work>> = {
     cache: cache(12, 3201, 3201),
   },
   'enter-split-middle': {
-    placed: 13,
+    placed: 14,
     total: 3201,
     reusedPages: 154,
     fullPasses: 1,
     pagesBefore: 204,
     pagesAfter: 204,
-    cache: cache(11, 3202, 3202),
+    cache: cache(12, 3202, 3202),
   },
   'backspace-join-middle': {
-    placed: 11,
+    placed: 12,
     total: 3199,
     reusedPages: 154,
     fullPasses: 1,
     pagesBefore: 204,
     pagesAfter: 204,
-    cache: cache(10, 3201, 3201),
+    cache: cache(11, 3201, 3201),
   },
   'enter-split-early': {
     placed: 14,
@@ -123,13 +123,13 @@ const EXPECTED_DEFAULT: Readonly<Record<string, Work>> = {
     cache: cache(12, 3202, 3202),
   },
   'page-break-middle': {
-    placed: 12,
+    placed: 13,
     total: 3200,
     reusedPages: 99,
     fullPasses: 1,
     pagesBefore: 204,
     pagesAfter: 205,
-    cache: cache(11, 3201, 3201),
+    cache: cache(12, 3201, 3201),
   },
 };
 
@@ -168,22 +168,22 @@ test('500-page multi-section: Enter and Backspace stay incremental', () => {
   );
   const work = workByName(report);
   expect(work['enter-split-middle']).toEqual({
-    placed: 5,
+    placed: 4,
     total: 8400,
     reusedPages: 624,
     fullPasses: 1,
     pagesBefore: 630,
     pagesAfter: 630,
-    cache: cache(3855, 12076, 12076),
+    cache: cache(3887, 12076, 12076),
   });
   expect(work['backspace-join-middle']).toEqual({
-    placed: 3,
+    placed: 2,
     total: 8398,
     reusedPages: 624,
     fullPasses: 1,
     pagesBefore: 630,
     pagesAfter: 630,
-    cache: cache(3853, 12075, 12075),
+    cache: cache(3886, 12075, 12075),
   });
   expect(work['enter-split-early']).toEqual({
     placed: 16,
@@ -192,19 +192,19 @@ test('500-page multi-section: Enter and Backspace stay incremental', () => {
     fullPasses: 1,
     pagesBefore: 630,
     pagesAfter: 630,
-    cache: cache(3794, 12076, 12076),
+    cache: cache(3899, 12076, 12076),
   });
   expect(work['steady-middle-text']!.placed).toBe(2);
   expect(work['wrap-middle-text']!.placed).toBe(41);
   // Adds one whole page; the pages below move but are reused, never re-placed.
   expect(work['page-break-middle']).toEqual({
-    placed: 43,
+    placed: 3,
     total: 8399,
-    reusedPages: 312,
+    reusedPages: 372,
     fullPasses: 1,
     pagesBefore: 630,
     pagesAfter: 631,
-    cache: cache(3893, 12075, 12075),
+    cache: cache(3887, 12075, 12075),
   });
 }, 240_000);
 
@@ -219,22 +219,22 @@ test('500-page single-section: whole-page shifts reuse the tail', () => {
   );
   const work = workByName(report);
   expect(work['enter-split-middle']).toEqual({
-    placed: 5,
+    placed: 4,
     total: 8296,
     reusedPages: 629,
     fullPasses: 1,
     pagesBefore: 630,
     pagesAfter: 630,
-    cache: cache(3855, 11972, 11972),
+    cache: cache(3887, 11972, 11972),
   });
-  expect(work['backspace-join-middle']!.placed).toBe(3);
+  expect(work['backspace-join-middle']!.placed).toBe(2);
   expect(work['page-break-middle']).toEqual({
-    placed: 43,
+    placed: 3,
     total: 8295,
-    reusedPages: 626,
+    reusedPages: 629,
     fullPasses: 1,
     pagesBefore: 630,
     pagesAfter: 631,
-    cache: cache(3893, 11971, 11971),
+    cache: cache(3887, 11971, 11971),
   });
 }, 240_000);

@@ -107,6 +107,14 @@ export interface StyleCascadeTable {
   /** `w:style[@w:default='1'][@w:type='character']` — last wins among defaults of that type. */
   readonly defaultCharacterStyleId: string | null;
   /**
+   * `w:style[@w:default='1'][@w:type='table']` — last wins among defaults of that type.
+   *
+   * A `w:tbl` with no `w:tblStyle` still resolves against this one. Word's own
+   * `TableNormal` is where the 0/108/0/108 twip cell margins live, so skipping it gives
+   * every unstyled table padding the document says it does not have.
+   */
+  readonly defaultTableStyleId: string | null;
+  /**
    * The theme part's Latin typefaces, for `w:rFonts` theme references.
    *
    * Lives on the cascade because it is document-level style material with the same
@@ -346,14 +354,65 @@ export const EMPTY_TABLE_FORMATTING: CascadedTableFormatting = Object.freeze({
   conditional: new Map<string, OoxmlElement>(),
 });
 
-/** Resolve a `w:tblStyle` id against the cascade, base-first. */
+/**
+ * Resolve a `w:tblStyle` id against the cascade, base-first.
+ *
+ * An absent or unusable id falls to the document's default table style, the same way an
+ * absent `w:pStyle` falls to the default paragraph style. Word's `TableNormal` is what
+ * states the 0/108/0/108 twip cell margins, and a table that names no style still gets
+ * them.
+ */
 export function cascadeTableFormatting(
   table: StyleCascadeTable,
   styleId: string | undefined
 ): CascadedTableFormatting {
-  if (!styleId || !isValidStyleId(styleId)) return EMPTY_TABLE_FORMATTING;
+  const named = styleId && isValidStyleId(styleId) ? styleId : null;
+  const fromNamed = named ? cachedTableFormatting(table, named) : null;
+  if (fromNamed) return fromNamed;
+  // A `w:tblStyle` naming a style the part does not define is no statement at all, so it
+  // falls to the default the same way an absent one does. Checked AFTER the chain rather
+  // than before it: a well-formed id that resolves to nothing would otherwise keep the
+  // borders, conditional formats and `w:tblCellMar` that `TableNormal` supplies.
+  const fallback = table.defaultTableStyleId;
+  if (!fallback || fallback === named) return EMPTY_TABLE_FORMATTING;
+  return cachedTableFormatting(table, fallback) ?? EMPTY_TABLE_FORMATTING;
+}
+
+/**
+ * One resolved chain per (cascade, style id), for the life of the cascade.
+ *
+ * Every table in a document that names the same style — and every table that names none,
+ * which is now every one of them through the default — asks for the same answer. Flattening
+ * the chain per table allocated five containers each and showed up as GC on a corpus pass.
+ * The key space is bounded by the styles map, because an id that resolves to an empty chain
+ * is never stored.
+ */
+const tableFormattingMemos = new WeakMap<StyleCascadeTable, Map<string, CascadedTableFormatting>>();
+
+function cachedTableFormatting(
+  table: StyleCascadeTable,
+  styleId: string
+): CascadedTableFormatting | null {
+  let byId = tableFormattingMemos.get(table);
+  if (!byId) {
+    byId = new Map();
+    tableFormattingMemos.set(table, byId);
+  }
+  const cached = byId.get(styleId);
+  if (cached) return cached;
+  const built = flattenTableStyleChain(table, styleId);
+  if (!built) return null;
+  byId.set(styleId, built);
+  return built;
+}
+
+/** Flatten one style's `w:basedOn` chain, base-first. Null when the id resolves to nothing. */
+function flattenTableStyleChain(
+  table: StyleCascadeTable,
+  styleId: string
+): CascadedTableFormatting | null {
   const chain = styleChain(table, styleId, 'table');
-  if (chain.length === 0) return EMPTY_TABLE_FORMATTING;
+  if (chain.length === 0) return null;
   const tablePropertyNodes: OoxmlElement[] = [];
   const paragraphPropertyNodes: OoxmlElement[] = [];
   const paragraphProperties: OoxmlProperty[] = [];
@@ -368,13 +427,64 @@ export function cascadeTableFormatting(
       conditional.set(conditionType, node);
     }
   }
-  return {
-    tablePropertyNodes,
-    paragraphPropertyNodes,
-    paragraphProperties,
-    runProperties,
-    conditional,
-  };
+  // Immutable because it is now SHARED by every table that names this style — and with the
+  // default fallback, that is every table in the document. A consumer that mutated any of it
+  // would rewrite the answer for all of them.
+  //
+  // `Object.freeze` does nothing to a `Map`: its contents live in internal slots, so a frozen
+  // Map still takes `set` and `delete`. The static type says `ReadonlyMap`, which is the
+  // guarantee the other four members get from `Object.freeze` for real, so the map is handed
+  // out through a view that has no mutators to reach for.
+  return Object.freeze({
+    tablePropertyNodes: Object.freeze(tablePropertyNodes) as readonly OoxmlElement[],
+    paragraphPropertyNodes: Object.freeze(paragraphPropertyNodes) as readonly OoxmlElement[],
+    paragraphProperties: Object.freeze(paragraphProperties) as readonly OoxmlProperty[],
+    runProperties: Object.freeze(runProperties) as readonly OoxmlProperty[],
+    conditional: readonlyMapView(conditional),
+  });
+}
+
+/**
+ * A `ReadonlyMap` that is one at RUNTIME, not only to the type checker.
+ *
+ * Reads delegate to the source map; there is no `set`, `delete` or `clear` to find on the
+ * object at all, so a consumer that casts the type away still cannot write through it.
+ */
+function readonlyMapView<K, V>(source: Map<K, V>): ReadonlyMap<K, V> {
+  const view = Object.freeze({
+    get: (key: K) => source.get(key),
+    has: (key: K) => source.has(key),
+    forEach: (callback: (value: V, key: K, map: ReadonlyMap<K, V>) => void, thisArg?: unknown) => {
+      for (const [key, value] of source) callback.call(thisArg, value, key, view);
+    },
+    keys: () => source.keys(),
+    values: () => source.values(),
+    entries: () => source.entries(),
+    [Symbol.iterator]: () => source[Symbol.iterator](),
+    [Symbol.toStringTag]: 'Map',
+    get size() {
+      return source.size;
+    },
+  }) as ReadonlyMap<K, V>;
+  return view;
+}
+
+/**
+ * Does this style contribute anything a CELL's paragraphs read?
+ *
+ * `tableCellStyleFormatting` reads only the paragraph, run and conditional material — never
+ * `tablePropertyNodes` — so a style that carries `w:tblPr` alone (Word's `TableNormal` is
+ * exactly that) can answer for every condition set without being asked. Callers use this to
+ * keep the `EMPTY_TABLE_CELL_STYLE_FORMATTING` short circuit they used to get from an
+ * identity check against {@link EMPTY_TABLE_FORMATTING}.
+ */
+export function tableStyleAffectsCells(formatting: CascadedTableFormatting): boolean {
+  return (
+    formatting.paragraphPropertyNodes.length > 0 ||
+    formatting.paragraphProperties.length > 0 ||
+    formatting.runProperties.length > 0 ||
+    formatting.conditional.size > 0
+  );
 }
 
 /**
@@ -450,6 +560,7 @@ export function buildStyleCascadeTable(
       docDefaultsParagraphNode: undefined,
       defaultParagraphStyleId: null,
       defaultCharacterStyleId: null,
+      defaultTableStyleId: null,
       themeFonts,
       styles,
     };
@@ -458,6 +569,7 @@ export function buildStyleCascadeTable(
   const defaults = readDocDefaults(stylesRoot);
   let defaultParagraphStyleId: string | null = null;
   let defaultCharacterStyleId: string | null = null;
+  let defaultTableStyleId: string | null = null;
   let counted = 0;
   for (const child of stylesRoot.children) {
     if (!isElement(child) || child.localName !== 'style') continue;
@@ -474,6 +586,9 @@ export function buildStyleCascadeTable(
     } else if (style.type === 'character') {
       if (isDefault) defaultCharacterStyleId = style.styleId;
       else if (defaultCharacterStyleId === style.styleId) defaultCharacterStyleId = null;
+    } else if (style.type === 'table') {
+      if (isDefault) defaultTableStyleId = style.styleId;
+      else if (defaultTableStyleId === style.styleId) defaultTableStyleId = null;
     }
   }
 
@@ -483,6 +598,7 @@ export function buildStyleCascadeTable(
     dP: propertiesFingerprint(defaults.paragraph),
     defP: defaultParagraphStyleId,
     defC: defaultCharacterStyleId,
+    defT: defaultTableStyleId,
     // Retheming changes the face every theme-fonted run measures in while no style
     // material moves, so a break cached under the old theme must not be reused.
     theme: themeFonts,
@@ -502,6 +618,7 @@ export function buildStyleCascadeTable(
     docDefaultsParagraphNode: defaults.paragraphNode,
     defaultParagraphStyleId,
     defaultCharacterStyleId,
+    defaultTableStyleId,
     themeFonts,
     styles,
   };
