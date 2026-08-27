@@ -10,6 +10,7 @@ import type { EditorCommand, ExecResult } from '../contracts/editor.ts';
 import type { PaginatedSurface } from './paginated-surface-contract.ts';
 import { writeClipboardRich } from './clipboard-write.ts';
 import { MARKS, isSurfaceSelection, resolveMarkAttr } from './docx-editor-support.ts';
+import { NOTHING_TO_COPY_FORMATTING, NOTHING_TO_PAINT } from './surface-format-painter-contract.ts';
 import { isDocAnchor, isDocAnchorRange, resolveAnchorSelection } from './anchor-resolution.ts';
 import { resolveDocTargetSelection } from './doc-target-resolution.ts';
 import { storyScopeOfNodeId } from './surface-scope.ts';
@@ -69,6 +70,35 @@ export function execEditorCommand(
     case 'clearFormatting':
       mounted.clearFormatting();
       break;
+    case 'copyFormatting':
+      // Reports for itself: nothing about the DOCUMENT moved, so the revision comparison the
+      // caller falls back to would answer `changed: false` for a capture that succeeded and
+      // for one that found no span alike.
+      return mounted.formatPainter.capture()
+        ? { ok: true, changed: false }
+        : { ok: false, code: 'notFound', reason: NOTHING_TO_COPY_FORMATTING };
+    case 'pasteFormatting': {
+      // An empty capture is refused by `gateCommand`, which both `can` and `exec` go
+      // through — one authority, so the button's reason and the refusal are one sentence.
+      // What `can` cannot answer is whether THIS selection holds anything the capture can
+      // reach, so a paint that landed nowhere reports for itself rather than falling through
+      // to a revision comparison that cannot tell it from a no-op change.
+      const painted = mounted.formatPainter.apply();
+      if (painted === 'nothingToPaint') {
+        return { ok: false, code: 'notFound', reason: NOTHING_TO_PAINT };
+      }
+      // The ops existed and the document turned them down, so the DOCUMENT's own words are
+      // the right ones — a locked content control and a read-only file are not the same
+      // refusal, and neither is "select some text".
+      if (painted === 'refused') {
+        return {
+          ok: false,
+          code: 'locked',
+          reason: mounted.state().lastRejection ?? NOTHING_TO_PAINT,
+        };
+      }
+      break;
+    }
     case 'setLineSpacing':
       // `w:line` is 240ths of a line under `auto` and twentieths of a point otherwise —
       // one attribute, two units, which is exactly why the command takes the rule's own.

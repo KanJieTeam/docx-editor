@@ -4,6 +4,7 @@ import { flattenChildren } from '../../lib/flattenChildren';
 import { useStableDocxId } from '../../lib/stable-id';
 import { docxSlotOf, mergeArrangement, unwrapFragment } from '../merge-arrangement';
 import {
+  chromeSlotIsToggle,
   CHROME_MENUS,
   chromeProbeForSlot,
   commandForSlot,
@@ -16,6 +17,7 @@ import { openReportIssue } from '../../lib/reportIssue';
 import { useEditorCommand } from '../useEditorCommand';
 import { chromeControlForSlot, chromeIcon, guardToolbarMousedown } from '../toolbar/ToolbarButton';
 import { useMenuContext, useMenuLabel, type MenuContextValue, type MenuId } from './menu-context';
+import { usePlatformShortcut } from '../usePlatformShortcut';
 import { focusBy, focusEdge, panelItems } from './menu-keyboard';
 import { useImageInsertOptional } from '../images/ImageInsert';
 //
@@ -104,6 +106,7 @@ export const MenuRow = defineComponent({
   },
   setup(props, { slots }) {
     const reasonId = useStableDocxId('menu-reason');
+    const shortcutText = usePlatformShortcut();
     // `aria-disabled`, NOT the native attribute. A natively-disabled button leaves the tab
     // order and stops firing pointer events, so its `title` never renders and a screen
     // reader walking the menu skips the row entirely — which is the whole "present and
@@ -144,7 +147,13 @@ export const MenuRow = defineComponent({
             {icon}
           </span>
           <span class="docx-menubar__item-label">{slots.default?.()}</span>
-          {shortcut ? <span class="docx-menubar__item-shortcut">{shortcut}</span> : null}
+          {/* The chord is one accelerator in the engine (`event.metaKey || event.ctrlKey`),
+              so a Mac reader presses ⌘ where a Windows reader presses Ctrl. The catalogue
+              can only state one spelling; `platformShortcut` makes the printed one match
+              the keyboard. */}
+          {shortcut ? (
+            <span class="docx-menubar__item-shortcut">{shortcutText(shortcut)}</span>
+          ) : null}
           {describe ? (
             <span id={reasonId} class="docx-editor-sr-only">
               {title}
@@ -257,9 +266,13 @@ export const MenuItem = defineComponent({
       const slot = slotId.value;
       const control = chromeControlForSlot(slot);
       const text = label(props.labelKey ?? control?.labelKey ?? slot);
-      const command = commandForSlot(slot);
-      const isToggle = command?.type === 'toggleMark' || command?.type === 'setAlignment';
-      const isRadio = command?.type === 'setAlignment';
+      // Checked-ness only where it is meaningful — the ENGINE's rule, the same one
+      // `ToolbarButton` applies to `aria-pressed`: marks and alignment toggle, a break insert
+      // does not, and the format painter does even though no single command describes its
+      // press.
+      const isToggle = chromeSlotIsToggle(slot);
+      // The four alignments are one-of-four, not four independent toggles.
+      const isRadio = commandForSlot(slot)?.type === 'setAlignment';
       return (
         <MenuRow
           {...menuRowSlot(slot)}
@@ -269,6 +282,7 @@ export const MenuItem = defineComponent({
           {...(slotCmd.disabledReason.value ? { title: slotCmd.disabledReason.value } : {})}
           {...(isToggle ? { active: slotCmd.isActive.value } : {})}
           {...(isRadio ? { selected: true as const } : {})}
+          {...(slotCmd.value.value !== null ? { 'data-value': slotCmd.value.value } : {})}
           selectHandler={() => {
             slotCmd.execute();
             setOpenMenu(null);

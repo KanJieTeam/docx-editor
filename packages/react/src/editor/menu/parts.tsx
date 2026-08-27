@@ -17,6 +17,7 @@ import type { ReactNode } from 'react';
 import { isValidElement, useCallback, useId, useLayoutEffect, useRef, useState } from 'react';
 import { mergeArrangement, unwrapFragment } from '../merge-arrangement';
 import {
+  chromeSlotIsToggle,
   CHROME_MENUS,
   chromeProbeForSlot,
   commandForSlot,
@@ -30,6 +31,7 @@ import { openReportIssue } from '../../lib/reportIssue';
 import { useEditorCommand } from '../useEditorCommand';
 import { chromeControlForSlot, chromeIcon, guardToolbarMousedown } from '../toolbar/ToolbarButton';
 import { useMenuContext, useMenuLabel, type MenuId } from './menu-context';
+import { usePlatformShortcut } from '../usePlatformShortcut';
 import { focusBy, focusEdge, panelItems } from './menu-keyboard';
 import { useImageInsertOptional } from '../images/ImageInsert';
 
@@ -69,6 +71,13 @@ export interface MenuRowProps {
   /** Stable marker for hosts, tests and e2e. */
   slot?: string;
   /**
+   * What the slot currently SHOWS, for a control whose state is more than pressed-or-not —
+   * the format painter's `once` against its `locked`. Declared rather than left to a spread:
+   * this component renders only the props it names, so an undeclared attribute is dropped in
+   * silence, and the stylesheet rule keyed on it can never match.
+   */
+  'data-value'?: string;
+  /**
    * Vue TSX maps row identity through `rowSlot` because `slot` is reserved.
    * React uses {@link slot} directly.
    */
@@ -94,6 +103,8 @@ export interface MenuRowProps {
 export function MenuRow(props: MenuRowProps) {
   const { icon, shortcut, disabled, title, active, selected, slot, onSelect, className, children } =
     props;
+  const value = props['data-value'];
+  const shortcutText = usePlatformShortcut();
   const reasonId = useId();
   // `aria-disabled`, NOT the native attribute. A natively-disabled button leaves the tab
   // order and stops firing pointer events, so its `title` never renders and a screen
@@ -118,6 +129,7 @@ export function MenuRow(props: MenuRowProps) {
       // tab stops).
       tabIndex={-1}
       {...(slot ? { 'data-slot': slot } : {})}
+      {...(value !== undefined ? { 'data-value': value } : {})}
       {...(active ? { 'data-active': '' } : {})}
       {...(disabled ? { 'data-disabled': '', 'aria-disabled': true } : {})}
       {...(active !== undefined ? { 'aria-checked': active } : {})}
@@ -130,7 +142,12 @@ export function MenuRow(props: MenuRowProps) {
         {icon}
       </span>
       <span className="docx-menubar__item-label">{children}</span>
-      {shortcut ? <span className="docx-menubar__item-shortcut">{shortcut}</span> : null}
+      {/* The chord is one accelerator in the engine (`event.metaKey || event.ctrlKey`), so a
+          Mac reader presses ⌘ where a Windows reader presses Ctrl. The catalogue can only
+          state one spelling; `platformShortcut` makes the printed one match the keyboard. */}
+      {shortcut ? (
+        <span className="docx-menubar__item-shortcut">{shortcutText(shortcut)}</span>
+      ) : null}
       {describe ? (
         <span id={reasonId} className="docx-editor-sr-only">
           {title}
@@ -216,18 +233,18 @@ export interface MenuItemProps {
  * @public
  */
 export function MenuItem({ slot, labelKey, shortcutKey, className, hidden }: MenuItemProps) {
-  const { execute, isActive, isEnabled, disabledReason } = useEditorCommand(slot);
+  const { execute, isActive, isEnabled, disabledReason, value } = useEditorCommand(slot);
   const { setOpenMenu } = useMenuContext();
   const label = useMenuLabel();
   if (hidden) return null;
   const control = chromeControlForSlot(slot);
   const text = label(labelKey ?? control?.labelKey ?? slot);
-  // Checked-ness only where it is meaningful — the same rule `ToolbarButton` applies to
-  // `aria-pressed`: marks and alignment toggle, a break insert does not.
-  const command = commandForSlot(slot);
-  const isToggle = command?.type === 'toggleMark' || command?.type === 'setAlignment';
+  // Checked-ness only where it is meaningful — the ENGINE's rule, the same one
+  // `ToolbarButton` applies to `aria-pressed`: marks and alignment toggle, a break insert
+  // does not, and the format painter does even though no single command describes its press.
+  const isToggle = chromeSlotIsToggle(slot);
   // The four alignments are one-of-four, not four independent toggles.
-  const isRadio = command?.type === 'setAlignment';
+  const isRadio = commandForSlot(slot)?.type === 'setAlignment';
   return (
     <MenuRow
       slot={slot}
@@ -237,6 +254,7 @@ export function MenuItem({ slot, labelKey, shortcutKey, className, hidden }: Men
       {...(disabledReason ? { title: disabledReason } : {})}
       {...(isToggle ? { active: isActive } : {})}
       {...(isRadio ? { selected: true as const } : {})}
+      {...(value !== null ? { 'data-value': value } : {})}
       onSelect={() => {
         execute();
         setOpenMenu(null);

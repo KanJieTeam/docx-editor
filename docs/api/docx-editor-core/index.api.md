@@ -256,6 +256,13 @@ export const CHROME_GROUPS: readonly [{
     readonly labelKey: "formattingBar.groups.listFormatting";
 }, {
     readonly controls: readonly [{
+        readonly id: "painter";
+        readonly labelKey: "formattingBar.formatPainterShortcut";
+        readonly paths: readonly string[];
+        readonly state: {
+            readonly kind: "command";
+        };
+    }, {
         readonly id: "clear";
         readonly labelKey: "formattingBar.clearFormatting";
         readonly paths: readonly string[];
@@ -264,7 +271,7 @@ export const CHROME_GROUPS: readonly [{
         };
     }];
     readonly id: "format";
-    readonly labelKey: "formattingBar.clearFormatting";
+    readonly labelKey: "formattingBar.groups.format";
 }, {
     readonly controls: readonly [{
         readonly id: "comments";
@@ -577,7 +584,7 @@ export interface ChromeMenuSubmenuEntry {
 }
 
 // @public
-export type ChromeSlotId = 'history.undo' | 'history.redo' | 'zoom.level' | 'styles.style' | 'font.family' | 'font.size' | 'text.bold' | 'text.italic' | 'text.underline' | 'text.strike' | 'text.color' | 'text.highlight' | 'text.link' | 'script.super' | 'script.sub' | 'alignment.left' | 'alignment.center' | 'alignment.right' | 'alignment.justify' | 'list.bullet' | 'list.numbered' | 'list.outdent' | 'list.indent' | 'list.lineSpacing' | 'format.clear' | 'review.comments' | 'review.editingMode' | 'contentControl.showAll' | 'contentControl.formFill' | 'contentControl.inspector' | 'contentControl.remove' | 'image.insert' | 'image.properties' | 'image.wrap' | 'image.altText' | 'table.insert' | 'table.borderTarget' | 'table.borderColor' | 'table.borderStyle' | 'table.borderWidth' | 'table.cellFill' | 'file.open' | 'file.save' | 'paragraph.dialog' | 'file.pageSetup' | 'insert.footnote' | 'insert.endnote' | 'insert.pageNumber' | 'insert.totalPages' | 'insert.sectionPages' | 'insert.pageXofY' | 'insert.pageBreak' | 'insert.sectionBreakNextPage' | 'insert.sectionBreakContinuous' | 'insert.toc';
+export type ChromeSlotId = 'history.undo' | 'history.redo' | 'zoom.level' | 'styles.style' | 'font.family' | 'font.size' | 'text.bold' | 'text.italic' | 'text.underline' | 'text.strike' | 'text.color' | 'text.highlight' | 'text.link' | 'script.super' | 'script.sub' | 'alignment.left' | 'alignment.center' | 'alignment.right' | 'alignment.justify' | 'list.bullet' | 'list.numbered' | 'list.outdent' | 'list.indent' | 'list.lineSpacing' | 'format.painter' | 'format.clear' | 'review.comments' | 'review.editingMode' | 'contentControl.showAll' | 'contentControl.formFill' | 'contentControl.inspector' | 'contentControl.remove' | 'image.insert' | 'image.properties' | 'image.wrap' | 'image.altText' | 'table.insert' | 'table.borderTarget' | 'table.borderColor' | 'table.borderStyle' | 'table.borderWidth' | 'table.cellFill' | 'file.open' | 'file.save' | 'paragraph.dialog' | 'file.pageSetup' | 'insert.footnote' | 'insert.endnote' | 'insert.pageNumber' | 'insert.totalPages' | 'insert.sectionPages' | 'insert.pageXofY' | 'insert.pageBreak' | 'insert.sectionBreakNextPage' | 'insert.sectionBreakContinuous' | 'insert.toc';
 
 // @public
 export type CollectReviewItems = (input: ReviewModelInput) => readonly ReviewItem[];
@@ -1259,7 +1266,7 @@ export type EditorCommand = {
 }[keyof EditorCommands];
 
 // @public
-export interface EditorCommands extends EditorCommandShape<DocEdits>, EditorHeaderFooterCommands, EditorNoteCommands {
+export interface EditorCommands extends EditorCommandShape<DocEdits>, EditorHeaderFooterCommands, EditorNoteCommands, EditorFormatPainterCommands {
     clearFormatting: Record<never, never>;
     commitTableColumnDividerResize: {
         leftWidthTwips: number;
@@ -1522,6 +1529,12 @@ export class EditorFontError extends Error {
 export type EditorFontErrorCode = 'initializationFailed' | 'wasmUnavailable' | 'missing' | 'forbidden' | 'overLimit' | 'malformed' | 'hashMismatch' | 'metadataMismatch' | 'fontFaceLoadFailed' | 'unsupportedFaceIndex' | 'missingFont' | 'hashInvalid' | 'fontMismatch' | 'unsupportedFace' | 'loadFailed';
 
 // @public
+export interface EditorFormatPainterCommands {
+    copyFormatting: Record<never, never>;
+    pasteFormatting: Record<never, never>;
+}
+
+// @public
 export interface EditorHeaderFooterCommands {
     editHeaderFooter: {
         evenPage?: boolean;
@@ -1701,6 +1714,7 @@ export interface EditorSnapshot {
     readonly editable: boolean;
     readonly editingMode?: DocumentEditingMode;
     readonly fontSubstitutions?: readonly string[];
+    readonly formatPainter?: FormatPainterSurfaceState;
     // (undocumented)
     readonly formatting: RunFormatting | null;
     readonly hasReviewContent?: boolean;
@@ -1885,6 +1899,20 @@ export interface FontUrlSource {
     readonly url: string;
     // (undocumented)
     readonly weight: number;
+}
+
+// @public
+export type FormatPainterLevel = 'none' | 'run' | 'paragraph';
+
+// @public
+export type FormatPainterMode = 'off' | 'once' | 'locked';
+
+// @public
+export interface FormatPainterSurfaceState {
+    // (undocumented)
+    readonly level: FormatPainterLevel;
+    // (undocumented)
+    readonly mode: FormatPainterMode;
 }
 
 // @public

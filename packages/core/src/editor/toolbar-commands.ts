@@ -23,6 +23,7 @@ import type {
   ExecResult,
 } from '@docx-editor.dev/core/contracts/editor';
 import type { ChromeSlotId } from './chrome-controls.ts';
+import { NOTHING_TO_COPY_FORMATTING } from './surface-format-painter-contract.ts';
 import type { PaginatedSurface } from './paginated-surface-contract.ts';
 import { tableCommandState } from './docx-editor-derive.ts';
 import {
@@ -325,6 +326,43 @@ export function toolbarCommandState(editor: Editor | null, id: ChromeSlotId): To
       value: mode,
     };
   }
+  // Word's Format Painter. Surface-owned like the content-control toggles below, and for
+  // the same reason: the capture and the armed mode are chrome state, not document bytes.
+  //
+  // `value` carries the MODE, the way the editing-mode pill's does. A control that only knew
+  // `active` could not tell "armed for one paint" from "locked on", which is the whole
+  // difference a double-press makes and the only cue that Escape is what ends it.
+  if (id === 'format.painter') {
+    const surface = surfaceOf(editor);
+    if (!surface) {
+      return { id, enabled: false, disabledReason: 'editor is not ready', active: false };
+    }
+    const painter = surface.formatPainter.state();
+    // An ARMED painter is always pressable, because the press that turns it off must not be
+    // refused by the same rule that decides whether a fresh capture is possible.
+    if (painter.mode !== 'off') {
+      return { id, enabled: true, disabledReason: null, active: true, value: painter.mode };
+    }
+    // Probed with the SIBLING control's command, not with `copyFormatting`.
+    //
+    // Copying formatting really does write nothing, so it is not `mutating` and the engine
+    // allows it on a document open for viewing — which is right for the command and wrong
+    // for this control. Arming a painter the document will refuse to apply is the dead
+    // button the enabled-state rule exists to prevent, so the question asked here is the one
+    // that decides whether the PAINT can land: would this document take a formatting write?
+    // `clearFormatting` is exactly that question, needs no selection to answer it, and is
+    // the control sitting next to this one.
+    const allowed = editor.can({ type: 'clearFormatting' });
+    return allowed.ok
+      ? { id, enabled: true, disabledReason: null, active: false, value: painter.mode }
+      : {
+          id,
+          enabled: false,
+          disabledReason: allowed.reason,
+          active: false,
+          value: painter.mode,
+        };
+  }
   // Surface-owned content-control chrome toggles. Enabled whenever the editor is mounted;
   // `active` reflects snapshot surface state when the facade publishes it, else false.
   // Adapters that drive the surface directly also read `surface.state().contentControls`.
@@ -483,6 +521,23 @@ export function toolbarCommandState(editor: Editor | null, id: ChromeSlotId): To
 }
 
 /**
+ * Whether a slot's control renders as a TOGGLE — pressed or not — so it carries
+ * `aria-pressed`.
+ *
+ * Shared rather than derived per adapter, because it is not derivable from the command table
+ * alone: the format painter has no fixed command (a press captures, arms, locks or stands
+ * down, which no single `EditorCommand` describes), so a rule that only read `commandForSlot`
+ * left it announcing nothing at all to a screen reader while it was armed.
+ *
+ * @public
+ */
+export function chromeSlotIsToggle(slotId: ChromeSlotId): boolean {
+  if (slotId === 'format.painter') return true;
+  const command = commandForSlot(slotId);
+  return command?.type === 'toggleMark' || command?.type === 'setAlignment';
+}
+
+/**
  * Enabled state for several controls in one pass.
  *
  * @public
@@ -550,6 +605,32 @@ export function runToolbarCommand(
   value?: unknown
 ): ExecResult {
   if (!editor) return { ok: false, code: 'unsupported', reason: 'editor is not ready' };
+  if (id === 'format.painter') {
+    const surface = surfaceOf(editor);
+    if (!surface) return { ok: false, code: 'unsupported', reason: 'editor is not ready' };
+    // CAN BEFORE EXEC, the same probe the enabled state above uses. A caller that dispatches
+    // by slot id without reading that state — a host's own keybinding, an automation — would
+    // otherwise arm a painter on a document that refuses the write: the cursor changes, and
+    // every following release builds ops the session then rejects.
+    //
+    // Only when it is OFF. Standing DOWN has to stay possible whatever the document allows,
+    // or a painter armed before the mode changed could never be released.
+    if (surface.formatPainter.state().mode === 'off') {
+      const allowed = editor.can({ type: 'clearFormatting' });
+      if (!allowed.ok) return { ok: false, code: allowed.code, reason: allowed.reason };
+    }
+    // The press captures, arms, locks or stands down — the engine decides which, from its own
+    // clock. Nothing about the DOCUMENT moves, so a press that lands reports `changed:
+    // false`; the painting itself happens on the selection the user makes next.
+    //
+    // A press that found nothing to capture is a REFUSAL, not a quiet success. Reporting it
+    // as `ok` is how a control ends up looking as though it armed while the painter stayed
+    // off, which the enabled state alone cannot prevent — the selection can move between the
+    // render and the click.
+    return surface.formatPainter.press()
+      ? { ok: true, changed: false }
+      : { ok: false, code: 'notFound', reason: NOTHING_TO_COPY_FORMATTING };
+  }
   if (id === 'contentControl.showAll') {
     const surface = surfaceOf(editor);
     if (!surface) return { ok: false, code: 'unsupported', reason: 'editor is not ready' };

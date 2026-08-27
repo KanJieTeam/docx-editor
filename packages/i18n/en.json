@@ -14,6 +14,7 @@
     "trackedOnly": "This document permits edits only as tracked changes",
     "noDocument": "No document is loaded",
     "noContentControl": "No content control is selected",
+    "noCopiedFormatting": "Copy formatting from somewhere first",
     "noDrawing": "No image is selected",
     "drawingLocked": "This image is locked",
     "commentSelection": "Select a range before adding a comment",
@@ -29,7 +30,9 @@
     "suggestingSectionBreak": "Turn off suggesting to insert this section break. It changes where the next section starts, which can't be suggested.",
     "tableCellSectionBreak": "Section breaks go outside a table.",
     "lockedSectionBreak": "A locked or linked content control holds the next section, so this break can't change it.",
-    "lockedContentBreak": "A content control locks this text, so you can't break a section here."
+    "lockedContentBreak": "A content control locks this text, so you can't break a section here.",
+    "nothingToCopyFormatting": "Select some text to copy its formatting",
+    "nothingToPaint": "Select some text to paint"
   },
   "toolbar": {
     "ariaLabel": "Formatting toolbar",
@@ -73,6 +76,7 @@
       "script": "Script",
       "alignment": "Alignment",
       "listFormatting": "List formatting",
+      "format": "Format",
       "image": "Image",
       "table": "Table"
     },
@@ -100,6 +104,8 @@
     "imageWrap": "Wrap text",
     "altText": "Alt text",
     "clearFormatting": "Clear formatting",
+    "formatPainter": "Format painter",
+    "formatPainterShortcut": "Format painter (Ctrl+Alt+C, Ctrl+Alt+V)",
     "commentsAndChanges": "Comments & Changes",
     "more": "More",
     "unavailableInPreview": "Not available in this preview build"
@@ -365,6 +371,10 @@
     "pasteShortcut": "Ctrl+V",
     "pasteWithoutFormatting": "Paste without formatting",
     "pasteWithoutFormattingShortcut": "Ctrl+Shift+V",
+    "copyFormatting": "Copy formatting",
+    "copyFormattingShortcut": "Ctrl+Alt+C",
+    "pasteFormatting": "Paste formatting",
+    "pasteFormattingShortcut": "Ctrl+Alt+V",
     "delete": "Delete",
     "deleteShortcut": "Del",
     "selectAll": "Select All",

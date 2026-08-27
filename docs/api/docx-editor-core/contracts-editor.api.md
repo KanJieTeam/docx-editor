@@ -626,7 +626,7 @@ export type EditorCommand = {
 }[keyof EditorCommands];
 
 // @public
-export interface EditorCommands extends EditorCommandShape<DocEdits>, EditorHeaderFooterCommands, EditorNoteCommands {
+export interface EditorCommands extends EditorCommandShape<DocEdits>, EditorHeaderFooterCommands, EditorNoteCommands, EditorFormatPainterCommands {
     clearFormatting: Record<never, never>;
     commitTableColumnDividerResize: {
         leftWidthTwips: number;
@@ -889,6 +889,12 @@ export class EditorFontError extends Error {
 export type EditorFontErrorCode = 'initializationFailed' | 'wasmUnavailable' | 'missing' | 'forbidden' | 'overLimit' | 'malformed' | 'hashMismatch' | 'metadataMismatch' | 'fontFaceLoadFailed' | 'unsupportedFaceIndex' | 'missingFont' | 'hashInvalid' | 'fontMismatch' | 'unsupportedFace' | 'loadFailed';
 
 // @public
+export interface EditorFormatPainterCommands {
+    copyFormatting: Record<never, never>;
+    pasteFormatting: Record<never, never>;
+}
+
+// @public
 export interface EditorHeaderFooterCommands {
     editHeaderFooter: {
         evenPage?: boolean;
@@ -1058,6 +1064,7 @@ export interface EditorSnapshot {
     readonly editable: boolean;
     readonly editingMode?: DocumentEditingMode;
     readonly fontSubstitutions?: readonly string[];
+    readonly formatPainter?: FormatPainterSurfaceState;
     // (undocumented)
     readonly formatting: RunFormatting | null;
     readonly hasReviewContent?: boolean;
@@ -1171,6 +1178,20 @@ export interface FontSourceSubstitution {
     readonly from: FontFaceRequest;
     // (undocumented)
     readonly to: FontFaceRequest;
+}
+
+// @public
+export type FormatPainterLevel = 'none' | 'run' | 'paragraph';
+
+// @public
+export type FormatPainterMode = 'off' | 'once' | 'locked';
+
+// @public
+export interface FormatPainterSurfaceState {
+    // (undocumented)
+    readonly level: FormatPainterLevel;
+    // (undocumented)
+    readonly mode: FormatPainterMode;
 }
 
 // @public

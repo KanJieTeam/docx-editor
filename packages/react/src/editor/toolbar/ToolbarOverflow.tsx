@@ -21,8 +21,9 @@ import {
   useState,
 } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { commandForSlot, type ChromeSlotId } from '@docx-editor.dev/core/editor';
+import { chromeSlotIsToggle, type ChromeSlotId } from '@docx-editor.dev/core/editor';
 import { useEditorCommand } from '../useEditorCommand';
+import { usePlatformShortcut } from '../usePlatformShortcut';
 import { useToolbarLabel } from './toolbar-context';
 import { chromeControlForSlot, chromeIcon, guardToolbarMousedown } from './ToolbarButton';
 import { MORE_ATTRIBUTE } from './useToolbarOverflow';
@@ -87,12 +88,16 @@ export function ToolbarOverflowControl({
  */
 export function ToolbarOverflowItem({ slot }: { readonly slot: ChromeSlotId }) {
   const label = useToolbarLabel();
+  const shortcut = usePlatformShortcut();
   const { close } = useContext(OverflowPanelContext);
-  const { execute, isActive, isEnabled, disabledReason } = useEditorCommand(slot);
+  const { execute, isActive, isEnabled, disabledReason, value } = useEditorCommand(slot);
   const control = chromeControlForSlot(slot);
-  const command = commandForSlot(slot);
-  const isToggle = command?.type === 'toggleMark' || command?.type === 'setAlignment';
-  const text = label(control?.labelKey ?? slot);
+  // The same three answers the in-bar button renders, because on a narrow window this IS the
+  // button: the toggle rule is the engine's (`chromeSlotIsToggle`), `data-value` is what
+  // tells a locked format painter apart from an armed one, and the label is corrected for
+  // this keyboard.
+  const isToggle = chromeSlotIsToggle(slot);
+  const text = shortcut(label(control?.labelKey ?? slot));
 
   return (
     <button
@@ -103,6 +108,7 @@ export function ToolbarOverflowItem({ slot }: { readonly slot: ChromeSlotId }) {
       {...(disabledReason ? { title: disabledReason } : {})}
       {...(isToggle ? { 'aria-pressed': isActive } : {})}
       {...(isActive ? { 'data-active': '' } : {})}
+      {...(value !== null ? { 'data-value': value } : {})}
       onMouseDown={guardToolbarMousedown}
       onClick={(event) => {
         execute();

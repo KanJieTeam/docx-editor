@@ -51,6 +51,64 @@ const FORMATTING: Record<string, { localName: string; attributes?: Record<string
   u: { localName: 'u', attributes: { val: 'single' } },
 };
 
+/**
+ * Whether this keystroke is one of the Alt-held ACCELERATORS, rather than a character being
+ * composed with AltGr.
+ *
+ * The two are the same bits on Windows and Linux: AltGr sets `ctrlKey` AND `altKey`, so every
+ * `Ctrl+Alt+<letter>` binding also sits on top of a character somebody's layout types — AltGr+C
+ * is `ć` on Polish, AltGr+D is `đ` on Croatian. Swallowing those typed nothing at all.
+ *
+ * `getModifierState('AltGraph')` is not the whole answer on its own. It reports the MODIFIER,
+ * not whether this key composes anything with it, and it is true for every Ctrl+Alt press on a
+ * layout that has an AltGr level — so refusing on it alone would have taken the long-shipped
+ * `Ctrl+Alt+F` and `Ctrl+Alt+D` note chords down on Polish and Croatian, where those two keys
+ * compose nothing. What settles it is whether a character WAS composed, which is exactly what
+ * `letterOf` answers: a composed character is not a Latin letter, so the letter it returns came
+ * from the KEYCAP and differs from what was typed.
+ *
+ * The macOS half never reaches any of that: the chord there is Cmd+Option, and Command is not
+ * a modifier a layout composes with — Option alone is, which is why `event.key` there is `ç`
+ * for the very chord we want and cannot be compared.
+ */
+function isAltAccelerator(event: KeyboardEvent, letter: string): boolean {
+  if (!event.altKey) return false;
+  if (event.metaKey) return true;
+  if (!event.ctrlKey) return false;
+  // Optional call: a synthesised event in a test environment may not implement it, and
+  // "no AltGraph" is the honest default for a keystroke that cannot say.
+  if (!(event.getModifierState?.('AltGraph') ?? false)) return true;
+  return event.key.toLowerCase() === letter;
+}
+
+/** A single Latin letter, which is what every chord in this keymap is named by. */
+const CHORD_LETTER = /^[a-z]$/;
+
+/**
+ * Which LETTER a chord names, for the accelerators held with Alt.
+ *
+ * The CHARACTER first. A user reaching for Ctrl+Alt+F presses the key that types `f`,
+ * wherever their layout puts it, and Windows resolves accelerators the same way — so reading
+ * the physical position first sent Dvorak's footnote chord to the key that types `u`.
+ *
+ * `event.code` is the fallback, for the case that makes `key` unreadable: a modifier that
+ * COMPOSES. macOS turns Option+F into `ƒ`, Option+C into `ç` and Option+D into `∂`, none of
+ * them a letter — so falling through to the keycap is the only way those chords work there,
+ * and it costs nothing, because a `key` that IS a letter has already answered.
+ *
+ * Never both for one event: consulting `code` as well would claim a second chord wherever
+ * the two disagree, which is every remapped layout.
+ */
+function letterOf(event: KeyboardEvent): string {
+  const typed = event.key.toLowerCase();
+  if (CHORD_LETTER.test(typed)) return typed;
+  // Defaulted, like `getModifierState` above: a synthesised event — this repo's own keymap
+  // tests build several — carries no `code`, and reading `.length` off it would throw out of
+  // the keydown handler.
+  const physical = event.code ?? '';
+  return physical.length === 4 && physical.startsWith('Key') ? physical[3]!.toLowerCase() : '';
+}
+
 export function createKeyDownHandler(
   surface: PaginatedSurface,
   hooks: {
@@ -72,6 +130,14 @@ export function createKeyDownHandler(
     // below. Both firing made one keystroke zoom AND rewrite the selection's run properties.
     // A prevented event has an owner, so there is nothing left here to do.
     if (event.defaultPrevented) return;
+    // Escape releases the transient modes, innermost first. The format painter is the
+    // innermost of all: it is armed ON TOP of whatever scope is open, so a press that closed
+    // a header instead would leave the painter armed with no way left to release it.
+    if (event.key === 'Escape' && surface.formatPainter.state().mode !== 'off') {
+      surface.formatPainter.disarm();
+      event.preventDefault();
+      return;
+    }
     if (event.key === 'Escape' && surface.activeScope().kind === 'headerFooter') {
       surface.exitHeaderFooter();
       event.preventDefault();
@@ -82,9 +148,10 @@ export function createKeyDownHandler(
       event.preventDefault();
       return;
     }
-    // Word: Ctrl/Cmd+Alt+F footnote, Ctrl/Cmd+Alt+D endnote.
-    if ((event.ctrlKey || event.metaKey) && event.altKey && !event.shiftKey) {
-      const key = event.key.toLowerCase();
+    // Word: Ctrl/Cmd+Alt+F footnote, Ctrl/Cmd+Alt+D endnote, and the Format Painter pair.
+    const altLetter = letterOf(event);
+    if (isAltAccelerator(event, altLetter) && !event.shiftKey) {
+      const key = altLetter;
       if (key === 'f') {
         event.preventDefault();
         surface.insertNote('footnote');
@@ -93,6 +160,31 @@ export function createKeyDownHandler(
       if (key === 'd') {
         event.preventDefault();
         surface.insertNote('endnote');
+        return;
+      }
+      // The Format Painter, on Alt rather than on the desktop word processor's Shift pair.
+      //
+      // Ctrl+Shift+C / Ctrl+Shift+V is what a desktop application binds, and neither half is
+      // available to a page: Ctrl+Shift+C opens the browser's element inspector, which
+      // `preventDefault` does not cancel, and Ctrl/Cmd+Shift+V is already
+      // paste-without-formatting below — a browser-native paste chord, and the only one the
+      // engine ever gets a `paste` event for. That leaves the Alt pair, which is also where
+      // the note chords above live, so one modifier covers every accelerator this keymap
+      // adds beyond the platform's own.
+      //
+      // KNOWN LIMIT: on macOS the browsers bind Cmd+Option+C to the element inspector, and a
+      // browser accelerator cannot be cancelled from a page. The capture below still runs,
+      // and DevTools opens over it. Both halves stay reachable from the toolbar button and
+      // the right-click menu, which is what the guide points a Mac reader at; the paste half
+      // (Cmd+Option+V) is unclaimed and works.
+      if (key === 'c') {
+        event.preventDefault();
+        surface.formatPainter.capture();
+        return;
+      }
+      if (key === 'v') {
+        event.preventDefault();
+        surface.formatPainter.apply();
         return;
       }
     }

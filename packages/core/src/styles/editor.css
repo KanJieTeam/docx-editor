@@ -3185,6 +3185,66 @@ a.docx-hyperlink:focus-visible {
   cursor: default;
 }
 
+/* The format painter LOCKED on (a double-click), as against armed for one paint.
+ *
+ * Both are `data-active`, so the slab above already says "on". What this adds is that this
+ * one does not end by itself — Escape is what releases it — as an underline along the bottom
+ * edge, drawn inside the slab so it reads as part of the button rather than as a second
+ * control.
+ *
+ * The overflow row and the menu row carry the same distinction, because on a narrow window
+ * the overflow panel IS the button and the Format menu is its other route. Their icon box is
+ * the anchor there: the rows are full-width, so an underline across one would read as a rule
+ * between rows rather than as a state. */
+.docx-toolbar__button[data-slot='format.painter'][data-value='locked']::after,
+.docx-toolbar__more-command[data-slot='format.painter'][data-value='locked']
+  .docx-toolbar__more-command-icon::after,
+.docx-menubar__item[data-slot='format.painter'][data-value='locked']
+  .docx-menubar__item-icon::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  bottom: 3px;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+/* The anchor for the underline above. The in-bar button is already positioned; these two are
+ * not, and an absolutely positioned child of a static box escapes to the nearest positioned
+ * ancestor — the toolbar itself. */
+.docx-toolbar__more-command[data-slot='format.painter'] .docx-toolbar__more-command-icon,
+.docx-menubar__item[data-slot='format.painter'] .docx-menubar__item-icon {
+  position: relative;
+}
+
+/* The painter armed: the pointer says the next selection takes the formatting.
+ *
+ * On the PAGES layer, not on the editor root, so chrome the user crosses on the way to the
+ * text keeps its own cursor. The attribute is written by the surface whenever the painter's
+ * mode moves.
+ *
+ * The list is the elements that set a cursor of their OWN — a rule on the layer alone loses
+ * to every one of them. Named one by one rather than swept with `*`: the descendant
+ * universal selector matches every span, line and page in the document, so arming the
+ * painter invalidated style for the whole painted subtree on a single button press, and this
+ * engine paints documents of 500 pages. */
+.docx-pages[data-format-painter],
+.docx-pages[data-format-painter] .docx-page-content,
+.docx-pages[data-format-painter] .docx-page,
+.docx-pages[data-format-painter] .docx-drawing-textbox,
+.docx-pages[data-format-painter] .docx-hf,
+.docx-pages[data-format-painter] .docx-hyperlink {
+  cursor: copy;
+}
+
+/* A content-control widget states `cursor: pointer !important`, so nothing but `!important`
+ * reaches it — and it is text like any other while the painter is armed. */
+.docx-pages[data-format-painter] .docx-content-control-widget {
+  cursor: copy !important;
+}
+
 /* ── Overflow ("⋯") ────────────────────────────────────────────────────────────────
  *
  * The bar that measures itself is ONE ROW: groups that do not fit move into the menu

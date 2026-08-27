@@ -16,6 +16,8 @@ import {
   type PageRecord,
   type ParagraphFragmentRecord,
   type ParagraphIndent,
+  type ResolvedRunStyle,
+  type SemanticPosition,
   type ResolvedTabStops,
   type SemanticLayout,
   type SemanticSelection,
@@ -485,6 +487,42 @@ function selectionSpans(
   // named no story, and the body's order is wrong for every caret outside it — which is the
   // exact defect the parameter above exists to prevent, left standing in its own fallback.
   return spansInSelection(layout, selection, paragraphOrder ?? everyStoryOrder(layout));
+}
+
+/**
+ * Every paragraph a range touches, in document order — the span paragraph-level writes cover.
+ *
+ * A range that ENDS at offset 0 of a paragraph has not touched it. Dragging from the middle
+ * of one paragraph to the very start of the next selects no character of the next, and Word
+ * treats it that way; including it made a paragraph-level write reach content the user's
+ * selection never highlighted. The clamp only applies to a multi-paragraph range: a caret at
+ * offset 0 is inside its own paragraph and always touches it.
+ */
+export function paragraphsInRange(
+  order: readonly string[],
+  range: { from: SemanticPosition; to: SemanticPosition }
+): readonly string[] {
+  const firstIndex = order.indexOf(range.from.paragraphId);
+  const lastIndex = order.indexOf(range.to.paragraphId);
+  if (firstIndex === -1 || lastIndex === -1) return [];
+  const last = lastIndex > firstIndex && range.to.offset === 0 ? lastIndex - 1 : lastIndex;
+  return order.slice(firstIndex, last + 1);
+}
+
+/**
+ * The RESOLVED run style at the selection, taken from its first span.
+ *
+ * The cascade rather than the authored properties, which is what the format painter needs:
+ * a run in a styled paragraph states almost nothing itself, so copying its `w:rPr` would
+ * copy nothing and painting it would change nothing the reader can see.
+ */
+export function selectionRunStyle(
+  layout: SemanticLayout,
+  selection: SemanticSelection,
+  cells?: readonly string[],
+  paragraphOrder?: readonly string[]
+): ResolvedRunStyle | null {
+  return selectionSpans(layout, selection, cells, paragraphOrder)[0]?.style ?? null;
 }
 
 /** The run properties in force across the selection, taken from its first span. */

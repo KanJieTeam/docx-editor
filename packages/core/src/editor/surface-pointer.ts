@@ -28,10 +28,10 @@ import {
   documentOrder,
   deletedTextBoundaries,
   paragraphTextFromLayout,
-  wordBoundary,
   type SemanticPosition,
   type SemanticSelection,
 } from '../layout/semantic-interaction.ts';
+import { wordRangeAt } from './surface-selection-ops.ts';
 import type {
   BlockFragmentRecord,
   ContentControlBoundaryRecord,
@@ -122,6 +122,15 @@ export interface PointerHost {
    * Called after mousedown is prevented so the caret is not stolen.
    */
   onContentControlWidget?(controlId: string, kind: string): void;
+  /**
+   * A pointer selection gesture has settled — the press, drag and release are over and the
+   * model selection is final.
+   *
+   * The format painter is what needs it: an armed painter paints the selection the user just
+   * MADE, and every earlier point in the gesture is a selection still being dragged. Reported
+   * rather than acted on here, because the pointer lane owns geometry and nothing else.
+   */
+  onSelectionSettled?(): void;
   /** Generated navigation paragraphs refuse caret placement and text selection. */
   isReadOnlyParagraph?(paragraphId: string): boolean;
   /**
@@ -539,52 +548,21 @@ export function createPointerController(
     return a.offset < b.offset;
   }
 
-  const WORD_CHARACTER = /[\p{L}\p{N}_'’]/u;
-  const isWordCharacter = (character: string | undefined): boolean =>
-    character !== undefined && WORD_CHARACTER.test(character);
-
-  /**
-   * The range one press selects, at the granularity the click count asked for.
-   *
-   * A caret sits BETWEEN characters, so a double-click at a word's edge is ambiguous. Word
-   * resolves it by preferring the character to the right and falling back to the one on the
-   * left, which is what stops a double-click at the end of a word from selecting the space
-   * after it instead of the word itself.
-   */
+  /** The range one press selects, at the granularity the click count asked for. */
   function rangeAt(
     layout: SemanticLayout,
     position: SemanticPosition,
     granularity: Granularity
   ): PositionRange {
     if (granularity === 'character') return { from: position, to: position };
-    const text = paragraphTextFromLayout(layout, position.paragraphId);
     const id = position.paragraphId;
     if (granularity === 'paragraph') {
+      const text = paragraphTextFromLayout(layout, id);
       return { from: { paragraphId: id, offset: 0 }, to: { paragraphId: id, offset: text.length } };
-    }
-
-    const offset = Math.max(0, Math.min(position.offset, text.length));
-    let anchor = -1;
-    if (isWordCharacter(text[offset])) anchor = offset;
-    else if (offset > 0 && isWordCharacter(text[offset - 1])) anchor = offset - 1;
-
-    if (anchor === -1) {
-      // Neither side is a word: take the run of whitespace the pointer is in, or the single
-      // character it is on, rather than reaching into a word that was not clicked.
-      let from = offset;
-      let to = offset;
-      while (from > 0 && /\s/.test(text[from - 1] ?? '')) from -= 1;
-      while (to < text.length && /\s/.test(text[to] ?? '')) to += 1;
-      if (from === to && to < text.length) to += 1;
-      return { from: { paragraphId: id, offset: from }, to: { paragraphId: id, offset: to } };
     }
     // A word stops at a struck half's edge: a replacement paints the old text and the new
     // with nothing between them, so without this a double-click on either took both.
-    const stops = deletedTextBoundaries(layout, id);
-    return {
-      from: { paragraphId: id, offset: wordBoundary(text, anchor + 1, -1, stops) },
-      to: { paragraphId: id, offset: wordBoundary(text, anchor, 1, stops) },
-    };
+    return wordRangeAt(layout, position, deletedTextBoundaries(layout, id));
   }
 
   /** Anchor range plus the range under the pointer, oriented so the head follows the drag. */
@@ -1075,6 +1053,14 @@ export function createPointerController(
     const cells = host.cellSelection();
     if (cells) host.setCellSelection(cells);
     else host.setSelection(host.selection());
+    // Only a real RELEASE settles the selection. `pointercancel` is the browser taking the
+    // gesture away — a system touch gesture, a device change — and the range under the
+    // pointer at that moment is not one the user chose. Reporting it settled let an armed
+    // format painter paint a half-finished drag and then stand down.
+    //
+    // AFTER the re-assertion above, so anything acting on the settled selection sees the
+    // model's answer rather than whatever the browser left behind mid-drag.
+    if (event.type === 'pointerup') host.onSelectionSettled?.();
   };
 
   function endGesture(): void {

@@ -3,12 +3,13 @@ import type { DocxEditorChildren } from '../../docx-editor-children';
 import {
   CHROME_GROUPS,
   chromeSlotId,
-  commandForSlot,
+  chromeSlotIsToggle,
   type ChromeControl,
   type ChromeSlotId,
 } from '@docx-editor.dev/core/editor';
 import { mergeHostClass } from '../../lib/mergeHostClass';
 import { useEditorCommand } from '../useEditorCommand';
+import { usePlatformShortcut } from '../usePlatformShortcut';
 import { useToolbarLabel } from './toolbar-context';
 import { Slot } from './Slot';
 
@@ -63,13 +64,18 @@ export const ToolbarButton = defineComponent({
   },
   setup(props, { slots }) {
     const label = useToolbarLabel();
+    const shortcut = usePlatformShortcut();
     const command = useEditorCommand(computed(() => props.slot) as unknown as ChromeSlotId);
     return () => {
       if (props.hidden) return null;
       const control = chromeControlForSlot(props.slot);
-      const text = label(control?.labelKey ?? props.slot);
-      const slotCommand = commandForSlot(props.slot);
-      const isToggle = slotCommand?.type === 'toggleMark' || slotCommand?.type === 'setAlignment';
+      // A registry label is tooltip-shaped and often NAMES its chord ("Bold (Ctrl+B)"). The
+      // catalogue can only state one spelling, and the engine's accelerator is Ctrl OR Cmd —
+      // so the printed name is corrected for this keyboard rather than translated twice.
+      const text = shortcut(label(control?.labelKey ?? props.slot));
+      // `aria-pressed` only where pressed-ness is meaningful. The rule is the ENGINE's,
+      // because it is not derivable from the command table alone — see `chromeSlotIsToggle`.
+      const isToggle = chromeSlotIsToggle(props.slot);
       const shared = {
         onClick: () => command.execute(),
         onMousedown: guardToolbarMousedown,
@@ -79,6 +85,11 @@ export const ToolbarButton = defineComponent({
         ...(command.isActive.value ? { 'data-active': '' } : {}),
         ...(!command.isEnabled.value ? { 'data-disabled': '' } : {}),
         ...(isToggle ? { 'aria-pressed': command.isActive.value } : {}),
+        // The slot's reported value, for the controls whose state is more than
+        // pressed-or-not: the format painter renders `once` and `locked` differently, and
+        // only the engine knows which is live. Absent for every slot that reports none, so
+        // nothing else gains an attribute.
+        ...(command.value.value !== null ? { 'data-value': command.value.value } : {}),
         'aria-label': text,
         title: command.disabledReason.value ?? text,
       };
