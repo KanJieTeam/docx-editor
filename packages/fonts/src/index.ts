@@ -1,5 +1,5 @@
 /**
- * `@docx-editor.dev/fonts` — metric-compatible substitutes for Word's default faces.
+ * `@docx-editor.dev/fonts` — metric-compatible substitutes for common Word faces.
  *
  * Word's own defaults (Calibri, Cambria, Times New Roman, Arial, Courier New) are proprietary
  * and cannot ship in an open package. What CAN ship are the faces built to MATCH THEIR METRICS:
@@ -20,7 +20,7 @@
  * @packageDocumentation
  * @public
  */
-// @docx-editor.dev/fonts — metric-compatible substitutes for Word's default faces.
+// @docx-editor.dev/fonts — metric-compatible substitutes for common Word faces.
 //
 // Word's own defaults (Calibri, Cambria, Times New Roman, Arial, Courier New) are
 // proprietary and cannot ship in an open package. What CAN ship are the faces built to
@@ -32,8 +32,14 @@
 //   Times New Roman → Liberation Serif   (SIL OFL)
 //   Arial           → Liberation Sans    (SIL OFL)
 //   Courier New     → Liberation Mono    (SIL OFL)
+//   Century Gothic  → TeX Gyre Adventor  (GUST Font License)
 //
-// `loadDefaultFonts()` fetches the packaged TTFs (lazily, only the families asked for)
+// The first five are Word's DOCUMENT defaults, so they are what `loadDefaultFonts()` loads
+// when `families` is omitted. Century Gothic is not a document default and most files never
+// name it, so its four ~175 KB assets are opt-in: pass `families` to include it, or use
+// `googleFonts()`, which loads the same packaged bytes only when a document asks for it.
+//
+// `loadDefaultFonts()` fetches the packaged font files (lazily, only the families asked for)
 // and returns a configuration FRAGMENT — sources plus the Word-name→substitute map —
 // ready for `composeFontConfiguration`. Nothing loads until the app calls it: importing
 // this module fetches no bytes, and the editor engine itself never calls in here.
@@ -46,7 +52,11 @@
 // `FontSourceSubstitution` — assignable by shape — so this package has no runtime or
 // type dependency on the engine and the engine has none on it.
 
+import { FACES, FAMILY_PLANS, planFaceFile, planLineBox } from './family-plans.ts';
+import type { WordDefaultFamily } from './family-plans.ts';
 import { FONT_ASSET_MANIFEST } from './manifest.generated.ts';
+
+export type { WordDefaultFamily } from './family-plans.ts';
 
 /** A concrete font face request, structurally identical to the editor contract's. */
 export interface DefaultFontFaceRequest {
@@ -72,10 +82,11 @@ export interface DefaultFontSource {
 export interface DefaultFontSubstitution {
   readonly from: DefaultFontFaceRequest;
   readonly to: DefaultFontFaceRequest;
+  readonly lineMetrics?: {
+    readonly heightEm: number;
+    readonly baselineEm: number;
+  };
 }
-
-/** The Word default families this package can stand in for. */
-export type WordDefaultFamily = 'Calibri' | 'Cambria' | 'Times New Roman' | 'Arial' | 'Courier New';
 
 /**
  * One face that did not load. `family` is the Word name that was asked for, `file` the
@@ -102,39 +113,19 @@ export interface DefaultFontsFragment {
 
 /**
  * Options shared by {@link loadDefaultFonts}, {@link installDefaultFontFaces} and
- * {@link defaultFonts}. Both fields are optional, so `{}` loads all five families over
- * the global `fetch`.
+ * {@link defaultFonts}. Both fields are optional, so `{}` loads
+ * {@link WORD_DOCUMENT_DEFAULT_FAMILIES} over the global `fetch`.
  */
 export interface LoadDefaultFontsOptions {
-  /** Narrow to specific Word families; default is all five. */
+  /**
+   * Narrow or widen the families to load. The default is
+   * {@link WORD_DOCUMENT_DEFAULT_FAMILIES}; pass {@link ALL_WORD_DEFAULT_FAMILIES} to
+   * add the families this package substitutes for that Word does not apply by default.
+   */
   readonly families?: readonly WordDefaultFamily[];
   /** Injectable for tests; defaults to global `fetch`. */
   readonly fetcher?: typeof fetch;
 }
-
-interface FamilyPlan {
-  readonly substitute: string;
-  readonly filePrefix: string;
-}
-
-const FAMILY_PLANS: ReadonlyMap<WordDefaultFamily, FamilyPlan> = new Map([
-  ['Calibri', { substitute: 'Carlito', filePrefix: 'Carlito' }],
-  ['Cambria', { substitute: 'Caladea', filePrefix: 'Caladea' }],
-  ['Times New Roman', { substitute: 'Liberation Serif', filePrefix: 'LiberationSerif' }],
-  ['Arial', { substitute: 'Liberation Sans', filePrefix: 'LiberationSans' }],
-  ['Courier New', { substitute: 'Liberation Mono', filePrefix: 'LiberationMono' }],
-]);
-
-const FACES: readonly {
-  readonly suffix: string;
-  readonly weight: number;
-  readonly style: 'normal' | 'italic';
-}[] = [
-  { suffix: 'Regular', weight: 400, style: 'normal' },
-  { suffix: 'Bold', weight: 700, style: 'normal' },
-  { suffix: 'Italic', weight: 400, style: 'italic' },
-  { suffix: 'BoldItalic', weight: 700, style: 'italic' },
-];
 
 const manifestByFile = new Map(FONT_ASSET_MANIFEST.map((entry) => [entry.file, entry]));
 
@@ -142,11 +133,14 @@ const manifestByFile = new Map(FONT_ASSET_MANIFEST.map((entry) => [entry.file, e
 const assetUrl = (file: string): URL => new URL(`../assets/${file}`, import.meta.url);
 
 /**
- * Every Word family this package substitutes for, and the default when
- * {@link LoadDefaultFontsOptions.families} is omitted. Frozen — treat it as a constant
+ * The families Word applies to a document by DEFAULT, and what
+ * {@link LoadDefaultFontsOptions.families} falls back to. Frozen — treat it as a constant
  * rather than a mutable list to filter in place.
+ *
+ * This is the load-every-document set, so it stays as small as correctness allows: a
+ * family here costs four faces on every load, whether or not the file names it.
  */
-export const ALL_WORD_DEFAULT_FAMILIES: readonly WordDefaultFamily[] = Object.freeze([
+export const WORD_DOCUMENT_DEFAULT_FAMILIES: readonly WordDefaultFamily[] = Object.freeze([
   'Calibri',
   'Cambria',
   'Times New Roman',
@@ -155,10 +149,28 @@ export const ALL_WORD_DEFAULT_FAMILIES: readonly WordDefaultFamily[] = Object.fr
 ]);
 
 /**
- * Load the packaged substitute faces for the given Word families (all five by default)
- * and return a configuration fragment: byte-backed sources for the SUBSTITUTE families
- * plus the Word-name → substitute substitution map, so a document naming "Calibri"
- * resolves without the host mapping anything.
+ * Every Word family this package substitutes for, including the ones Word does not apply
+ * by default. NOT the default for {@link LoadDefaultFontsOptions.families} — pass it
+ * explicitly to load them all:
+ *
+ * ```ts
+ * const fonts = await defaultFonts({ families: ALL_WORD_DEFAULT_FAMILIES });
+ * ```
+ *
+ * `googleFonts()` covers the extra families on demand instead, so a document that never
+ * names Century Gothic never pays for its assets.
+ */
+export const ALL_WORD_DEFAULT_FAMILIES: readonly WordDefaultFamily[] = Object.freeze([
+  ...WORD_DOCUMENT_DEFAULT_FAMILIES,
+  'Century Gothic',
+]);
+
+/**
+ * Load the packaged substitute faces for the given Word families
+ * ({@link WORD_DOCUMENT_DEFAULT_FAMILIES} by default) and return a configuration
+ * fragment: byte-backed sources for the SUBSTITUTE families plus the Word-name →
+ * substitute substitution map, so a document naming "Calibri" resolves without the host
+ * mapping anything.
  *
  * Only the requested families' assets are fetched, in parallel. A face that fails to
  * load appears in `failures` and the rest of the fragment stays usable — compose it
@@ -167,7 +179,7 @@ export const ALL_WORD_DEFAULT_FAMILIES: readonly WordDefaultFamily[] = Object.fr
 export async function loadDefaultFonts(
   options: LoadDefaultFontsOptions = {}
 ): Promise<DefaultFontsFragment> {
-  const families = options.families ?? ALL_WORD_DEFAULT_FAMILIES;
+  const families = options.families ?? WORD_DOCUMENT_DEFAULT_FAMILIES;
   const fetcher = options.fetcher ?? fetch;
 
   const sources: DefaultFontSource[] = [];
@@ -179,15 +191,17 @@ export async function loadDefaultFonts(
     const plan = FAMILY_PLANS.get(family);
     if (!plan) continue; // Unknown name: nothing to stand in for.
     for (const face of FACES) {
-      const file = `${plan.filePrefix}-${face.suffix}.ttf`;
+      const file = planFaceFile(plan, face.suffix);
       const manifest = manifestByFile.get(file);
       if (!manifest) {
         failures.push({ family, file, diagnostic: 'face missing from packaged manifest' });
         continue;
       }
+      const lineMetrics = planLineBox(plan, face.weight);
       substitutions.push({
         from: { family, weight: face.weight, style: face.style },
         to: { family: plan.substitute, weight: face.weight, style: face.style },
+        ...(lineMetrics ? { lineMetrics } : {}),
       });
       jobs.push(
         (async () => {
@@ -268,14 +282,14 @@ export async function installDefaultFontFaces(
     started = new Set();
     startedInstalls.set(fontSet, started);
   }
-  const families = options.families ?? ALL_WORD_DEFAULT_FAMILIES;
+  const families = options.families ?? WORD_DOCUMENT_DEFAULT_FAMILIES;
   let installed = 0;
   const jobs: Promise<void>[] = [];
   for (const family of families) {
     const plan = FAMILY_PLANS.get(family);
     if (!plan) continue;
     for (const face of FACES) {
-      const file = `${plan.filePrefix}-${face.suffix}.ttf`;
+      const file = planFaceFile(plan, face.suffix);
       if (!manifestByFile.has(file)) continue;
       const faceKey = `${family}#${face.weight}#${face.style}`;
       if (started.has(faceKey)) continue;

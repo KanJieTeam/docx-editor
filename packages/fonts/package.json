@@ -1,7 +1,7 @@
 {
   "name": "@docx-editor.dev/fonts",
   "version": "2.12.0",
-  "description": "Metric-compatible open-licensed substitutes for Word default fonts (Carlito, Caladea, Liberation), packaged for @docx-editor.dev shaped measurement.",
+  "description": "Open-licensed substitutes for common Word fonts, packaged for @docx-editor.dev shaped measurement.",
   "sideEffects": false,
   "type": "module",
   "exports": {
@@ -32,7 +32,8 @@
     "manifest:check": "node scripts/generate-manifest.mjs --check",
     "google:catalog": "node scripts/generate-google-catalog.mjs",
     "google:check": "node scripts/generate-google-catalog.mjs --check",
-    "google:verify": "node scripts/generate-google-catalog.mjs --verify"
+    "google:verify": "node scripts/generate-google-catalog.mjs --verify",
+    "width:check": "bun scripts/check-width-fidelity.ts"
   },
   "devDependencies": {
     "@docx-editor.dev/core": "workspace:*",
@@ -51,7 +52,7 @@
     "email": "jedr@eigenpal.com",
     "url": "https://github.com/jedrazb"
   },
-  "license": "Apache-2.0 AND OFL-1.1",
+  "license": "Apache-2.0 AND OFL-1.1 AND LicenseRef-GUST-Font-License",
   "homepage": "https://docx-editor.dev/",
   "repository": {
     "type": "git",

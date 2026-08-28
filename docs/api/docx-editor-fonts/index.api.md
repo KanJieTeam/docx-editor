@@ -60,6 +60,11 @@ export interface DefaultFontSubstitution {
     // (undocumented)
     readonly from: DefaultFontFaceRequest;
     // (undocumented)
+    readonly lineMetrics?: {
+        readonly baselineEm: number;
+        readonly heightEm: number;
+    };
+    // (undocumented)
     readonly to: DefaultFontFaceRequest;
 }
 
@@ -88,7 +93,10 @@ export interface LoadDefaultFontsOptions {
 }
 
 // @public
-export type WordDefaultFamily = 'Calibri' | 'Cambria' | 'Times New Roman' | 'Arial' | 'Courier New';
+export const WORD_DOCUMENT_DEFAULT_FAMILIES: readonly WordDefaultFamily[];
+
+// @public
+export type WordDefaultFamily = 'Calibri' | 'Cambria' | 'Times New Roman' | 'Arial' | 'Courier New' | 'Century Gothic';
 
 // (No @packageDocumentation comment for this package)
 
