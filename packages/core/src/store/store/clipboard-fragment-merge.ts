@@ -33,7 +33,11 @@ import { ensureNotesPart } from '../package/note-lifecycle.ts';
 import { resolveNotesPart } from '../package/note-references.ts';
 import { resolveInternalTarget } from '../package/opc-names.ts';
 import { readOoxmlPart } from '../package/ooxml-tree.ts';
-import { createNodeIdAllocator, insertChildren } from '../package/ooxml-edit.ts';
+import {
+  carryIndexToRebuiltRoot,
+  createNodeIdAllocator,
+  insertChildren,
+} from '../package/ooxml-edit.ts';
 import { sha256FontBytes } from '../package/sha256.ts';
 import { attributeValueOf, cloneWithNewIds } from './tree-op-nodes.ts';
 import {
@@ -113,7 +117,10 @@ function appendToPart(
   index?: number
 ): OoxmlPackage | null {
   if (nodes.length === 0) return pkg;
-  const nextId = createNodeIdAllocator(part);
+  // Detached-clone shape, same as `applyInsertFragment`: the clones exist before the
+  // insert below, so they mint in the `paste` family where no in-transaction `new` mint
+  // can ever re-issue their ids.
+  const nextId = createNodeIdAllocator(part, 'paste');
   const cloned = nodes.map((node) => cloneWithNewIds(node, nextId));
   const bound = withRequiredNamespaceBindings(part, cloned);
   const at = index ?? bound.root.children.length;
@@ -812,6 +819,9 @@ export function mergeFragmentIntoPackage(
       };
       const nextRoot = dropCollidingMarkers(ownerPart.root) as OoxmlElement;
       if (nextRoot !== ownerPart.root) {
+        // A rebuilt root outside the op executors must carry its index — see the
+        // invariant on `carryIndexToRebuiltRoot`.
+        carryIndexToRebuiltRoot(ownerPart.root, nextRoot);
         pkg = withPart(pkg, { ...ownerPart, root: nextRoot });
       }
     }

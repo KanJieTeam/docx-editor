@@ -158,18 +158,27 @@ export function collectNodeIds(part: OoxmlPart): Set<string> {
  * can never coincide, and the counter skips anything already taken so repeated edits in one
  * session stay unique.
  *
+ * The collision check only sees nodes that are IN the tree. A caller that clones a subtree
+ * and attaches it LATER — after other ops have replaced the root and reset the counter —
+ * must mint in its own `family`: two `new`-family allocators over different roots can hand
+ * out the same id, one to a detached clone and one to the tree, and the clone's insertion
+ * then fails the duplicate-id invariant.
+ *
  * Checks the part's node index directly rather than copying every id into a fresh set: the
  * copy was O(document) per op, and an allocator is created for every op.
  */
-export function createNodeIdAllocator(part: OoxmlPart): () => string {
+export function createNodeIdAllocator(
+  part: OoxmlPart,
+  family: 'new' | 'paste' = 'new'
+): () => string {
   const index = nodeIndexFor(part.root);
   const minted = new Set<string>();
   let counter = index.mintFrontier;
   return () => {
-    let id = `${part.name}#new:${counter}`;
+    let id = `${part.name}#${family}:${counter}`;
     while (index.nodes.has(id) || minted.has(id)) {
       counter += 1;
-      id = `${part.name}#new:${counter}`;
+      id = `${part.name}#${family}:${counter}`;
     }
     minted.add(id);
     counter += 1;
@@ -249,6 +258,23 @@ function stealPatchedIndex(oldRoot: OoxmlElement, newRoot: OoxmlElement): void {
   partIndexes.delete(oldRoot);
   diffPatch(index, oldRoot, newRoot, null);
   partIndexes.set(newRoot, index);
+}
+
+/**
+ * Carry the index across a root rebuilt OUTSIDE the op executors.
+ *
+ * Every op executor moves the index with `stealPatchedIndex`, so the mint frontier and the
+ * diffed entries survive its root replacement. A helper that rebuilds the root directly —
+ * the fragment lane binding namespace prefixes — must do the same, or the new root starts
+ * an orphaned index: the next lookup re-walks the whole part, and the mint frontier
+ * restarts at 0 underneath ids already handed out.
+ *
+ * The carry STEALS, like every op executor: when a refusal path later discards the new
+ * root, the still-published old root re-walks once on its next lookup. That direction is
+ * accepted — refusals are exceptional, while the carried case is every successful landing.
+ */
+export function carryIndexToRebuiltRoot(oldRoot: OoxmlElement, newRoot: OoxmlElement): void {
+  stealPatchedIndex(oldRoot, newRoot);
 }
 
 function removeIndexedSubtree(index: PartIndex, node: OoxmlNode): void {

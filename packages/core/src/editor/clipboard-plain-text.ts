@@ -58,8 +58,13 @@ function decodeEntities(text: string): string {
   });
 }
 
-/** Tags whose CONTENT is source, not visible text: the whole element is dropped. */
-const RAW_TEXT_TAGS = new Set(['script', 'style']);
+/**
+ * Tags whose CONTENT is never visible text: the whole element is dropped. `title` and
+ * `template` join `script`/`style` because a full-document clipboard flavour (a browser's
+ * "copy image", say) carries a page title no reader ever saw — pasting it inserted the
+ * word instead of nothing, and made the payload read as text-bearing to the paste lanes.
+ */
+const RAW_TEXT_TAGS = new Set(['script', 'style', 'title', 'template']);
 /** Close tags that end a block, so what follows starts a new line. */
 const BLOCK_TAGS = new Set([
   'p',
@@ -170,33 +175,22 @@ function rawTextEnd(html: string, name: string, from: number): number {
 }
 
 /**
- * The visible text of an HTML fragment.
+ * The text pieces of an HTML fragment, in document order.
  *
- * A single forward walk, not a sequence of `replace` passes. The walk never re-reads what it
- * has already written, so no later stage can turn emitted text back into a tag, and every
- * branch moves the cursor forward over a range the next branch will not revisit — a hostile
- * payload costs one pass over its own length.
- *
- * It does NOT promise the output holds no angle brackets. A payload may write a literal `<`
- * that a browser also shows as text, and removing the element after it can leave that `<`
- * beside a word. That is fine here and only here: the result is inserted as run text through
- * the same path typed characters take, and is escaped again on save. Nothing re-parses it.
- *
- * Block boundaries become newlines and table cells become tabs, matching how this engine
- * already flattens a copied cell range — so an HTML table pasted here lands in the same
- * shape a table copied out of the document does.
+ * One forward walk shared by the full transform below and the early-exit predicate — every
+ * branch moves the cursor forward over a range the next branch will not revisit, so a
+ * hostile payload costs at most one pass over its own length. Yields raw text slices plus
+ * the `\n`/`\t` a block or cell boundary reads as; entity references are NOT decoded here.
  */
-export function plainTextFromHtml(html: string): string {
-  const bounded = html.length > MAX_HTML_INPUT ? html.slice(0, MAX_HTML_INPUT) : html;
-  let text = '';
+function* htmlTextPieces(bounded: string): Generator<string> {
   let at = 0;
   while (at < bounded.length) {
     const open = bounded.indexOf('<', at);
     if (open === -1) {
-      text += bounded.slice(at);
+      yield bounded.slice(at);
       break;
     }
-    text += bounded.slice(at, open);
+    if (open > at) yield bounded.slice(at, open);
     // Comments first: they can contain anything, including tag-shaped text.
     if (bounded.startsWith('<!--', open)) {
       // `<!-->` and `<!--->` close AT ONCE. Demanding a full `-->` after them found no
@@ -223,7 +217,7 @@ export function plainTextFromHtml(html: string): string {
     const tag = scanTag(bounded, open);
     if (tag === null) {
       // A `<` that starts no tag is text, exactly as a browser reads it.
-      text += '<';
+      yield '<';
       at = open + 1;
       continue;
     }
@@ -231,13 +225,35 @@ export function plainTextFromHtml(html: string): string {
     if (!tag.closing && RAW_TEXT_TAGS.has(tag.name)) {
       at = rawTextEnd(bounded, tag.name, tag.end);
     } else if (!tag.closing && tag.name === 'br') {
-      text += '\n';
+      yield '\n';
     } else if (tag.closing && CELL_TAGS.has(tag.name)) {
-      text += '\t';
+      yield '\t';
     } else if (tag.closing && BLOCK_TAGS.has(tag.name)) {
-      text += '\n';
+      yield '\n';
     }
   }
+}
+
+/**
+ * The visible text of an HTML fragment.
+ *
+ * A single forward walk (see {@link htmlTextPieces}), not a sequence of `replace` passes.
+ * The walk never re-reads what it has already written, so no later stage can turn emitted
+ * text back into a tag.
+ *
+ * It does NOT promise the output holds no angle brackets. A payload may write a literal `<`
+ * that a browser also shows as text, and removing the element after it can leave that `<`
+ * beside a word. That is fine here and only here: the result is inserted as run text through
+ * the same path typed characters take, and is escaped again on save. Nothing re-parses it.
+ *
+ * Block boundaries become newlines and table cells become tabs, matching how this engine
+ * already flattens a copied cell range — so an HTML table pasted here lands in the same
+ * shape a table copied out of the document does.
+ */
+export function plainTextFromHtml(html: string): string {
+  const bounded = html.length > MAX_HTML_INPUT ? html.slice(0, MAX_HTML_INPUT) : html;
+  let text = '';
+  for (const piece of htmlTextPieces(bounded)) text += piece;
   return (
     decodeEntities(text)
       // Collapse the runs of blank lines that block-level markup leaves behind, and drop
@@ -301,6 +317,38 @@ export function insertableText(text: string): string {
     out += text[i]!;
   }
   return out;
+}
+
+/**
+ * A character the reader can actually see: not whitespace, and not one of the zero-width
+ * or invisible-format characters (zero-widths, bidi marks and isolates, `U+2060`,
+ * `U+FEFF`, soft hyphen) some
+ * applications wrap around inline content. Those survive `trim()` and would make an
+ * effectively empty payload read as "carries text".
+ */
+const VISIBLE_CHAR = /[^\s\u200B-\u200F\u2060\u2066-\u2069\u061C\uFEFF\u00AD]/;
+
+/** Whether the text holds at least one character the reader can see. */
+export function hasVisibleChar(text: string): boolean {
+  return VISIBLE_CHAR.test(text);
+}
+
+/**
+ * Early-exit visible-text scan: stops at the first visible character instead of
+ * materializing the whole payload's text the way {@link plainTextFromHtml} does. The two
+ * share {@link htmlTextPieces} and the same input cap, so they agree on WHERE text is —
+ * this one only answers sooner.
+ */
+export function htmlHasVisibleText(html: string): boolean {
+  const bounded = html.length > MAX_HTML_INPUT ? html.slice(0, MAX_HTML_INPUT) : html;
+  for (const piece of htmlTextPieces(bounded)) {
+    // Entities decode per piece only when one can be present; a reference split across
+    // pieces by markup may still read as visible here — the full transform concatenates
+    // before decoding, so on such (hand-crafted) payloads this over-reports visibility.
+    const text = piece.includes('&') ? decodeEntities(piece) : piece;
+    if (VISIBLE_CHAR.test(text)) return true;
+  }
+  return false;
 }
 
 /**

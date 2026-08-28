@@ -8,6 +8,7 @@
 // Paste and drop of supported raster formats route through the shared image-insert path.
 
 import { useCallback, useLayoutEffect, useRef } from 'react';
+import { clipboardDropLandsText, clipboardPasteLandsContent } from '@docx-editor.dev/core/editor';
 import { useDocxEditor } from './context';
 import { useImageInsertOptional } from './images/ImageInsert';
 import { ImageSelectionOverlay } from './images/ImageSelectionOverlay.tsx';
@@ -61,15 +62,12 @@ export function DocxEditorContent({ className }: DocxEditorContentProps) {
       const items = event.clipboardData;
       if (!items) return;
       if (!hasImageFile(items)) return;
-      // STAND DOWN only for payloads the ENGINE will land. Real word-processor clipboards
-      // carry `text/html` AND an image file for the same content, and the engine's paste
-      // router lands that image through the fragment or `data:` lane — intercepting here
-      // inserted it twice. But a browser "copy image" payload carries `text/html` with an
-      // EXTERNAL `<img src>` the projection drops by design, and a bare screenshot has no
-      // HTML at all; both still need this file lane. (`defaultPrevented` says nothing —
-      // the engine prevents every paste, even ones it ignores.)
-      const html = typeof items.getData === 'function' ? (items.getData('text/html') ?? '') : '';
-      if (html.includes('data-docx-fragment') || html.includes('data:image')) return;
+      // STAND DOWN whenever the ENGINE will land content from the payload — see the
+      // predicate's contract in core. Word on macOS pastes a rendered PNG of copied TEXT
+      // beside the HTML; taking this file lane for it inserted that rendering on top of
+      // the text. (`defaultPrevented` says nothing — the engine prevents every paste,
+      // even ones it ignores.)
+      if (clipboardPasteLandsContent(items)) return;
       event.preventDefault();
       void imageInsert.insertFromDataTransfer(items);
     },
@@ -88,6 +86,25 @@ export function DocxEditorContent({ className }: DocxEditorContentProps) {
     (event: React.DragEvent) => {
       if (!imageInsert?.isEnabled) return;
       if (!hasImageFile(event.dataTransfer)) return;
+      // Same stand-down as paste, for the drop lane's plain-text-only reality: when the
+      // payload carries visible HTML text, NOT preventing the default lets the browser
+      // fire `insertFromDrop`, which is the engine's only drop path. Word on macOS drags
+      // carry a rendered PNG beside the text; taking the file lane swallowed that event
+      // and turned dropped text into a picture of it.
+      if (clipboardDropLandsText(event.dataTransfer)) {
+        // Only an EDITABLE target fires `insertFromDrop`. Anywhere else (page furniture,
+        // an inactive header band), the browser's default action for a file-carrying
+        // transfer is to NAVIGATE to the file — which destroys the session — so the drop
+        // is swallowed instead of released. Resolved through the nearest annotated
+        // ancestor: `isContentEditable` does not exist on SVG elements (painted vector
+        // shapes), where a direct read answered undefined for an editable position.
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest('[contenteditable]')?.getAttribute('contenteditable') === 'true') {
+          return;
+        }
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
       void imageInsert.insertFromDataTransfer(event.dataTransfer);
     },

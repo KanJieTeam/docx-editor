@@ -794,7 +794,7 @@ export interface CreateImageResourceCacheOptions {
 }
 
 // @public
-export function createNodeIdAllocator(part: OoxmlPart): () => string;
+export function createNodeIdAllocator(part: OoxmlPart, family?: 'new' | 'paste'): () => string;
 
 // @public
 export function createNoteReferenceScanBudget(maxVisited?: number, maxParts?: number): NoteReferenceScanBudget;
@@ -4808,6 +4808,8 @@ export function usedParaIds(root: OoxmlElement): ReadonlySet<string>;
 
 // @public
 export interface ValidatedRasterHeader {
+    readonly dpiX?: number;
+    readonly dpiY?: number;
     // (undocumented)
     readonly pixelHeight: number;
     // (undocumented)

@@ -8,6 +8,7 @@ if (!GlobalRegistrator.isRegistered) GlobalRegistrator.register();
 
 import { describe, expect, test } from 'bun:test';
 import { projectExternalHtml } from '../clipboard-html-read.ts';
+import { WORD_STYLE_TEXT_MAX, wordClassAlignmentsFromStyleText } from '../clipboard-html-styles.ts';
 import { readOoxmlPackage, type OoxmlPackage } from '../../store/package/ooxml-package.ts';
 import { serializeOoxmlPart } from '../../store/package/ooxml-tree.ts';
 import { strFromU8 } from '../../store/package/zip.ts';
@@ -16,17 +17,39 @@ import { strFromU8 } from '../../store/package/zip.ts';
 const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
+function pngWithPhysicalSize(width: number, height: number, pixelsPerMeter: number): string {
+  const source = Uint8Array.from(atob(TINY_PNG_BASE64), (char) => char.charCodeAt(0));
+  const writeUint32 = (bytes: Uint8Array, offset: number, value: number): void => {
+    bytes[offset] = (value >>> 24) & 0xff;
+    bytes[offset + 1] = (value >>> 16) & 0xff;
+    bytes[offset + 2] = (value >>> 8) & 0xff;
+    bytes[offset + 3] = value & 0xff;
+  };
+  writeUint32(source, 16, width);
+  writeUint32(source, 20, height);
+  const phys = Uint8Array.from([
+    0, 0, 0, 9, 0x70, 0x48, 0x59, 0x73, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+  ]);
+  writeUint32(phys, 8, pixelsPerMeter);
+  writeUint32(phys, 12, pixelsPerMeter);
+  const bytes = new Uint8Array(source.length + phys.length);
+  bytes.set(source.subarray(0, 33));
+  bytes.set(phys, 33);
+  bytes.set(source.subarray(33), 33 + phys.length);
+  return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''));
+}
+
 interface OpenedFragment {
   readonly pkg: OoxmlPackage;
   readonly docXml: string;
   readonly relsXml: string;
+  readonly lastMarkCovered: boolean;
 }
 
 /** Project, read back through the bounded package reader, and serialize the body. */
 function openFragment(html: string): OpenedFragment {
   const projected = projectExternalHtml(html);
   if (!projected.ok) throw new Error(`projection refused: ${projected.reason}`);
-  expect(projected.lastMarkCovered).toBe(false);
   const read = readOoxmlPackage(projected.fragmentBytes);
   if (!read.ok) throw new Error(`read-back refused: ${read.reason}`);
   const pkg = read.package;
@@ -37,17 +60,60 @@ function openFragment(html: string): OpenedFragment {
     pkg,
     docXml: serializeOoxmlPart(part),
     relsXml: relsBytes ? strFromU8(relsBytes) : '',
+    lastMarkCovered: projected.lastMarkCovered,
   };
 }
 
 describe('run and paragraph mapping', () => {
   test('headings become bold direct formatting at Word sizes', () => {
-    const { docXml } = openFragment('<h1>Alpha</h1><h3>Beta</h3>');
+    const { docXml, lastMarkCovered } = openFragment('<h1>Alpha</h1><h3>Beta</h3>');
     expect(docXml).toContain('w:sz w:val="64"');
     expect(docXml).toContain('w:sz w:val="44"');
     expect(docXml).toContain('<w:b/>');
     expect(docXml).toContain('Alpha');
     expect(docXml).toContain('Beta');
+    expect(lastMarkCovered).toBe(false);
+  });
+
+  test('Word heading tags use target styles and include their paragraph mark', () => {
+    const html =
+      '<html xmlns:o="urn:schemas-microsoft-com:office:office"><body>' +
+      '<h2>Target heading</h2></body></html>';
+    const { docXml, lastMarkCovered } = openFragment(html);
+    expect(docXml).toContain('<w:pStyle w:val="Heading2"/>');
+    expect(docXml).not.toContain('w:sz w:val="52"');
+    expect(docXml).not.toContain('<w:b/>');
+    expect(lastMarkCovered).toBe(true);
+  });
+
+  test('Word desktop and online heading classes map to target styles', () => {
+    const { docXml, lastMarkCovered } = openFragment(
+      '<p class="MsoHeading2">Desktop</p><p class="Heading3">Online</p>'
+    );
+    expect(docXml).toContain('<w:pStyle w:val="Heading2"/>');
+    expect(docXml).toContain('<w:pStyle w:val="Heading3"/>');
+    expect(lastMarkCovered).toBe(true);
+  });
+
+  test('Word caption classes use target styles and include their paragraph mark', () => {
+    const { docXml, lastMarkCovered } = openFragment(
+      '<p class="MsoCaption" style="text-align:center">Figure 1</p>'
+    );
+    expect(docXml).toContain('<w:pStyle w:val="Caption"/>');
+    expect(docXml).toContain('<w:jc w:val="center"/>');
+    expect(lastMarkCovered).toBe(true);
+  });
+
+  test('generic paragraphs keep the host paragraph mark', () => {
+    const { lastMarkCovered } = openFragment('<p>ordinary</p>');
+    expect(lastMarkCovered).toBe(false);
+  });
+
+  test('only the final projected block controls paragraph mark coverage', () => {
+    const { lastMarkCovered } = openFragment(
+      '<p class="MsoCaption">caption</p><p>ordinary tail</p>'
+    );
+    expect(lastMarkCovered).toBe(false);
   });
 
   test('inline tags and CSS map to run properties', () => {
@@ -65,6 +131,49 @@ describe('run and paragraph mapping', () => {
     expect(docXml).toContain('w:sz w:val="24"'); // 16px = 12pt = 24 half-points
     expect(docXml).toContain('w:ascii="Georgia"');
     expect(docXml).toContain('w:fill="FFFF00"');
+  });
+
+  test('Word highlighter named colours become w:highlight, not shading', () => {
+    const cases: Array<{ css: string; val: string; text: string }> = [
+      { css: 'background:yellow;mso-highlight:yellow', val: 'yellow', text: 'y' },
+      { css: 'background:aqua;mso-highlight:aqua', val: 'cyan', text: 'a' },
+      { css: 'background:fuchsia;mso-highlight:fuchsia', val: 'magenta', text: 'f' },
+      { css: 'background:lime;mso-highlight:lime', val: 'green', text: 'l' },
+      { css: 'background:olive;mso-highlight:olive', val: 'darkYellow', text: 'o' },
+    ];
+    const html = `<p>${cases
+      .map((entry) => `<span style="${entry.css}">${entry.text}</span>`)
+      .join('')}</p>`;
+    const { docXml } = openFragment(html);
+    for (const entry of cases) {
+      const run = docXml.split('<w:r>').find((piece) => piece.includes(`>${entry.text}<`));
+      expect(run).toBeDefined();
+      expect(run!).toContain(`w:highlight w:val="${entry.val}"`);
+      expect(run!).not.toContain('w:shd');
+    }
+  });
+
+  test('a named background colour without mso-highlight remains shading', () => {
+    const { docXml } = openFragment('<p><span style="background:yellow">y</span></p>');
+    const run = docXml.split('<w:r>').find((piece) => piece.includes('>y<'));
+    expect(run).not.toContain('w:highlight');
+    expect(run).toContain('<w:shd ');
+    expect(run).toContain('w:fill="FFFF00"');
+  });
+
+  test('background shorthand that is not a solid colour is refused', () => {
+    const { docXml } = openFragment(
+      '<p><span style="background:yellow url(https://evil.example/x.png)">keep</span>' +
+        '<span style="background:url(https://evil.example/x.png)">also</span></p>'
+    );
+    const keep = docXml.split('<w:r>').find((piece) => piece.includes('>keep<'));
+    const also = docXml.split('<w:r>').find((piece) => piece.includes('>also<'));
+    expect(keep).toBeDefined();
+    expect(keep!).not.toContain('w:highlight');
+    expect(keep!).not.toContain('w:shd');
+    expect(also!).not.toContain('w:highlight');
+    expect(also!).not.toContain('w:shd');
+    expect(docXml).not.toContain('evil.example');
   });
 
   test('font-weight CSS overrides in both directions', () => {
@@ -92,6 +201,128 @@ describe('run and paragraph mapping', () => {
     expect(docXml).toContain('w:hanging="360"');
     expect(docXml).toContain('w:jc w:val="both"');
     expect(docXml).toContain('w:firstLine="360"');
+  });
+
+  test('Word stylesheet text-align on Title/Subtitle is copied as direct jc', () => {
+    // Word clipboard HTML puts alignment in a detached <style> block. Title often
+    // also carries inline text-align / align=center; Subtitle often does not.
+    // The fragment has no styles.xml, so merge reuses the target Title/Subtitle
+    // definitions, which have no w:jc. Direct jc on the paragraph is what survives.
+    const html =
+      '<html xmlns:o="urn:schemas-microsoft-com:office:office"><head><style>' +
+      '<!--' +
+      'p.MsoTitle, li.MsoTitle, div.MsoTitle { text-align:center; }' +
+      'p.MsoSubtitle, li.MsoSubtitle, div.MsoSubtitle { text-align:center; }' +
+      'p.other { text-align:center; }' +
+      '-->' +
+      '</style></head><body>' +
+      '<p class=MsoTitle align=center style="text-align:center">DOCX-EDITOR.DEV</p>' +
+      '<p class=MsoSubtitle>ELEMENT TEST DOCUMENT</p>' +
+      '<p class="other">not a Word title</p>' +
+      '</body></html>';
+    const { docXml } = openFragment(html);
+    const paras = docXml.split('</w:p>');
+    const title = paras.find((para) => para.includes('DOCX-EDITOR.DEV'));
+    const subtitle = paras.find((para) => para.includes('ELEMENT TEST DOCUMENT'));
+    const other = paras.find((para) => para.includes('not a Word title'));
+    expect(title).toBeDefined();
+    expect(subtitle).toBeDefined();
+    expect(title!).toContain('<w:pStyle w:val="Title"/>');
+    expect(title!).toContain('<w:jc w:val="center"/>');
+    expect(subtitle!).toContain('<w:pStyle w:val="Subtitle"/>');
+    expect(subtitle!).toContain('<w:jc w:val="center"/>');
+    expect(other!).not.toContain('<w:jc w:val="center"/>');
+  });
+
+  test('a left-aligned Word Subtitle stylesheet is not forced to center', () => {
+    const html =
+      '<html xmlns:o="urn:schemas-microsoft-com:office:office"><head><style>' +
+      'p.MsoTitle { text-align:center; }' +
+      'p.MsoSubtitle { text-align:left; }' +
+      '</style></head><body>' +
+      '<p class="MsoTitle">centred title</p>' +
+      '<p class="MsoSubtitle">left subtitle</p>' +
+      '</body></html>';
+    const { docXml } = openFragment(html);
+    const paras = docXml.split('</w:p>');
+    const title = paras.find((para) => para.includes('centred title'));
+    const subtitle = paras.find((para) => para.includes('left subtitle'));
+    expect(title!).toContain('<w:jc w:val="center"/>');
+    expect(subtitle!).toContain('<w:jc w:val="left"/>');
+    expect(subtitle!).not.toContain('<w:jc w:val="center"/>');
+  });
+
+  test('a Word title class with no stylesheet alignment is not forced to center', () => {
+    const { docXml } = openFragment('<p class="MsoSubtitle">plain subtitle</p>');
+    const subtitle = docXml.split('</w:p>').find((para) => para.includes('plain subtitle'));
+    expect(subtitle).toContain('<w:pStyle w:val="Subtitle"/>');
+    expect(subtitle).not.toContain('<w:jc');
+  });
+
+  test('inline text-align on a Word title class still wins over the stylesheet', () => {
+    const html =
+      '<html xmlns:o="urn:schemas-microsoft-com:office:office"><head><style>' +
+      'p.MsoSubtitle { text-align:center; }' +
+      '</style></head><body>' +
+      '<p class="MsoSubtitle" style="text-align:left">left subtitle</p>' +
+      '</body></html>';
+    const { docXml } = openFragment(html);
+    const subtitle = docXml.split('</w:p>').find((para) => para.includes('left subtitle'));
+    expect(subtitle).toContain('<w:pStyle w:val="Subtitle"/>');
+    expect(subtitle).toContain('<w:jc w:val="left"/>');
+    expect(subtitle).not.toContain('<w:jc w:val="center"/>');
+  });
+
+  test('HTML align still wins over the stylesheet and loses to inline text-align', () => {
+    const html =
+      '<html xmlns:o="urn:schemas-microsoft-com:office:office"><head><style>' +
+      'p.MsoTitle { text-align:left; }' +
+      '</style></head><body>' +
+      '<p class="MsoTitle" align="center">from align</p>' +
+      '<p class="MsoTitle" align="center" style="text-align:right">from inline</p>' +
+      '</body></html>';
+    const { docXml } = openFragment(html);
+    const paras = docXml.split('</w:p>');
+    const fromAlign = paras.find((para) => para.includes('from align'));
+    const fromInline = paras.find((para) => para.includes('from inline'));
+    expect(fromAlign!).toContain('<w:jc w:val="center"/>');
+    expect(fromInline!).toContain('<w:jc w:val="right"/>');
+    expect(fromInline!).not.toContain('<w:jc w:val="center"/>');
+  });
+});
+
+describe('Word stylesheet class alignment scan', () => {
+  test('unrelated and mixed selectors never contribute', () => {
+    const alignments = wordClassAlignmentsFromStyleText(
+      'p.other { text-align:center; }' +
+        'p.MsoSubtitle, p.other { text-align:center; }' +
+        'p .MsoSubtitle { text-align:center; }' +
+        'p.MsoTitle { text-align:center; }'
+    );
+    expect(alignments.get('MsoTitle')).toBe('center');
+    expect(alignments.get('MsoSubtitle')).toBeUndefined();
+    expect(alignments.get('other')).toBeUndefined();
+  });
+
+  test('malformed CSS does not throw and does not apply a truncated rule', () => {
+    const alignments = wordClassAlignmentsFromStyleText(
+      'p.MsoSubtitle { text-align:center\n' + 'p.MsoTitle { text-align:right; }'
+    );
+    expect(alignments.size).toBe(0);
+  });
+
+  test('oversized CSS is refused rather than scanned', () => {
+    const css = `${'x'.repeat(WORD_STYLE_TEXT_MAX + 1)}p.MsoSubtitle{text-align:center;}`;
+    expect(wordClassAlignmentsFromStyleText(css).size).toBe(0);
+  });
+
+  test('text-align values with url() or functions are refused', () => {
+    const alignments = wordClassAlignmentsFromStyleText(
+      'p.MsoSubtitle { text-align:url(https://evil.example/); }' +
+        'p.MsoTitle { text-align:center; }'
+    );
+    expect(alignments.get('MsoSubtitle')).toBeUndefined();
+    expect(alignments.get('MsoTitle')).toBe('center');
   });
 });
 
@@ -218,6 +449,25 @@ describe('images', () => {
     expect(media).toBeDefined();
     expect(media!.length).toBeGreaterThan(8);
     expect(relsXml).toContain('Target="media/image1.png"');
+  });
+
+  test('Word bare image dimensions use points', () => {
+    const html =
+      '<html xmlns:o="urn:schemas-microsoft-com:office:office"><body><p>' +
+      `<img src="data:image/png;base64,${TINY_PNG_BASE64}" width="10" height="20">` +
+      '</p></body></html>';
+    const { docXml } = openFragment(html);
+    // 10pt and 20pt expressed as CSS pixels, then converted to EMU.
+    expect(docXml).toContain('cx="127000"');
+    expect(docXml).toContain('cy="254000"');
+  });
+
+  test('an unsized PNG uses its physical density', () => {
+    const png = pngWithPhysicalSize(144, 72, 5669);
+    const { docXml } = openFragment(`<p><img src="data:image/png;base64,${png}"></p>`);
+    // Integer pixels-per-metre metadata is approximately 144 dpi.
+    expect(docXml).toContain('cx="914447"');
+    expect(docXml).toContain('cy="457223"');
   });
 
   test('a data: image above the per-image cap is dropped', () => {

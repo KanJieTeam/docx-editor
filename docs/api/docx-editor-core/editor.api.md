@@ -677,6 +677,12 @@ export function chromeSlotId(group: {
 // @public
 export function chromeSlotIsToggle(slotId: ChromeSlotId): boolean;
 
+// @internal
+export function clipboardDropLandsText(transfer: DataTransfer | null | undefined): boolean;
+
+// @internal
+export function clipboardPasteLandsContent(transfer: DataTransfer | null | undefined): boolean;
+
 // @public
 export interface CollaborationModuleContribution {
     readonly session: EditorCollaborationSession;

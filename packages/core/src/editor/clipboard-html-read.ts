@@ -21,6 +21,26 @@ import {
   type SupportedImageMime,
 } from '../store/package/image-resources.ts';
 import { writeZip, strToU8 } from '../store/package/zip.ts';
+import {
+  numberingPartXml,
+  type HtmlListAllocation as ListAllocation,
+} from './clipboard-html-numbering.ts';
+import {
+  applyParaCss,
+  applyRunCss,
+  applyWordParagraphAlignment,
+  imageDimensionPx,
+  isElement,
+  isWordClipboardHtml,
+  parseCssColor,
+  parseInlineStyle,
+  tagOf,
+  wordClassAlignmentsFromDocument,
+  wordParagraphStyleId,
+  type HtmlParagraphAlign,
+  type HtmlParaProps,
+  type HtmlRunProps,
+} from './clipboard-html-styles.ts';
 
 export interface HtmlProjectionLimits {
   /** UTF-8 size cap applied BEFORE parse. Default 4 MiB. */
@@ -38,8 +58,10 @@ export type HtmlProjectionResult =
       readonly ok: true;
       /** A fragment package zip, readable by `readOoxmlPackage`. */
       readonly fragmentBytes: Uint8Array;
-      /** Always false: the last projected paragraph merges into the host paragraph. */
+      /** True when the final projected paragraph carries a mapped Word style. */
       readonly lastMarkCovered: boolean;
+      /** How many `data:` images the projection accepted into the fragment. */
+      readonly imageCount: number;
     }
   | { readonly ok: false; readonly reason: 'too-large' | 'no-content' | 'parse-unavailable' };
 
@@ -83,41 +105,11 @@ const CONTAINER_TAGS = new Set(
   )
 );
 
-const NAMED_COLORS = new Map(
-  (
-    'black:000000 white:FFFFFF red:FF0000 green:008000 blue:0000FF yellow:FFFF00 gray:808080 ' +
-    'grey:808080 silver:C0C0C0 maroon:800000 navy:000080 purple:800080 orange:FFA500'
-  )
-    .split(' ')
-    .map((pair) => pair.split(':') as [string, string])
-);
-
-interface RunProps {
-  bold?: boolean;
-  italic?: boolean;
-  underline?: boolean;
-  strike?: boolean;
-  vertAlign?: 'subscript' | 'superscript';
-  /** RRGGBB uppercase. */
-  color?: string;
-  /** RRGGBB uppercase, run shading fill. */
-  shdFill?: string;
-  szHalfPoints?: number;
-  font?: string;
-}
-
-interface ParaProps {
-  jc?: 'left' | 'center' | 'right' | 'both';
-  indLeftTwips?: number;
-  /** Positive → `w:firstLine`, negative → `w:hanging`. */
-  firstLineTwips?: number;
-  /** `w:spacing w:line` in 240ths, `w:lineRule="auto"`. */
-  lineTwentieths?: number;
-  numPr?: { readonly numId: string; readonly ilvl: number };
-}
+type RunProps = HtmlRunProps;
+type ParaProps = HtmlParaProps;
 
 type ListState = { readonly numId: string; readonly level: number };
-type ListAllocation = { readonly numId: string; readonly kind: 'ordered' | 'bullet' };
+
 type RelEntry = {
   readonly id: string;
   readonly type: string;
@@ -128,6 +120,7 @@ type RelEntry = {
 interface FlowContext {
   readonly run: RunProps;
   readonly para: ParaProps;
+  readonly paragraphMarkCovered: boolean;
   readonly pre: boolean;
   readonly list: ListState | null;
 }
@@ -136,6 +129,8 @@ interface Projection {
   nodesLeft: number;
   readonly maxDepth: number;
   readonly maxImageBytes: number;
+  readonly wordHtml: boolean;
+  lastMarkCovered: boolean;
   readonly rels: RelEntry[];
   readonly media: Map<string, Uint8Array>;
   readonly mediaExtensions: Map<string, string>;
@@ -143,120 +138,11 @@ interface Projection {
   semanticListCount: number;
   imageCount: number;
   docPrId: number;
-}
-
-// --- CSS reading (inline `style` attributes only — no stylesheet cascade)
-
-/** Inline style declarations as a Map, so hostile property names never become object keys. */
-function parseInlineStyle(element: Element): ReadonlyMap<string, string> {
-  const out = new Map<string, string>();
-  const raw = element.getAttribute('style');
-  if (!raw || raw.length > 8192) return out;
-  for (const declaration of raw.split(';')) {
-    const colon = declaration.indexOf(':');
-    if (colon <= 0) continue;
-    const name = declaration.slice(0, colon).trim().toLowerCase();
-    const value = declaration.slice(colon + 1).trim();
-    if (name.length > 0 && value.length > 0 && !out.has(name)) out.set(name, value);
-  }
-  return out;
-}
-
-/** Normalize a CSS color to RRGGBB uppercase hex, or null when it does not parse. */
-function parseCssColor(value: string): string | null {
-  const v = value.trim().toLowerCase();
-  const named = NAMED_COLORS.get(v);
-  if (named) return named;
-  const hex6 = /^#([0-9a-f]{6})$/.exec(v);
-  if (hex6) return hex6[1]!.toUpperCase();
-  const hex3 = /^#([0-9a-f]{3})$/.exec(v);
-  if (hex3) {
-    const [r, g, b] = hex3[1]!;
-    return `${r}${r}${g}${g}${b}${b}`.toUpperCase();
-  }
-  const rgb = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,[^)]*)?\)$/.exec(v);
-  if (rgb) {
-    const channel = (part: string): string =>
-      Math.min(255, Number.parseInt(part, 10)).toString(16).padStart(2, '0');
-    return `${channel(rgb[1]!)}${channel(rgb[2]!)}${channel(rgb[3]!)}`.toUpperCase();
-  }
-  return null;
-}
-
-/** A CSS length in points, from `px` or `pt` values only. */
-function parseCssLengthPt(value: string): number | null {
-  const match = /^(-?\d+(?:\.\d+)?)(px|pt)$/.exec(value.trim().toLowerCase());
-  if (!match) return null;
-  const magnitude = Number.parseFloat(match[1]!);
-  if (!Number.isFinite(magnitude)) return null;
-  return match[2] === 'px' ? magnitude * 0.75 : magnitude;
+  readonly classAlignments: ReadonlyMap<string, HtmlParagraphAlign>;
 }
 
 function clamp(value: number, low: number, high: number): number {
   return Math.min(high, Math.max(low, value));
-}
-
-function applyRunCss(base: RunProps, style: ReadonlyMap<string, string>): RunProps {
-  if (style.size === 0) return base;
-  const next: RunProps = { ...base };
-  const weight = style.get('font-weight')?.toLowerCase();
-  if (weight !== undefined) {
-    const numeric = Number.parseInt(weight, 10);
-    if (weight === 'bold' || numeric >= 600) next.bold = true;
-    else if (weight === 'normal' || numeric < 600) next.bold = false;
-  }
-  const fontStyle = style.get('font-style');
-  if (fontStyle !== undefined) next.italic = fontStyle.toLowerCase().includes('italic');
-  const decoration = (
-    style.get('text-decoration') ?? style.get('text-decoration-line')
-  )?.toLowerCase();
-  if (decoration !== undefined) {
-    if (decoration.includes('underline')) next.underline = true;
-    if (decoration.includes('line-through')) next.strike = true;
-    if (decoration.includes('none')) next.underline = next.strike = false;
-  }
-  const color = parseCssColor(style.get('color') ?? '');
-  if (color) next.color = color;
-  const background = style.get('background-color');
-  if (background !== undefined && background.toLowerCase() !== 'transparent') {
-    const parsed = parseCssColor(background);
-    if (parsed) next.shdFill = parsed;
-  }
-  const pt = parseCssLengthPt(style.get('font-size') ?? '');
-  if (pt !== null && pt > 0) next.szHalfPoints = clamp(Math.round(pt * 2), 2, 3276);
-  const family = style.get('font-family');
-  if (family !== undefined) {
-    const first = family
-      .split(',')[0]!
-      .trim()
-      .replace(/^['"]|['"]$/g, '');
-    if (first.length > 0 && first.length <= 64) next.font = first;
-  }
-  const vertical = style.get('vertical-align');
-  if (vertical === 'sub') next.vertAlign = 'subscript';
-  else if (vertical === 'super') next.vertAlign = 'superscript';
-  return next;
-}
-
-function applyParaCss(para: ParaProps, style: ReadonlyMap<string, string>): void {
-  const align = style.get('text-align')?.toLowerCase();
-  if (align === 'left' || align === 'start') para.jc = 'left';
-  else if (align === 'center') para.jc = 'center';
-  else if (align === 'right' || align === 'end') para.jc = 'right';
-  else if (align === 'justify') para.jc = 'both';
-  const marginPt = parseCssLengthPt(style.get('margin-left') ?? '');
-  if (marginPt !== null && marginPt > 0) {
-    para.indLeftTwips = clamp(Math.round(marginPt * 20), 0, 31_680);
-  }
-  const indentPt = parseCssLengthPt(style.get('text-indent') ?? '');
-  if (indentPt !== null && indentPt !== 0) {
-    const twips = clamp(Math.round(indentPt * 20), -31_680, 31_680);
-    if (twips !== 0) para.firstLineTwips = twips;
-  }
-  const lineHeight = style.get('line-height')?.trim() ?? '';
-  if (/^\d+(\.\d+)?$/.test(lineHeight) && Number.parseFloat(lineHeight) > 0) {
-    para.lineTwentieths = clamp(Math.round(240 * Number.parseFloat(lineHeight)), 24, 9600);
-  }
 }
 
 // --- XML emission
@@ -293,6 +179,9 @@ function rPrXml(props: RunProps): string {
   if (props.strike) inner += '<w:strike/>';
   if (props.color !== undefined) inner += `<w:color w:val="${props.color}"/>`;
   if (props.szHalfPoints !== undefined) inner += `<w:sz w:val="${props.szHalfPoints}"/>`;
+  if (props.highlight !== undefined) {
+    inner += `<w:highlight w:val="${escapeXmlAttribute(props.highlight)}"/>`;
+  }
   if (props.underline) inner += '<w:u w:val="single"/>';
   if (props.shdFill !== undefined) {
     inner += `<w:shd w:val="clear" w:color="auto" w:fill="${props.shdFill}"/>`;
@@ -308,6 +197,9 @@ function textRunXml(text: string, props: RunProps): string {
 /** `w:pPr`, children in CT_PPr sequence order: numPr, spacing, ind, jc. */
 function pPrXml(para: ParaProps): string {
   let inner = '';
+  if (para.styleId !== undefined) {
+    inner += `<w:pStyle w:val="${escapeXmlAttribute(para.styleId)}"/>`;
+  }
   if (para.numPr) {
     inner +=
       `<w:numPr><w:ilvl w:val="${para.numPr.ilvl}"/>` +
@@ -377,17 +269,6 @@ function decodeBase64(data: string, maxBytes: number): Uint8Array | null {
 
 const DATA_IMAGE_RE = /^data:image\/(png|jpeg|jpg|gif);base64,([A-Za-z0-9+/=]+)$/;
 
-function cssOrAttributePx(
-  element: Element,
-  style: ReadonlyMap<string, string>,
-  axis: 'width' | 'height'
-): number | null {
-  const pt = parseCssLengthPt(style.get(axis) ?? '');
-  if (pt !== null && pt > 0) return pt / 0.75;
-  const attr = element.getAttribute(axis) ?? '';
-  return /^[1-9]\d{0,4}$/.test(attr.trim()) ? Number.parseInt(attr, 10) : null;
-}
-
 /** Project a `data:` image into a media part + rel + inline `w:drawing` run. */
 function projectImage(element: Element, runs: string[], p: Projection): void {
   const src = element.getAttribute('src');
@@ -402,11 +283,11 @@ function projectImage(element: Element, runs: string[], p: Projection): void {
   const header = validateRasterHeader(bytes, declared);
 
   const style = parseInlineStyle(element);
-  let widthPx = cssOrAttributePx(element, style, 'width');
-  let heightPx = cssOrAttributePx(element, style, 'height');
+  let widthPx = imageDimensionPx(element, style, 'width', p.wordHtml);
+  let heightPx = imageDimensionPx(element, style, 'height', p.wordHtml);
   if (widthPx === null && heightPx === null && header) {
-    widthPx = header.pixelWidth;
-    heightPx = header.pixelHeight;
+    widthPx = (header.pixelWidth * 96) / (header.dpiX ?? 96);
+    heightPx = (header.pixelHeight * 96) / (header.dpiY ?? 96);
   } else if (widthPx !== null && heightPx === null) {
     heightPx = header ? (widthPx * header.pixelHeight) / header.pixelWidth : (widthPx * 2) / 3;
   } else if (widthPx === null && heightPx !== null) {
@@ -452,14 +333,6 @@ function allocateList(p: Projection, key: string, kind: 'ordered' | 'bullet'): s
 }
 
 // --- Walk
-
-function isElement(node: Node): node is Element {
-  return node.nodeType === 1; // ELEMENT_NODE
-}
-
-function tagOf(element: Element): string {
-  return element.tagName.toLowerCase();
-}
 
 /** True for the literal marker span Word emits beside `mso-list` paragraphs. */
 function isMsoListIgnoreMarker(style: ReadonlyMap<string, string>): boolean {
@@ -587,11 +460,13 @@ function projectParagraph(
   const tag = tagOf(element);
   const style = parseInlineStyle(element);
   const para: ParaProps = {};
+  const styleId = wordParagraphStyleId(element, p.wordHtml);
+  if (styleId !== undefined) para.styleId = styleId;
   if (ctx.para.numPr) para.numPr = ctx.para.numPr;
   if (ctx.para.jc) para.jc = ctx.para.jc;
   let run = { ...ctx.run };
   const heading = HEADING_SZ[tag];
-  if (heading !== undefined) {
+  if (heading !== undefined && styleId === undefined) {
     run.bold = true;
     run.szHalfPoints = heading;
   }
@@ -599,9 +474,16 @@ function projectParagraph(
   if (tag === 'pre') run.font = 'Courier New';
   const mso = msoListNumPr(element, style, p);
   if (mso) para.numPr = mso;
+  applyWordParagraphAlignment(para, element, p.classAlignments);
   applyParaCss(para, style);
   run = applyRunCss(run, style);
-  const next: FlowContext = { run, para, pre, list: ctx.list };
+  const next: FlowContext = {
+    run,
+    para,
+    paragraphMarkCovered: styleId !== undefined,
+    pre,
+    list: ctx.list,
+  };
   projectFlow(Array.from(element.childNodes), depth + 1, next, p, out, true);
 }
 
@@ -649,7 +531,10 @@ function projectFlow(
   const before = out.length;
   let pending: string[] = [];
   const flush = (): void => {
-    if (pending.length > 0) out.push(paragraphXml(ctx.para, pending));
+    if (pending.length > 0) {
+      out.push(paragraphXml(ctx.para, pending));
+      p.lastMarkCovered = ctx.paragraphMarkCovered;
+    }
     pending = [];
   };
   for (const node of nodes) {
@@ -687,7 +572,10 @@ function projectFlow(
   }
   flush();
   // An explicit block emits its paragraph even when empty.
-  if (forceEmit && out.length === before) out.push(paragraphXml(ctx.para, []));
+  if (forceEmit && out.length === before) {
+    out.push(paragraphXml(ctx.para, []));
+    p.lastMarkCovered = ctx.paragraphMarkCovered;
+  }
 }
 
 // --- Tables
@@ -802,6 +690,7 @@ function projectTable(
     `<w:tbl><w:tblPr><w:tblW w:w="${TABLE_TOTAL_TWIPS}" w:type="dxa"/>${borders}</w:tblPr>` +
       `<w:tblGrid>${grid}</w:tblGrid>${rowXml.join('')}</w:tbl>`
   );
+  p.lastMarkCovered = false;
 }
 
 function projectCell(
@@ -833,6 +722,7 @@ function projectCell(
   const cellCtx: FlowContext = {
     run: isHeader ? { ...ctx.run, bold: true } : ctx.run,
     para: isHeader ? { jc: 'center' } : {},
+    paragraphMarkCovered: false,
     pre: false,
     list: null,
   };
@@ -843,56 +733,6 @@ function projectCell(
     blocks.push('<w:p/>');
   }
   return `<w:tc><w:tcPr>${tcPr}</w:tcPr>${blocks.join('')}</w:tc>`;
-}
-
-// --- Numbering part
-
-// Symbol-font codepoints Word writes (private-use range), as escapes so they are not
-// invisible literals in the source; see store/package/numbering-part.ts.
-const BULLET_LEVELS = [
-  { text: '\uF0B7', font: 'Symbol' },
-  { text: 'o', font: 'Courier New' },
-  { text: '\uF0A7', font: 'Wingdings' },
-] as const;
-
-/** One `w:lvl` in strict CT_Lvl order: start, numFmt, lvlText, lvlJc, pPr, rPr. */
-function levelXml(kind: 'ordered' | 'bullet', ilvl: number): string {
-  const left = 720 * (ilvl + 1);
-  const indent = `<w:pPr><w:ind w:left="${left}" w:hanging="360"/></w:pPr>`;
-  if (kind === 'bullet') {
-    const bullet = BULLET_LEVELS[ilvl % BULLET_LEVELS.length]!;
-    return (
-      `<w:lvl w:ilvl="${ilvl}"><w:start w:val="1"/><w:numFmt w:val="bullet"/>` +
-      `<w:lvlText w:val="${escapeXmlAttribute(bullet.text)}"/><w:lvlJc w:val="left"/>${indent}` +
-      `<w:rPr><w:rFonts w:ascii="${bullet.font}" w:hAnsi="${bullet.font}" w:hint="default"/></w:rPr>` +
-      '</w:lvl>'
-    );
-  }
-  return (
-    `<w:lvl w:ilvl="${ilvl}"><w:start w:val="1"/><w:numFmt w:val="decimal"/>` +
-    `<w:lvlText w:val="%${ilvl + 1}."/><w:lvlJc w:val="left"/>${indent}</w:lvl>`
-  );
-}
-
-function numberingPartXml(allocations: readonly ListAllocation[]): string {
-  const abstracts = allocations
-    .map((allocation, index) => {
-      const levels = Array.from({ length: 9 }, (_, ilvl) => levelXml(allocation.kind, ilvl)).join(
-        ''
-      );
-      return (
-        `<w:abstractNum w:abstractNumId="${index}">` +
-        `<w:multiLevelType w:val="hybridMultilevel"/>${levels}</w:abstractNum>`
-      );
-    })
-    .join('');
-  const nums = allocations
-    .map(
-      (allocation, index) =>
-        `<w:num w:numId="${allocation.numId}"><w:abstractNumId w:val="${index}"/></w:num>`
-    )
-    .join('');
-  return `${XML_DECL}<w:numbering xmlns:w="${WML_NS}">${abstracts}${nums}</w:numbering>`;
 }
 
 // --- Zip assembly (entry names mirror the internal fragment extractor)
@@ -950,17 +790,12 @@ function assembleFragment(p: Projection, blocks: readonly string[]): Uint8Array 
 
 // --- Entry point
 
-/**
- * Project external `text/html` into a WordprocessingML fragment package.
- *
- * Pure over its input: parses into an inert document, walks under caps, and returns
- * fragment bytes the paste router reads through `readOoxmlPackage`. Never attaches
- * parsed nodes anywhere, never fetches, never executes.
- */
-export function projectExternalHtml(
-  html: string,
-  limits: HtmlProjectionLimits = {}
-): HtmlProjectionResult {
+type ProjectedBlocks =
+  | { readonly ok: true; readonly projection: Projection; readonly blocks: string[] }
+  | { readonly ok: false; readonly reason: 'too-large' | 'no-content' | 'parse-unavailable' };
+
+/** The shared parse-and-walk half: everything up to (but not including) zip assembly. */
+function projectBlocks(html: string, limits: HtmlProjectionLimits): ProjectedBlocks {
   const maxHtmlBytes = limits.maxHtmlBytes ?? DEFAULT_MAX_HTML_BYTES;
   // UTF-16 length is a lower bound on UTF-8 bytes, so the cheap check refuses first;
   // borderline payloads get an exact byte count.
@@ -972,6 +807,8 @@ export function projectExternalHtml(
   if (typeof DOMParser === 'undefined') return { ok: false, reason: 'parse-unavailable' };
   let parsed: Document;
   try {
+    // The result stays detached. The bounded allowlist walker emits escaped XML only.
+    // codeql[js/xss]
     parsed = new DOMParser().parseFromString(html, 'text/html');
   } catch {
     return { ok: false, reason: 'parse-unavailable' };
@@ -983,6 +820,8 @@ export function projectExternalHtml(
     nodesLeft: limits.maxNodes ?? DEFAULT_MAX_NODES,
     maxDepth: limits.maxDepth ?? DEFAULT_MAX_DEPTH,
     maxImageBytes: limits.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES,
+    wordHtml: isWordClipboardHtml(html),
+    lastMarkCovered: false,
     rels: [],
     media: new Map(),
     mediaExtensions: new Map(),
@@ -990,10 +829,54 @@ export function projectExternalHtml(
     semanticListCount: 0,
     imageCount: 0,
     docPrId: 0,
+    classAlignments: wordClassAlignmentsFromDocument(parsed),
   };
   const blocks: string[] = [];
-  const rootCtx: FlowContext = { run: {}, para: {}, pre: false, list: null };
+  const rootCtx: FlowContext = {
+    run: {},
+    para: {},
+    paragraphMarkCovered: false,
+    pre: false,
+    list: null,
+  };
   projectFlow(Array.from(body.childNodes), 0, rootCtx, projection, blocks);
   if (blocks.length === 0) return { ok: false, reason: 'no-content' };
-  return { ok: true, fragmentBytes: assembleFragment(projection, blocks), lastMarkCovered: false };
+  return { ok: true, projection, blocks };
+}
+
+/**
+ * Project external `text/html` into a WordprocessingML fragment package.
+ *
+ * Pure over its input: parses into an inert document, walks under caps, and returns
+ * fragment bytes the paste router reads through `readOoxmlPackage`. Never attaches
+ * parsed nodes anywhere, never fetches, never executes.
+ */
+export function projectExternalHtml(
+  html: string,
+  limits: HtmlProjectionLimits = {}
+): HtmlProjectionResult {
+  const projected = projectBlocks(html, limits);
+  if (!projected.ok) return projected;
+  return {
+    ok: true,
+    fragmentBytes: assembleFragment(projected.projection, projected.blocks),
+    lastMarkCovered: projected.projection.lastMarkCovered,
+    imageCount: projected.projection.imageCount,
+  };
+}
+
+/**
+ * What the projection WOULD land, without paying for zip assembly.
+ *
+ * The file-lane stand-down predicate asks this per paste gesture; running the full
+ * projection just to read a boolean doubled the parse-and-deflate cost of every
+ * image-bearing paste (the router runs the real projection right after).
+ */
+export function probeExternalHtml(
+  html: string,
+  limits: HtmlProjectionLimits = {}
+): { readonly lands: boolean; readonly imageCount: number } {
+  const projected = projectBlocks(html, limits);
+  if (!projected.ok) return { lands: false, imageCount: 0 };
+  return { lands: true, imageCount: projected.projection.imageCount };
 }
