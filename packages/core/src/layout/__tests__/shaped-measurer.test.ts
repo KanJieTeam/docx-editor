@@ -284,6 +284,189 @@ describe('advances are summed glyph advances (task 7.7)', () => {
     expect(measure.measure('cached', style())).toBe(measure.measure('cached', style()));
   });
 
+  test('small caps enables smcp and has a separate shaped-width cache entry', () => {
+    let calls = 0;
+    const withSmallCaps = createShapedMeasurer({
+      shaper: {
+        shape(input) {
+          calls += 1;
+          const smallCaps = input.environment.features.smcp === 1;
+          return {
+            text: input.text,
+            direction: 'ltr',
+            bidiLevel: 0,
+            glyphs: [
+              {
+                id: smallCaps ? 2 : 1,
+                cluster: 0,
+                originX: 0,
+                originY: 0,
+                advanceX: smallCaps ? 2_000 : 1_000,
+                advanceY: 0,
+                offsetX: 0,
+                offsetY: 0,
+                outline: { path: '', unitsPerEm: 1_000 },
+              },
+            ],
+            clusters: [],
+            fontSpans: [],
+            metrics: { ascent: 9_000, descent: 2_000, lineGap: 0 },
+          };
+        },
+      },
+      resolveFont: () => font,
+      fallback,
+      shapingLibrary: HARFBUZZ_SHAPING_LIBRARY,
+      unicodeDataVersion: '15.1',
+      fixedPointScale: 1_000,
+    });
+    const plain = withSmallCaps.measure('abc', style());
+    const smallCaps = withSmallCaps.measure('abc', style({ smallCaps: true }));
+    expect(plain).toBe(1);
+    expect(smallCaps).toBe(2);
+    expect(withSmallCaps.measure('abc', style({ smallCaps: true }))).toBe(2);
+    // 26 probe letters shaped twice to settle the FACE's `smcp` support, then one shaped call
+    // per distinct (text, feature) pair. The repeat is served from the cache, and the second
+    // small-caps measurement asks the face nothing: the answer is kept per face, not per text.
+    expect(calls).toBe(26 * 2 + 2);
+  });
+
+  test('small caps uses CSS measurement when the face has no smcp glyphs', () => {
+    const measure = measurer();
+    const smallCapsStyle = style({ smallCaps: true });
+    expect(measure.measure('abc', smallCapsStyle)).toBe(fallback.measure('abc', smallCapsStyle));
+  });
+
+  /**
+   * A face that substitutes a small-cap glyph for exactly the characters `covered` names.
+   * One glyph per character, so a prefix of the text is a prefix of the glyph run.
+   */
+  const measurerWithSmallCapsFor = (covered: (character: string) => boolean) =>
+    createShapedMeasurer({
+      shaper: {
+        shape(input) {
+          const enabled = input.environment.features.smcp === 1;
+          const substituted = (character: string) => enabled && covered(character);
+          return {
+            text: input.text,
+            direction: 'ltr',
+            bidiLevel: 0,
+            glyphs: [...input.text].map((character, index) => ({
+              id: substituted(character) ? 2 : character.codePointAt(0)!,
+              cluster: index,
+              originX: index * 1_000,
+              originY: 0,
+              advanceX: substituted(character) ? 800 : 1_000,
+              advanceY: 0,
+              offsetX: 0,
+              offsetY: 0,
+              outline: { path: '', unitsPerEm: 1_000 },
+            })),
+            clusters: [...input.text].map((_, index) => ({
+              textStart: index,
+              textEnd: index + 1,
+              glyphStart: index,
+              glyphEnd: index + 1,
+              advance: 1_000,
+              caretEdges: [0, 1_000],
+              fontSpan: 0,
+            })),
+            fontSpans: [],
+            metrics: { ascent: 9_000, descent: 2_000, lineGap: 0 },
+          };
+        },
+      },
+      resolveFont: () => font,
+      fallback,
+      shapingLibrary: HARFBUZZ_SHAPING_LIBRARY,
+      unicodeDataVersion: '15.1',
+      fixedPointScale: 1_000,
+    });
+
+  test('partial smcp coverage uses CSS measurement for the complete text', () => {
+    const partial = measurerWithSmallCapsFor((character) => character === 'a');
+    const smallCapsStyle = style({ smallCaps: true });
+    expect(partial.measure('ab', smallCapsStyle)).toBe(fallback.measure('ab', smallCapsStyle));
+  });
+
+  test('a small-caps span and EVERY prefix of it measure from the same source', () => {
+    // `semantic-hit-test` derives every caret edge on a line as
+    // `measureDisplayText(span.text.slice(0, offset), …)` through `measure`. Deciding `smcp`
+    // coverage from the text made a prefix answer differently from the span it belongs to:
+    // with a face carrying `smcp` for `a` alone, `measure('a')` took the shaped path (0.8)
+    // while `measure('ab')` took the fallback (12), so the caret after `a` landed at 7% of
+    // the painted span. The decision is per FACE, so both come from the fallback here.
+    const partial = measurerWithSmallCapsFor((character) => character === 'a');
+    const smallCapsStyle = style({ smallCaps: true });
+    const whole = partial.measure('ab', smallCapsStyle);
+    const prefix = partial.measure('a', smallCapsStyle);
+    expect(prefix).toBe(fallback.measure('a', smallCapsStyle));
+    expect(whole).toBe(fallback.measure('ab', smallCapsStyle));
+    expect(prefix).toBeCloseTo(whole / 2, 6);
+    expect(prefix).toBeLessThan(whole);
+  });
+
+  test('a fully covered face measures the span and its prefixes from the shaped path', () => {
+    // The other direction of the same rule: a face that does carry small caps must not send
+    // a prefix to the fallback, or the caret runs PAST the end of the painted span.
+    const covered = measurerWithSmallCapsFor(() => true);
+    const smallCapsStyle = style({ smallCaps: true });
+    expect(covered.measure('ab', smallCapsStyle)).toBeCloseTo(1.6, 6);
+    expect(covered.measure('a', smallCapsStyle)).toBeCloseTo(0.8, 6);
+    // The plain face still measures at the lowercase advance, from its own cache.
+    expect(covered.measure('ab', style())).toBeCloseTo(2, 6);
+  });
+
+  test('a face whose smcp shaping throws answers once and stays answered', () => {
+    // Hit-testing measures once per caret prefix. Re-running the 26-letter probe on every
+    // uncached prefix — and throwing out of it every time — turned one hostile face into the
+    // cost of the whole line, so the refusal is cached exactly as an answer is.
+    let calls = 0;
+    const hostile = createShapedMeasurer({
+      shaper: {
+        shape(input) {
+          calls += 1;
+          if (input.environment.features.smcp === 1) throw new Error('refused');
+          return {
+            text: input.text,
+            direction: 'ltr',
+            bidiLevel: 0,
+            glyphs: [...input.text].map((character, index) => ({
+              id: character.codePointAt(0)!,
+              cluster: index,
+              originX: index * 1_000,
+              originY: 0,
+              advanceX: 1_000,
+              advanceY: 0,
+              offsetX: 0,
+              offsetY: 0,
+              outline: { path: '', unitsPerEm: 1_000 },
+            })),
+            clusters: [],
+            fontSpans: [],
+            metrics: { ascent: 9_000, descent: 2_000, lineGap: 0 },
+          };
+        },
+      },
+      resolveFont: () => font,
+      fallback,
+      shapingLibrary: HARFBUZZ_SHAPING_LIBRARY,
+      unicodeDataVersion: '15.1',
+      fixedPointScale: 1_000,
+    });
+    const smallCapsStyle = style({ smallCaps: true });
+    expect(hostile.measure('abc', smallCapsStyle)).toBe(fallback.measure('abc', smallCapsStyle));
+    const afterFirst = calls;
+    // The probe throws on its first letter, so it costs exactly one call and never more.
+    expect(afterFirst).toBe(1);
+    for (const prefix of ['a', 'ab', 'abc', 'abcd']) {
+      expect(hostile.measure(prefix, smallCapsStyle)).toBe(
+        fallback.measure(prefix, smallCapsStyle)
+      );
+    }
+    expect(calls).toBe(afterFirst);
+  });
+
   test('super/subscript advances are EXACTLY three quarters of the baseline advance', () => {
     // Paint draws super/subscript at 0.75 of the run size, so measurement must be 0.75 of
     // the baseline advance — not the advance at the nearest whole half-point. At 11pt the

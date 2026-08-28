@@ -8,7 +8,9 @@ import {
   buildStyleCascadeTable,
   cascadeParagraphFormatting,
   cascadeRunProperties,
+  cascadeTableFormatting,
   cascadedBottomBorder,
+  tableCellStyleFormatting,
   isValidStyleId,
 } from '../style-cascade.ts';
 import { resolveRunStyle } from '../run-style.ts';
@@ -243,6 +245,15 @@ describe('character rStyle cascade and default character style', () => {
       color: 'CC0000',
       fontSizePt: 20, // direct wins over BaseChar's 14pt
     });
+  });
+
+  test('a run with no character style and no direct rPr keeps the inherited list by identity', () => {
+    const table = buildStyleCascadeTable(loadStyles(HEADING1_LAST));
+    const inherited = cascadeParagraphFormatting(
+      table,
+      paragraphPPr(`<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>x</w:t></w:r></w:p>`)
+    ).runProperties;
+    expect(cascadeRunProperties(inherited, [], table)).toBe(inherited);
   });
 
   test('rStyle cycles stop without hanging', () => {

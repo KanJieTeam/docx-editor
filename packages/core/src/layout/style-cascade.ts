@@ -47,6 +47,7 @@ import {
   type ResolvedTabStops,
 } from './paragraph-tabs.ts';
 import type { ThemeFonts } from './run-style.ts';
+import { combineStyleToggles } from './style-toggles.ts';
 
 /** Soft ceiling on `basedOn` chain length — enough for real templates, refuses hostile graphs. */
 export const MAX_STYLE_BASED_ON_DEPTH = 32;
@@ -707,13 +708,32 @@ export function cascadeParagraphFormatting(
   const markProps = propertiesOf(directMarkRun);
 
   // Content runs: defaults → table → paragraph style. Mark `w:pPr/w:rPr` is NOT content.
-  const runProperties: OoxmlProperty[] = [
-    ...table.docDefaultsRun,
-    ...(tableCellStyle?.runProperties ?? []),
-    ...chain.flatMap((style) => style.runProperties),
-  ];
-  const markRunProperties: OoxmlProperty[] =
-    markProps.length === 0 ? runProperties : [...runProperties, ...markProps];
+  //
+  // THREE LEVELS, not one flat list. §17.7.3 combines a toggle property as
+  // `val_table XOR val_paragraph XOR val_character` over the document defaults, and a whole
+  // `basedOn` chain is ONE of those values. The character level joins in
+  // `cascadeRunProperties`; what comes out here is the table and paragraph levels resolved
+  // against the defaults, which is also the answer for a run that names no character style.
+  const runProperties = combineStyleToggles([
+    { properties: table.docDefaultsRun, role: 'defaults', emit: true },
+    { properties: tableCellStyle?.runProperties ?? [], role: 'xor', emit: true },
+    { properties: chain.flatMap((style) => style.runProperties), role: 'xor', emit: true },
+  ]);
+  // The paragraph MARK is the same cascade with the mark's own `w:pPr/w:rPr` on top, and that
+  // `w:rPr` is DIRECT formatting for the mark — absolute, either way it is stated.
+  //
+  // Combined rather than concatenated so the result carries its resolved toggle state like
+  // any other cascade output. `list-resolve.ts` resolves a numbering marker from this list,
+  // and a plain concatenation is a fresh array with nothing attached: the marker would fall
+  // back to reading the properties and could answer differently from the text of the very
+  // paragraph it belongs to.
+  const markRunProperties: readonly OoxmlProperty[] =
+    markProps.length === 0
+      ? runProperties
+      : combineStyleToggles([
+          { properties: runProperties, role: 'carried', emit: true },
+          { properties: markProps, role: 'direct', emit: true },
+        ]);
 
   return {
     paragraphProperties,
@@ -754,6 +774,17 @@ export function cascadedBottomBorder(
  * When a cascade table is supplied, also resolves `w:rStyle` character styles (basedOn chain,
  * cycle/depth capped). Runs without an explicit `rStyle` pick up the default character style
  * (`w:default="1"`). Precedence: inherited → character style chain → direct formatting.
+ *
+ * PASS `inheritedRunProperties` BY IDENTITY. It must be an array
+ * {@link cascadeParagraphFormatting} returned — `runProperties` or `markRunProperties` — and
+ * not a copy of one. A toggle property (ECMA-376 §17.7.3) resolves per level of the style
+ * hierarchy, and the levels below the character style resolve to more than a true or a false:
+ * whether the document defaults' short circuit is still standing decides what the character
+ * style's own toggle does next, and no single `w:b` element can spell that. The paragraph
+ * cascade attaches that state to the array it returns, so spreading, filtering or sorting the
+ * list drops it. (`Object.freeze` returns the same object, so that one is safe.) A list
+ * without it is read as one ordinary level, which is the most a bare property list can say
+ * and is what a caller assembling its own list gets.
  */
 export function cascadeRunProperties(
   inheritedRunProperties: readonly OoxmlProperty[],
@@ -774,10 +805,52 @@ export function cascadeRunProperties(
   if (inheritedRunProperties.length === 0 && characterProps.length === 0) {
     return directRunProperties;
   }
-  if (directRunProperties.length === 0 && characterProps.length === 0) {
+  // Nothing to combine and nothing to append: hand back the SAME array.
+  //
+  // Read this for CORRECTNESS, not speed. The identity of the input is what carries the
+  // resolved toggle state (see the note on this function), so building a new array here would
+  // drop it and send the caller down the bare-property-list path. The saving is only an
+  // allocation, and a modest one: paragraph layout keys are content-based (`propertiesToken`
+  // joins the properties, `layout-cache.ts`) so no cache entry is missed either way, and the
+  // dominant caller — `runPropertiesOf` in `field-run-text.ts`, once per content run — copies
+  // the result immediately regardless. This line is unchanged from before the toggle cascade;
+  // what is new is that it now has to stay.
+  if (characterProps.length === 0 && directRunProperties.length === 0) {
     return inheritedRunProperties;
   }
-  return [...inheritedRunProperties, ...characterProps, ...directRunProperties];
+  const styleProperties =
+    characterProps.length === 0
+      ? inheritedRunProperties
+      : // `inheritedRunProperties` arrives from `cascadeParagraphFormatting` CARRYING the
+        // state the defaults, table and paragraph levels resolved to, so it is adopted rather
+        // than combined, and the character chain is the one level left to apply.
+        //
+        // The document defaults are still listed first, for the caller that hands over a list
+        // this module did not build: it has no carried state, so it reads as one level, and
+        // the defaults are the only way §17.7.3's short circuit reaches it at all.
+        //
+        // EMPTY inherited list means the paragraph cascade never ran, and then there is no
+        // short circuit to apply: the defaults level is left out entirely. `note-pagination`
+        // resolves a note mark from its character style alone and passes `[]` for exactly
+        // that reason. Injecting the defaults there would apply HALF of them — the toggles,
+        // because they combine here, and not `w:sz` or `w:rFonts`, because they do not — so a
+        // footnote reference mark in a document whose `docDefaults` declare `<w:b/>` would
+        // come back bold at the wrong size. Either all of the defaults or none of them, and
+        // none is what that caller has always had.
+        //
+        // `emit: false` says their ORDINARY properties do not join the result, because a
+        // non-empty inherited level already carries them.
+        combineStyleToggles([
+          ...(inheritedRunProperties.length > 0
+            ? ([
+                { properties: table?.docDefaultsRun ?? [], role: 'defaults', emit: false },
+              ] as const)
+            : []),
+          { properties: inheritedRunProperties, role: 'carried', emit: true },
+          { properties: characterProps, role: 'xor', emit: true },
+        ]);
+  if (directRunProperties.length === 0) return styleProperties;
+  return [...styleProperties, ...directRunProperties];
 }
 
 /** Everything the line breaker needs about one paragraph, already cascaded and converted. */

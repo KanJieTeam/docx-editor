@@ -12,6 +12,9 @@
 
 import type { OoxmlProperty } from '@docx-editor.dev/core/store';
 import { resolveOoxmlShadingFill } from './ooxml-shading.ts';
+// One reading of `CT_OnOff` for the whole lane. The style cascade combines toggle levels with
+// it and this resolver reads the combined result with it, so the two cannot drift apart.
+import { styleToggleIsOn as toggle } from './style-toggles.ts';
 
 /** `w:vertAlign` — script position, which also scales the run's effective size. */
 export type VerticalAlign = 'baseline' | 'superscript' | 'subscript';
@@ -101,12 +104,6 @@ export const DEFAULT_RUN_STYLE: ResolvedRunStyle = Object.freeze({
 });
 
 const HEX_COLOR = /^[0-9A-Fa-f]{6}$/;
-
-/** OOXML toggle semantics: present means on unless `w:val` says otherwise. */
-function toggle(property: OoxmlProperty): boolean {
-  const value = property.attributes?.val;
-  return value === undefined || !(value === '0' || value === 'false' || value === 'off');
-}
 
 function integer(raw: string | undefined, allowNegative = false): number | null {
   if (raw === undefined) return null;
@@ -276,10 +273,11 @@ export function resolveRunStyle(
 export function displayText(text: string, style: ResolvedRunStyle): string {
   if (style.caps) return text.toUpperCase();
   // Small caps changes glyph selection rather than the characters, so uppercasing here would
-  // corrupt the text a copy produces. Resolving it belongs to the shaper — which does not do
-  // it yet: no `smcp` feature is requested, so a small-caps run measures as plain lowercase
-  // while paint asks the browser to synthesize it. That leaves the span the wrong WIDTH, but
-  // breaking and caret edges agree with each other, so nothing drifts inside a run.
+  // corrupt the text a copy produces. Resolving it belongs to the shaper, which requests the
+  // `smcp` feature when the face carries small-cap glyphs and hands the run to the CSS
+  // measurer when it does not (`shaped-measurer.ts`). That decision is per FACE, so a span
+  // and every prefix of it measure from one source and the caret edges inside a run agree
+  // with the painted span.
   return text;
 }
 

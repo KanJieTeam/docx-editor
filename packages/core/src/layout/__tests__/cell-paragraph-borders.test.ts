@@ -16,6 +16,14 @@ import {
   type SemanticLayout,
 } from '../semantic-records.ts';
 import { paintSemanticLayout } from '../../output/semantic-paint.ts';
+import { buildNumberingIndex } from '../numbering-index.ts';
+import { resolveStoryListItems } from '../list-resolve.ts';
+import { cellBorderGroupKey } from '../cell-border-groups.ts';
+import {
+  buildStyleCascadeTable,
+  cascadeTableFormatting,
+  tableCellStyleFormatting,
+} from '../style-cascade.ts';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 
@@ -39,6 +47,19 @@ const TINY: PageGeometry = {
 
 const lay = (body: string, geometry?: PageGeometry): SemanticLayout =>
   layoutSemanticDocument(load(body), 1, { measurer, ...(geometry ? { geometry } : {}) });
+
+/** Same, with a numbering part, so a `w:numPr` paragraph resolves a level indent. */
+const layWithNumbering = (body: string, numberingBody: string): SemanticLayout => {
+  const parsed = readOoxmlPart(`<w:numbering xmlns:w="${W}">${numberingBody}</w:numbering>`, {
+    name: '/word/numbering.xml',
+    contentType: 'app/xml',
+  });
+  if (!parsed.ok) throw new Error(parsed.reason);
+  return layoutSemanticDocument(load(body), 1, {
+    measurer,
+    numberingIndex: buildNumberingIndex(parsed.part.root),
+  });
+};
 
 const paragraph = (text: string, pPr = '') =>
   `<w:p>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${text ? `<w:r><w:t>${text}</w:t></w:r>` : ''}</w:p>`;
@@ -163,6 +184,244 @@ describe('a boxed cell paragraph publishes the whole frame, not just the underli
 
   test('an unbordered cell paragraph publishes no strokes at all', () => {
     expect(cellParagraphs(lay(oneCellTable(paragraph('plain'))))[0]!.borders).toBeUndefined();
+  });
+});
+
+describe('consecutive cell paragraphs with identical borders are ONE bordered block', () => {
+  /** Word's `HorizontalLine`: a bottom rule and nothing else. */
+  const RULE = '<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr>';
+
+  test('two identically ruled paragraphs draw one rule, not two', () => {
+    const fragments = cellParagraphs(
+      lay(oneCellTable(paragraph('first', RULE) + paragraph('second', RULE)))
+    );
+    expect(fragments).toHaveLength(2);
+    // The run has no `w:between`, so the interior boundary carries nothing at all.
+    expect(fragments[0]!.borders ?? []).toHaveLength(0);
+    expect(sides(fragments[1]!)).toEqual(['bottom']);
+    expect(fragments[0]!.bottomBorder).toBeUndefined();
+  });
+
+  test('a boxed run opens above the first paragraph and closes below the last', () => {
+    // A REAL gap between the two paragraphs, or the claim below tests nothing: with no
+    // `w:spacing` the last line of the first sits flush against the first line of the second,
+    // and the side rules meet whether or not they were asked to span anything.
+    const GAP = '<w:spacing w:after="240"/>';
+    const fragments = cellParagraphs(
+      lay(oneCellTable(paragraph('first', GAP + BOX) + paragraph('second', GAP + BOX)))
+    );
+    expect(sides(fragments[0]!).sort()).toEqual(['left', 'right', 'top']);
+    expect(sides(fragments[1]!).sort()).toEqual(['bottom', 'left', 'right']);
+    const upper = stroke(fragments[0]!, 'left');
+    const lower = stroke(fragments[1]!, 'left');
+    // 12pt of `w:after` plus the box's own 4pt spaces: the gap the rules have to cross is
+    // real, and nothing else in the fragment reaches across it.
+    const contentGap = lower.box.y - (upper.box.y + upper.box.height);
+    expect(fragments[1]!.lines[0]!.box.y - fragments[0]!.lines[0]!.box.y).toBeGreaterThan(12);
+    // One outline: the side rules meet ACROSS that gap rather than stopping at the text.
+    expect(contentGap).toBeCloseTo(0, 6);
+    // And they really do span it: the upper rule runs a full 12pt of `w:after` past its own
+    // last line, which is the whole of the gap and not one point of it.
+    const upperLastLine = fragments[0]!.lines[fragments[0]!.lines.length - 1]!;
+    expect(upper.box.y + upper.box.height).toBeCloseTo(
+      upperLastLine.box.y + upperLastLine.box.height + 12,
+      6
+    );
+  });
+
+  test('the LOWER paragraph of a group opens its side rules at the fragment top', () => {
+    // The other half of the run-through, and it needs its OWN fixture. `w:after` on both
+    // paragraphs collapses the second's applied before-spacing to zero
+    // (`collapsedSpaceBefore(before, prevAfter)` is `max(before, prevAfter) - prevAfter`), so
+    // the second fragment's `top` and its first line coincide and the two candidate origins
+    // for its side rules are indistinguishable. `w:before` with no `w:after` above it is what
+    // pulls them apart: the rule has to start at the FRAGMENT top, 12pt above the text, or
+    // the outline breaks open at every interior boundary.
+    const LEAD = '<w:spacing w:before="240" w:after="0"/>';
+    const fragments = cellParagraphs(
+      lay(oneCellTable(paragraph('first', LEAD + BOX) + paragraph('second', LEAD + BOX)))
+    );
+    expect(fragments).toHaveLength(2);
+    const lower = stroke(fragments[1]!, 'left');
+    const lowerFirstLine = fragments[1]!.lines[0]!;
+    // The before-spacing is real and belongs to the second paragraph.
+    expect(lowerFirstLine.box.y - lower.box.y).toBeCloseTo(12, 6);
+    // And it is the fragment top the rule opens at, not some other point above the text.
+    expect(lower.box.y).toBeCloseTo(fragments[1]!.box.y, 6);
+    // Still one outline: the upper rule closes exactly where the lower one opens.
+    const upper = stroke(fragments[0]!, 'left');
+    expect(upper.box.y + upper.box.height).toBeCloseTo(lower.box.y, 6);
+    // The FIRST paragraph of a group is not affected: it opens at its own top rule, which is
+    // above its text by the box's `w:space` and stroke, not by the before-spacing.
+    const upperTop = stroke(fragments[0]!, 'top');
+    expect(upper.box.y).toBeCloseTo(upperTop.box.y, 6);
+  });
+
+  test('an interior boundary carries w:between when the run declares one', () => {
+    const withBetween =
+      '<w:pBdr>' +
+      '<w:top w:val="single" w:sz="8" w:space="4" w:color="C00000"/>' +
+      '<w:between w:val="single" w:sz="4" w:space="2" w:color="00B050"/>' +
+      '<w:bottom w:val="single" w:sz="8" w:space="4" w:color="C00000"/>' +
+      '</w:pBdr>';
+    const fragments = cellParagraphs(
+      lay(oneCellTable(paragraph('first', withBetween) + paragraph('second', withBetween)))
+    );
+    expect(sides(fragments[0]!).sort()).toEqual(['between', 'top']);
+    expect(sides(fragments[1]!)).toEqual(['bottom']);
+    // `bottomBorder` names the block's bottom rule alone; a `between` is a different edge.
+    expect(fragments[0]!.bottomBorder).toBeUndefined();
+    expect(stroke(fragments[0]!, 'between').edge.color).toBe('00B050');
+  });
+
+  test('paragraphs whose borders differ each keep their own frame', () => {
+    const other = BOX.replace(/C00000/g, '0070C0');
+    const fragments = cellParagraphs(
+      lay(oneCellTable(paragraph('first', BOX) + paragraph('second', other)))
+    );
+    expect(sides(fragments[0]!).sort()).toEqual(['bottom', 'left', 'right', 'top']);
+    expect(sides(fragments[1]!).sort()).toEqual(['bottom', 'left', 'right', 'top']);
+  });
+
+  test('a different indent splits the group, exactly as it does in body flow', () => {
+    const indented = `<w:ind w:left="720"/>${BOX}`;
+    const fragments = cellParagraphs(
+      lay(oneCellTable(paragraph('first', BOX) + paragraph('second', indented)))
+    );
+    expect(sides(fragments[0]!)).toContain('bottom');
+    expect(sides(fragments[1]!)).toContain('top');
+  });
+
+  test('a numbering level indent splits the group the way a direct w:ind does', () => {
+    // The group key folds in the paragraph's own box insets, and a LIST paragraph takes them
+    // from its numbering level rather than from `w:ind` — so the memo has to invalidate on
+    // the resolved list item as well as on the style table. Both paragraphs are boxed and
+    // both name the same style; only the numbering level moves the second one's box.
+    const numbering =
+      `<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
+      `<w:abstractNum w:abstractNumId="0">` +
+      `<w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="\u2022"/>` +
+      `<w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr></w:lvl>` +
+      `</w:abstractNum>`;
+    const numbered = `<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>${BOX}`;
+    const fragments = cellParagraphs(
+      layWithNumbering(
+        oneCellTable(paragraph('plain', BOX) + paragraph('item', numbered)),
+        numbering
+      )
+    );
+    expect(fragments).toHaveLength(2);
+    // Different boxes, so no group: each closes and opens on its own.
+    expect(sides(fragments[0]!)).toContain('bottom');
+    expect(sides(fragments[1]!)).toContain('top');
+    // And the level really did move the second box, or the split proves nothing.
+    expect(fragments[1]!.lines[0]!.box.x).toBeGreaterThan(fragments[0]!.lines[0]!.box.x);
+  });
+
+  test('the neighbour-key memo invalidates when the resolved list item moves', () => {
+    // The memo lives on the paragraph NODE, so the node cannot be what tells it the answer
+    // went stale. A list paragraph takes its box insets from its numbering level, and the
+    // level can change under a node that did not — so the resolved list item is one of the
+    // three things the entry is checked against. Asked directly, because inside one layout
+    // pass both the seed and the lookup see the same item and cannot tell the arms apart.
+    const numberingAt = (left: number) => {
+      const parsed = readOoxmlPart(
+        `<w:numbering xmlns:w="${W}">` +
+          `<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
+          `<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0">` +
+          `<w:numFmt w:val="bullet"/><w:lvlText w:val="\u2022"/>` +
+          `<w:pPr><w:ind w:left="${left}" w:hanging="360"/></w:pPr>` +
+          `</w:lvl></w:abstractNum></w:numbering>`,
+        { name: '/word/numbering.xml', contentType: 'app/xml' }
+      );
+      if (!parsed.ok) throw new Error(parsed.reason);
+      return buildNumberingIndex(parsed.part.root);
+    };
+    const numbered = `<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>${BOX}`;
+    const block = load(paragraph('item', numbered)).root.children[0]!.children[0]! as OoxmlElement;
+    const contextFor = (left: number) => ({
+      styleCascade: undefined,
+      tableCellStyle: undefined,
+      listItems: resolveStoryListItems([block], numberingAt(left), undefined),
+    });
+    const wide = cellBorderGroupKey(block, contextFor(1440));
+    const narrow = cellBorderGroupKey(block, contextFor(720));
+    // Same node, same styles, different level indent — so a different group.
+    expect(wide).not.toBe(narrow);
+    // Both are real keys, not two spellings of "no borders".
+    expect(wide).not.toBe('');
+    // And asking again with the first level gives the first answer back.
+    expect(cellBorderGroupKey(block, contextFor(1440))).toBe(wide);
+  });
+
+  test('the neighbour-key memo invalidates when the style table or the cell style moves', () => {
+    // The other two arms of the same entry, asked the same way and for the same reason: a
+    // restyle replaces the cascade table and a re-banded row replaces the cell style, and
+    // either can move a paragraph's borders or indent under a node that did not change.
+    const styled = (pBdr: string) => {
+      const parsed = readOoxmlPart(
+        `<w:styles xmlns:w="${W}"><w:style w:type="paragraph" w:styleId="Boxed">` +
+          `<w:pPr>${pBdr}</w:pPr></w:style>` +
+          `<w:style w:type="table" w:styleId="Tbl"><w:pPr>${pBdr}</w:pPr></w:style></w:styles>`,
+        { name: '/word/styles.xml', contentType: 'app/xml' }
+      );
+      if (!parsed.ok) throw new Error(parsed.reason);
+      return buildStyleCascadeTable(parsed.part.root);
+    };
+    const RULE =
+      '<w:pBdr><w:bottom w:val="single" w:sz="8" w:space="4" w:color="C00000"/></w:pBdr>';
+    const block = load(paragraph('x', '<w:pStyle w:val="Boxed"/>')).root.children[0]!
+      .children[0]! as OoxmlElement;
+
+    // Arm 1: the style table. Same node, a style that gains a `w:pBdr`.
+    const bare = cellBorderGroupKey(block, {
+      styleCascade: styled(''),
+      tableCellStyle: undefined,
+      listItems: undefined,
+    });
+    const boxedTable = styled(RULE);
+    const boxed = cellBorderGroupKey(block, {
+      styleCascade: boxedTable,
+      tableCellStyle: undefined,
+      listItems: undefined,
+    });
+    expect(bare).toBe('');
+    expect(boxed).not.toBe('');
+
+    // Arm 2: the cell style, with the style table held fixed.
+    const plainTable = styled('');
+    const withCellStyle = cellBorderGroupKey(block, {
+      styleCascade: plainTable,
+      tableCellStyle: tableCellStyleFormatting(cascadeTableFormatting(plainTable, 'Tbl'), []),
+      listItems: undefined,
+    });
+    expect(withCellStyle).toBe('');
+    const boxedCellStyle = cellBorderGroupKey(block, {
+      styleCascade: plainTable,
+      tableCellStyle: tableCellStyleFormatting(cascadeTableFormatting(styled(RULE), 'Tbl'), []),
+      listItems: undefined,
+    });
+    expect(boxedCellStyle).not.toBe('');
+  });
+
+  test('a group split across a page still opens once and closes once', () => {
+    // `borderNeighbours` reads the block list rather than a running key, so a paragraph whose
+    // neighbour was placed on the PREVIOUS page still knows it is mid-group. Seven boxed
+    // paragraphs on an 80pt content box cross at least one page boundary.
+    const boxed = Array.from({ length: 7 }, (_, index) => paragraph(`line${index}`, BOX)).join('');
+    const layout = lay(oneCellTable(boxed), TINY);
+    const fragments = cellParagraphs(layout);
+    expect(fragments).toHaveLength(7);
+    expect(layout.pages.length).toBeGreaterThan(1);
+    // Exactly one opening rule and one closing rule across the whole run, on the first and
+    // last paragraph — and every paragraph between them carries neither.
+    expect(fragments.filter((fragment) => sides(fragment).includes('top'))).toHaveLength(1);
+    expect(fragments.filter((fragment) => sides(fragment).includes('bottom'))).toHaveLength(1);
+    expect(sides(fragments[0]!)).toContain('top');
+    expect(sides(fragments[6]!)).toContain('bottom');
+    // The side rules follow the group onto every page it reaches, including the paragraph
+    // that lands first on the new sheet.
+    for (const fragment of fragments) expect(sides(fragment)).toContain('left');
   });
 });
 
