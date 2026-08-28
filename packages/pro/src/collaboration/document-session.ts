@@ -51,7 +51,7 @@ import {
   type BinaryPayload,
 } from './document/seed.ts';
 import { droppedContentDetail } from './document/schema.ts';
-import { SharedBlobStore, limitFailure } from './shared-blob-store.ts';
+import { SHARED_BLOBS_KEY, SharedBlobStore, limitFailure } from './shared-blob-store.ts';
 import {
   DEFAULT_INITIALIZATION_TIMEOUT_MS,
   observeSeedRecords,
@@ -61,6 +61,18 @@ import {
   waitForSharedInitialization,
 } from './document-bootstrap.ts';
 import { LogicalIdentityMap } from './document-identity.ts';
+import {
+  AWARENESS_FIELD,
+  MAX_AWARENESS_STATES,
+  MAX_IDENTITY_LENGTH,
+  awarenessPayload,
+  sessionIdentity,
+  validateDocumentId,
+  validateIdentity,
+  type AwarenessPayload,
+  type EncodedSelection,
+  type EncodedSelectionAddress,
+} from './document-awareness.ts';
 import { CollaborationSchemaError } from './schema.ts';
 import type {
   CollaborationBootstrap,
@@ -69,10 +81,6 @@ import type {
   TextCollaborationSession,
 } from './session.ts';
 
-const AWARENESS_FIELD = 'docxEditor';
-const BLOBS_KEY = 'docx-package-blobs-v1';
-const MAX_IDENTITY_LENGTH = 256;
-const MAX_AWARENESS_STATES = 256;
 /** One refused journal recovers; a run of them means the next edit refuses too. */
 const MAX_REFUSALS_IN_A_ROW = 3;
 /** Local journals inside this window share one actor undo item. */
@@ -89,127 +97,6 @@ const ATTACH_WATCHDOG_MS = 2_000;
 export const ATTACH_WATCHDOG_MS_FOR_TESTS: unique symbol = Symbol(
   'createDocumentCollaboration.attachWatchdogMs'
 );
-
-interface EncodedSelectionAddress {
-  readonly paragraphId: string;
-  readonly offset: number;
-}
-
-interface EncodedSelection {
-  readonly anchor: EncodedSelectionAddress;
-  readonly head: EncodedSelectionAddress;
-  readonly kind?: 'cells';
-}
-
-interface AwarenessPayload {
-  readonly actorId: string;
-  readonly name: string;
-  readonly color?: string;
-  readonly role: 'human' | 'agent';
-  readonly selection?: EncodedSelection;
-}
-
-function validateIdentity(identity: CollaborationIdentity): CollaborationIdentity {
-  const actorId = identity.actorId.trim();
-  const name = identity.name.trim();
-  if (
-    actorId.length === 0 ||
-    actorId.length > MAX_IDENTITY_LENGTH ||
-    name.length === 0 ||
-    name.length > MAX_IDENTITY_LENGTH
-  ) {
-    throw new CollaborationSchemaError('invalid-identity');
-  }
-  if (identity.color !== undefined && identity.color.length > 64) {
-    throw new CollaborationSchemaError('invalid-identity-color');
-  }
-  return Object.freeze({
-    actorId,
-    name,
-    ...(identity.color ? { color: identity.color } : {}),
-    role: identity.role ?? 'human',
-  });
-}
-
-function validateDocumentId(value: string): string {
-  const documentId = value.trim();
-  if (documentId.length === 0 || documentId.length > MAX_IDENTITY_LENGTH) {
-    throw new CollaborationSchemaError('invalid-document-id');
-  }
-  return documentId;
-}
-
-function sessionIdentity(value: string | undefined): string {
-  const sessionId = value?.trim() || globalThis.crypto.randomUUID();
-  if (sessionId.length > MAX_IDENTITY_LENGTH) {
-    throw new CollaborationSchemaError('invalid-session-id');
-  }
-  return sessionId;
-}
-
-function encodedSelectionAddress(value: unknown): EncodedSelectionAddress | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (
-    typeof record.paragraphId !== 'string' ||
-    record.paragraphId.length !== 8 ||
-    !Number.isSafeInteger(record.offset) ||
-    (record.offset as number) < 0
-  ) {
-    return null;
-  }
-  return { paragraphId: record.paragraphId.toUpperCase(), offset: record.offset as number };
-}
-
-function encodedSelection(value: unknown): EncodedSelection | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-  const selected = value as Record<string, unknown>;
-  const anchor = encodedSelectionAddress(selected.anchor);
-  const head = encodedSelectionAddress(selected.head);
-  if (anchor && head) {
-    return selected.kind === 'cells' ? { anchor, head, kind: 'cells' } : { anchor, head };
-  }
-  if (
-    typeof selected.paragraphId === 'string' &&
-    selected.paragraphId.length === 8 &&
-    Number.isSafeInteger(selected.start) &&
-    Number.isSafeInteger(selected.end) &&
-    (selected.start as number) >= 0 &&
-    (selected.end as number) >= 0
-  ) {
-    const paragraphId = selected.paragraphId.toUpperCase();
-    return {
-      anchor: { paragraphId, offset: selected.start as number },
-      head: { paragraphId, offset: selected.end as number },
-    };
-  }
-  return undefined;
-}
-
-function awarenessPayload(value: unknown): AwarenessPayload | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (
-    typeof record.actorId !== 'string' ||
-    record.actorId.length === 0 ||
-    record.actorId.length > MAX_IDENTITY_LENGTH ||
-    typeof record.name !== 'string' ||
-    record.name.length === 0 ||
-    record.name.length > MAX_IDENTITY_LENGTH
-  ) {
-    return null;
-  }
-  // Trust boundary for a peer's presence record. The color flows into `participants()` and
-  // `remoteSelections()`, and hosts paint it into CSS (`background:` via a custom property),
-  // where `url(//host/t)` is a zero-click GET. Only the shapes this engine itself produces
-  // pass; anything else drops so every consumer falls back to the accent color.
-  const color = safeParticipantColor(typeof record.color === 'string' ? record.color : undefined);
-  const role: 'human' | 'agent' = record.role === 'agent' ? 'agent' : 'human';
-  const base = { actorId: record.actorId, name: record.name, ...(color ? { color } : {}), role };
-  const selection = encodedSelection(record.selection);
-  return selection ? { ...base, selection } : base;
-}
 
 class DocumentSession implements DocumentCollaborationSession {
   readonly documentId: string;
@@ -391,43 +278,58 @@ class DocumentSession implements DocumentCollaborationSession {
     return null;
   }
 
+  /**
+   * The one readiness rule for writing shared state from this replica.
+   *
+   * A journal applies to the local Y.Doc either way, so a `disconnected` replica can keep
+   * editing and its buffered updates merge on reconnect exactly as concurrent online edits
+   * do. Only the host can show an offline indicator, so it opts in. `initializing` stays
+   * refused (the bootstrap has not published a first revision) and `error` stays terminal.
+   */
+  private canWriteSharedState(): boolean {
+    if (this.destroyed) return false;
+    const status = this.statusState.status();
+    return status === 'ready' || (this.offlineEditing && status === 'disconnected');
+  }
+
   /** Every authorable mutation replicates, so only session readiness gates a write. */
   gateOperations(_ops: readonly TreeDocOp[], _scope: StoryScope): CollaborationFailureCode | null {
     if (this.destroyed) return 'collaboration-session-destroyed';
-    const status = this.statusState.status();
-    // A journal applies to the local Y.Doc either way, so a `disconnected` replica can keep
-    // editing and its buffered updates merge on reconnect exactly as concurrent online edits
-    // do. Only the host can show an offline indicator, so it opts in. `initializing` stays
-    // refused (the bootstrap has not published a first revision) and `error` stays terminal.
-    if (status !== 'ready' && !(this.offlineEditing && status === 'disconnected')) {
-      return 'collaboration-session-not-ready';
-    }
+    if (!this.canWriteSharedState()) return 'collaboration-session-not-ready';
     if (!this.port) return 'collaboration-session-not-attached';
     return null;
   }
 
+  // Undo and redo write shared state exactly as a keystroke does — Y.UndoManager reverses the
+  // room's history and every peer applies the result — so they obey the same readiness rule
+  // the operation gate applies. Without it a replica in terminal `error`, which the gate has
+  // declared diverged and read-only, kept mutating the room through Ctrl+Z.
   canUndo(): boolean {
     return (
-      !this.destroyed &&
+      this.canWriteSharedState() &&
       ((this.port?.hasPendingJournals() ?? false) || this.undoManager.undoStack.length > 0)
     );
   }
 
   canRedo(): boolean {
-    return !this.destroyed && this.undoManager.redoStack.length > 0;
+    return this.canWriteSharedState() && this.undoManager.redoStack.length > 0;
   }
 
   undo(): boolean {
-    if (this.destroyed) return false;
+    if (!this.canWriteSharedState()) return false;
     this.flushPendingJournals();
+    // The flush can refuse the queued journal and take this session to terminal `error`,
+    // so the gate re-checks: undo must not write a room the session just diverged from.
+    if (!this.canWriteSharedState()) return false;
     if (this.undoManager.undoStack.length === 0) return false;
     this.undoManager.undo();
     return true;
   }
 
   redo(): boolean {
-    if (this.destroyed) return false;
+    if (!this.canWriteSharedState()) return false;
     this.flushPendingJournals();
+    if (!this.canWriteSharedState()) return false;
     if (this.undoManager.redoStack.length === 0) return false;
     this.undoManager.redo();
     return true;
@@ -571,6 +473,9 @@ class DocumentSession implements DocumentCollaborationSession {
     this.awareness.setLocalState(null);
     this.undoManager.destroy();
     this.materializer.destroy();
+    // The caller owns `ydoc` and can outlive this session, so the registry gives its
+    // observers back — a leaked handler would keep paying on every later transaction.
+    this.registry.destroy();
     this.setStatus('destroyed');
     this.statusListeners.clear();
     this.selectionListeners.clear();
@@ -654,6 +559,11 @@ class DocumentSession implements DocumentCollaborationSession {
 
   private refuseLocalJournal(refusal: CollaborationFailure): void {
     this.undoManager.stopCapturing();
+    // The status this replica held before the refusal. Recovery restores it, because a
+    // realign repairs the DOCUMENT, not the transport: with offline editing on, the refused
+    // journal arrived while `disconnected`, and recovering to `ready` would tell the host the
+    // connection came back when only the tree did.
+    const before = this.statusState.snapshot();
     // The local store already committed this edit, so leaving it would make this replica
     // silently different from the room. Shared state is the authority: take it back.
     this.refusedInARow += 1;
@@ -675,9 +585,10 @@ class DocumentSession implements DocumentCollaborationSession {
       this.statusState.status() === 'error' &&
       current !== undefined &&
       current.code === refusal.code &&
-      current.detail === refusal.detail
+      current.detail === refusal.detail &&
+      (before.status === 'ready' || before.status === 'disconnected')
     ) {
-      this.setStatus('ready');
+      this.setStatus(before.status, before.reason?.code, before.reason?.detail);
     }
   }
 
@@ -830,60 +741,7 @@ export interface CreateDocumentCollaborationOptions {
   readonly offlineEditing?: boolean;
 }
 
-/**
- * Read the document a synchronized `Y.Doc` holds, as `.docx` bytes.
- *
- * This is the server side of a room: export, autosave to your own storage, search indexing, a
- * nightly PDF, a webhook. It JOINS NOTHING. There is no identity, no `Awareness` and no
- * session, so the job that calls it never appears in anyone's avatar stack, and it creates no
- * editing gate, so it cannot write back.
- *
- * `ydoc` must already hold the room's state: connect your provider and wait for its initial
- * sync first, exactly as a `{ kind: \'join\' }` bootstrap does. A document that was never
- * seeded refuses with `not-initialized` rather than returning a truncated file.
- *
- * ```ts
- * // Hocuspocus hands `onStoreDocument` the synced Y.Doc already:
- * async onStoreDocument({ documentName, document }) {
- *   await writeFile(`${documentName}.docx`, readCollaborationDocument(document));
- * }
- * ```
- *
- * Synchronous, and it materializes the whole package per call — this is a job, not a render.
- *
- * @throws CollaborationSchemaError — `not-initialized`, `concurrent-seed`,
- * `blob-digest-mismatch`, or a limit code: the same refusals a joining replica makes, for the
- * same reasons.
- * @public
- */
-export function readCollaborationDocument(ydoc: Y.Doc): Uint8Array {
-  const registry = new DocumentRegistry(ydoc);
-  // Shared state arrived before this registry existed and the parent index is built from
-  // child-array EVENTS — the same rebuild a joiner performs, for the same reason.
-  registry.rebuildDerivedIndexes();
-  if (typeof registry.schema.meta.get('documentId') !== 'string') {
-    throw new CollaborationSchemaError('not-initialized');
-  }
-  // Two merged seeds duplicate the whole document and no reader can pick a side, so an
-  // export refuses rather than writing a file with everything in it twice.
-  if (seedRecordCount(ydoc) > 1) throw new CollaborationSchemaError('concurrent-seed');
-  const blobs = new SharedBlobStore(ydoc.getMap<Uint8Array>(BLOBS_KEY));
-  const exceeded = limitFailure(registry, blobs);
-  if (exceeded) throw new CollaborationSchemaError(exceeded.code, exceeded.detail);
-  const materializer = new PackageMaterializer(registry, blobs);
-  try {
-    const materialized = materializer.current();
-    const poisoned = blobs.poisonedDigest();
-    // A blob that does not hash to its key reads downstream as a blob that is not there. Say
-    // which it was, so a poisoned room is not exported as a truncated one.
-    if (poisoned) throw new CollaborationSchemaError('blob-digest-mismatch', poisoned);
-    if (!materialized.ok) throw new CollaborationSchemaError(materialized.code);
-    return writeOoxmlPackage(materialized.package);
-  } finally {
-    // Owned here, so released here — whether the read succeeded or refused.
-    materializer.destroy();
-  }
-}
+export { readCollaborationDocument } from './document-read.ts';
 
 /**
  * Create or join one full-document collaboration replica.
@@ -902,8 +760,38 @@ export async function createDocumentCollaboration(
   const sessionId = sessionIdentity(options.sessionId);
   const identity = validateIdentity(options.identity);
   const registry = new DocumentRegistry(options.ydoc);
+  // A bootstrap that refuses must not leave this registry observing the caller's document:
+  // the caller keeps `ydoc` (a retry, a different room), and a leaked observer taxes every
+  // later transaction. On success the session owns the registry and detaches it on destroy.
+  try {
+    return await bootstrapDocumentReplica(options, {
+      attachWatchdogMs,
+      documentId,
+      sessionId,
+      identity,
+      registry,
+    });
+  } catch (error) {
+    registry.destroy();
+    throw error;
+  }
+}
+
+interface DocumentReplicaContext {
+  readonly attachWatchdogMs: number;
+  readonly documentId: string;
+  readonly sessionId: string;
+  readonly identity: CollaborationIdentity;
+  readonly registry: DocumentRegistry;
+}
+
+async function bootstrapDocumentReplica(
+  options: CreateDocumentCollaborationOptions,
+  context: DocumentReplicaContext
+): Promise<DocumentCollaborationHandle> {
+  const { attachWatchdogMs, documentId, sessionId, identity, registry } = context;
   const identityMap = new LogicalIdentityMap((logicalId) => registry.hasNode(logicalId));
-  const blobs = new SharedBlobStore(options.ydoc.getMap<Uint8Array>(BLOBS_KEY));
+  const blobs = new SharedBlobStore(options.ydoc.getMap<Uint8Array>(SHARED_BLOBS_KEY));
 
   if (options.bootstrap.kind === 'create') {
     if (registry.schema.meta.get('initialized') === true) {
@@ -965,34 +853,44 @@ export async function createDocumentCollaboration(
   if (exceeded) throw new CollaborationSchemaError(exceeded.code, exceeded.detail);
 
   const materializer = new PackageMaterializer(registry, blobs);
-  const materialized = materializer.current();
-  const poisoned = blobs.poisonedDigest();
-  if (poisoned) {
+  // Any throw between here and the return leaks the materializer's observers on the
+  // caller's document — `current()` can throw on hostile shared state, and the refusals
+  // below throw by design — so the whole tail hands the materializer back on the way out.
+  // On success, ownership passes to the session, which detaches it on destroy.
+  try {
+    const materialized = materializer.current();
+    const poisoned = blobs.poisonedDigest();
+    if (poisoned) {
+      // A blob that does not hash to its key reads downstream as a blob that is not there.
+      // Say which it was, so a poisoned room is not reported as a truncated one.
+      throw new CollaborationSchemaError('blob-digest-mismatch', poisoned);
+    }
+    if (!materialized.ok) {
+      throw new CollaborationSchemaError(materialized.code);
+    }
+    // Serialize before the session exists: a throw here must not orphan a live session
+    // whose registry and materializer the catch below is about to tear down.
+    const document = writeOoxmlPackage(materialized.package);
+    const session = new DocumentSession(
+      options.ydoc,
+      options.awareness,
+      documentId,
+      sessionId,
+      identity,
+      registry,
+      materializer,
+      identityMap,
+      blobs,
+      attachWatchdogMs,
+      options.offlineEditing === true
+    );
+    return Object.freeze({
+      document,
+      session,
+      destroy: () => session.destroy(),
+    });
+  } catch (error) {
     materializer.destroy();
-    // A blob that does not hash to its key reads downstream as a blob that is not there. Say
-    // which it was, so a poisoned room is not reported as a truncated one.
-    throw new CollaborationSchemaError('blob-digest-mismatch', poisoned);
+    throw error;
   }
-  if (!materialized.ok) {
-    materializer.destroy();
-    throw new CollaborationSchemaError(materialized.code);
-  }
-  const session = new DocumentSession(
-    options.ydoc,
-    options.awareness,
-    documentId,
-    sessionId,
-    identity,
-    registry,
-    materializer,
-    identityMap,
-    blobs,
-    attachWatchdogMs,
-    options.offlineEditing === true
-  );
-  return Object.freeze({
-    document: writeOoxmlPackage(materialized.package),
-    session,
-    destroy: () => session.destroy(),
-  });
 }
