@@ -69,13 +69,17 @@ export interface DrawingPaintContext {
   readonly revisionStyles?: RevisionStyleContext;
 }
 
-const MIME_FORMAT_LABEL: Readonly<Record<string, string>> = Object.freeze({
-  'image/svg+xml': 'SVG',
-  'image/tiff': 'TIFF',
-  'image/x-emf': 'EMF',
-  'image/x-wmf': 'WMF',
-  unknown: 'Unknown',
-});
+// A Map, not an object literal. `ImageResourceState.mime` is a closed union — it comes from
+// `sniffImageMime` or from the content-type lookup, both of which already refuse anything
+// else — so this is hardening at a sink that is not currently reachable, kept because the
+// union is the only thing standing between a file-derived string and this lookup.
+const MIME_FORMAT_LABEL: ReadonlyMap<string, string> = new Map([
+  ['image/svg+xml', 'SVG'],
+  ['image/tiff', 'TIFF'],
+  ['image/x-emf', 'EMF'],
+  ['image/x-wmf', 'WMF'],
+]);
+const UNKNOWN_FORMAT_LABEL = 'Unknown';
 
 interface UrlRegistry {
   readonly urlForReady: (
@@ -287,7 +291,7 @@ function refusalLabel(
       switch (resource.reason) {
         case 'unsupported-format':
           return strings.unsupportedFormat(
-            MIME_FORMAT_LABEL[resource.mime] ?? MIME_FORMAT_LABEL.unknown
+            MIME_FORMAT_LABEL.get(resource.mime) ?? UNKNOWN_FORMAT_LABEL
           );
         case 'non-picture-graphic':
           return strings.nonPictureGraphic(drawing.placeholderGraphicKind ?? 'graphic');
@@ -545,22 +549,32 @@ function paintVectorShape(
   svg.setAttribute('height', '100%');
   svg.style.display = 'block';
 
-  const path = document.createElementNS(SVG_NAMESPACE, 'path');
-  const d = shape.subpathsEmu
-    .map(
-      (points) =>
-        `M${points.map((point) => `${finiteStyle(point.x)} ${finiteStyle(point.y)}`).join('L')}Z`
-    )
-    .join('');
-  path.setAttribute('d', d);
-  // SAFE: hex colors are validated 6-digit sRGB at the projection trust boundary.
-  path.setAttribute('fill', shape.fillHex !== null ? `#${shape.fillHex}` : 'none');
-  path.setAttribute('fill-rule', 'evenodd');
-  if (shape.strokeHex !== null) {
-    path.setAttribute('stroke', `#${shape.strokeHex}`);
-    path.setAttribute('stroke-width', finiteStyle(Math.max(1, shape.strokeWidthEmu)));
+  // `components` is the paint authority and is always non-empty; the top-level `fillHex`
+  // and `strokeHex` describe a one-component shape only.
+  for (const component of shape.components) {
+    const path = document.createElementNS(SVG_NAMESPACE, 'path');
+    const d = component.subpathsEmu
+      .map(
+        (points) =>
+          `M${points.map((point) => `${finiteStyle(point.x)} ${finiteStyle(point.y)}`).join('L')}Z`
+      )
+      .join('');
+    path.setAttribute('d', d);
+    // SAFE: colours are validated 6-digit sRGB at the projection trust boundary.
+    path.setAttribute('fill', component.fillHex !== null ? `#${component.fillHex}` : 'none');
+    path.setAttribute('fill-rule', 'evenodd');
+    if (component.fillAlpha < 1) {
+      path.setAttribute('fill-opacity', finiteStyle(Math.max(0, component.fillAlpha)));
+    }
+    if (component.strokeHex !== null) {
+      path.setAttribute('stroke', `#${component.strokeHex}`);
+      path.setAttribute('stroke-width', finiteStyle(Math.max(1, component.strokeWidthEmu)));
+      if (component.strokeAlpha < 1) {
+        path.setAttribute('stroke-opacity', finiteStyle(Math.max(0, component.strokeAlpha)));
+      }
+    }
+    svg.append(path);
   }
-  svg.append(path);
   frame.append(svg);
   outer.append(frame);
 

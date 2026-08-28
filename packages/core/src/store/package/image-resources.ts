@@ -145,22 +145,31 @@ export const MAX_SVG_ROOT_SCAN_BYTES = 8192;
 const DEFAULT_SVG_INTRINSIC_WIDTH = 300;
 const DEFAULT_SVG_INTRINSIC_HEIGHT = 150;
 
-const CONTENT_TYPE_TO_MIME: Readonly<Record<string, RenderableImageMime | PreservedImageMime>> =
-  Object.freeze({
-    'image/png': 'image/png',
-    'image/jpeg': 'image/jpeg',
-    'image/jpg': 'image/jpeg',
-    'image/gif': 'image/gif',
+// A Map, not an object literal: the key is a `[Content_Types].xml` value the sender controls,
+// and this is the upstream of the `mime` that reaches paint's format label.
+//
+// No exploit reaches it today, and the reason is worth recording so nobody relaxes the wrong
+// guard later: `readContentTypes` refuses anything that is not `type/subtype`
+// (`MIME_ESSENCE_RE` in content-types.ts) and fails the whole package with
+// `bad-content-types`, and no member of `Object.prototype` contains a slash. The Map removes
+// the hazard at the source instead of depending on that coincidence holding.
+const CONTENT_TYPE_TO_MIME: ReadonlyMap<string, RenderableImageMime | PreservedImageMime> = new Map(
+  [
+    ['image/png', 'image/png'],
+    ['image/jpeg', 'image/jpeg'],
+    ['image/jpg', 'image/jpeg'],
+    ['image/gif', 'image/gif'],
     // `image/bmp` is the registered type; Word and older producers also write these two.
-    'image/bmp': 'image/bmp',
-    'image/x-ms-bmp': 'image/bmp',
-    'image/x-bmp': 'image/bmp',
-    'image/webp': 'image/webp',
-    'image/svg+xml': 'image/svg+xml',
-    'image/tiff': 'image/tiff',
-    'image/x-emf': 'image/x-emf',
-    'image/x-wmf': 'image/x-wmf',
-  });
+    ['image/bmp', 'image/bmp'],
+    ['image/x-ms-bmp', 'image/bmp'],
+    ['image/x-bmp', 'image/bmp'],
+    ['image/webp', 'image/webp'],
+    ['image/svg+xml', 'image/svg+xml'],
+    ['image/tiff', 'image/tiff'],
+    ['image/x-emf', 'image/x-emf'],
+    ['image/x-wmf', 'image/x-wmf'],
+  ]
+);
 
 /** A raster header that passed structural validation: its real MIME type and pixel extent. */
 export interface ValidatedRasterHeader {
@@ -527,17 +536,30 @@ export function validateTiffHeader(bytes: Uint8Array): ValidatedRasterHeader | n
   return { pixelWidth, pixelHeight };
 }
 
-/** CSS absolute length units, in CSS pixels. Percentages are not intrinsic and are refused. */
-const CSS_ABSOLUTE_UNIT_PX: Readonly<Record<string, number>> = Object.freeze({
-  '': 1,
-  px: 1,
-  pt: 96 / 72,
-  pc: 16,
-  in: 96,
-  cm: 96 / 2.54,
-  mm: 96 / 25.4,
-  q: 96 / 101.6,
-});
+/**
+ * CSS absolute length units, in CSS pixels. Percentages are not intrinsic and are refused.
+ *
+ * A Map, not an object literal. Unlike the content-type lookup above, this key IS reachable
+ * from file content — it is the unit suffix of an embedded SVG's root `width`/`height`, so
+ * `width="1constructor"` indexed the literal to `Object` and sailed past the
+ * `scale === undefined` guard.
+ *
+ * No input changes its answer either way, and that is worth stating rather than implying a
+ * fix that is not one: every member of `Object.prototype` is a function or an object, so
+ * `number * scale` is always `NaN` and the finiteness check below already returns null. The
+ * Map removes a read that only luck made safe, so a later edit to that check cannot turn it
+ * into a live defect.
+ */
+const CSS_ABSOLUTE_UNIT_PX: ReadonlyMap<string, number> = new Map([
+  ['', 1],
+  ['px', 1],
+  ['pt', 96 / 72],
+  ['pc', 16],
+  ['in', 96],
+  ['cm', 96 / 2.54],
+  ['mm', 96 / 25.4],
+  ['q', 96 / 101.6],
+]);
 
 /** A CSS absolute length in px, or null for a percentage, a bad unit, or a non-number. */
 function parseCssAbsoluteLength(raw: string): number | null {
@@ -563,7 +585,7 @@ function parseCssAbsoluteLength(raw: string): number | null {
     }
     if (digits > 0) index = scan;
   }
-  const scale = CSS_ABSOLUTE_UNIT_PX[value.slice(index).trim().toLowerCase()];
+  const scale = CSS_ABSOLUTE_UNIT_PX.get(value.slice(index).trim().toLowerCase());
   if (scale === undefined) return null;
   const px = number * scale;
   return Number.isFinite(px) && px > 0 ? px : null;
@@ -720,7 +742,7 @@ function claimedMimeForPart(
 ): RenderableImageMime | PreservedImageMime | 'unknown' {
   const resolved = resolveContentType(pkg.contentTypes, partName);
   if (!resolved.ok) return 'unknown';
-  return CONTENT_TYPE_TO_MIME[resolved.contentType.toLowerCase()] ?? 'unknown';
+  return CONTENT_TYPE_TO_MIME.get(resolved.contentType.toLowerCase()) ?? 'unknown';
 }
 
 function snapshotBytes(bytes: Uint8Array): Uint8Array {

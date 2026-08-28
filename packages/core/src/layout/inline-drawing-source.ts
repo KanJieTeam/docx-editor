@@ -32,6 +32,7 @@ import {
   retainValidatedImageBytes,
   type ValidatedImageBytesReleaseToken,
 } from '../store/package/validated-image-bytes.ts';
+import { createPackageShapeThemeResolvers } from '../store/package/theme-color-resolution.ts';
 import type { OoxmlPackage } from '../store/package/ooxml-package.ts';
 import type { InlineDrawingLayoutContext } from './drawing-layout.ts';
 
@@ -169,11 +170,73 @@ export function drawingAtomIdentities(part: OoxmlPart): ReadonlyMap<string, Ooxm
   return facts.atoms;
 }
 
+// Scratch view used to fold a coordinate in by its exact IEEE-754 bits. Coordinates are not
+// integers once a group transform has scaled them, so rounding would fold real geometry
+// changes together.
+const COORDINATE_SCRATCH = new Float64Array(1);
+const COORDINATE_BITS = new Uint32Array(COORDINATE_SCRATCH.buffer);
+
+/**
+ * Digest of one vector shape's geometry and chrome, for the layout reuse token.
+ *
+ * Deliberately NOT a serialization. `JSON.stringify` of a shape at the 1024-point budget is
+ * ~48 KB and ~230 us, and `isCompatibleWith` reads this token twice per atom whenever the
+ * atom-identity fast path misses, so the serialization dominated a document full of shapes.
+ * Every other field in the enclosing token is a cheap scalar join; this one folds the point
+ * stream into two 32-bit FNV-1a accumulators and joins the scalars verbatim. The shape of
+ * the component list (its length, and each subpath's length) is joined literally rather than
+ * hashed, so a structural change can never hide inside the digest.
+ *
+ * This is a cache key, NOT a security primitive. FNV-1a is trivially invertible — its round
+ * is `h = (h ^ d) * p` with an odd, hence modularly invertible, `p` — so a chosen last
+ * coordinate can drive both accumulators to any target in closed form. That buys nothing
+ * here, because forging a collision needs two shapes under the same `drawingNodeId` in two
+ * revisions of one document, and the payoff is a stale repaint. Do not reuse this digest
+ * anywhere an attacker profits from a collision.
+ */
+export function vectorShapeLayoutToken(
+  vector: NonNullable<DrawingProjection['vectorShape']>
+): string {
+  let hashA = 0x811c_9dc5;
+  let hashB = 0x1000_0193;
+  const scalars: string[] = [];
+  for (const component of vector.components) {
+    scalars.push(
+      component.fillHex ?? '',
+      String(component.fillAlpha),
+      component.strokeHex ?? '',
+      String(component.strokeAlpha),
+      String(component.strokeWidthEmu),
+      String(component.subpathsEmu.length)
+    );
+    for (const subpath of component.subpathsEmu) {
+      scalars.push(String(subpath.length));
+      for (const point of subpath) {
+        COORDINATE_SCRATCH[0] = point.x;
+        hashA = Math.imul(hashA ^ COORDINATE_BITS[0]!, 0x0100_0193);
+        hashB = Math.imul(hashB ^ COORDINATE_BITS[1]!, 0x0100_01b3);
+        COORDINATE_SCRATCH[0] = point.y;
+        hashA = Math.imul(hashA ^ COORDINATE_BITS[1]!, 0x0100_0193);
+        hashB = Math.imul(hashB ^ COORDINATE_BITS[0]!, 0x0100_01b3);
+      }
+    }
+  }
+  return [
+    String(vector.extentEmu.cx),
+    String(vector.extentEmu.cy),
+    String(vector.components.length),
+    scalars.join(','),
+    (hashA >>> 0).toString(36),
+    (hashB >>> 0).toString(36),
+  ].join(';');
+}
+
 function drawingProjectionLayoutToken(projection: DrawingProjection): string {
   const position = projection.position;
   const anchor = projection.anchor;
   const picture = projection.picture;
   const wrap = projection.wrapGeometry;
+  const vector = projection.vectorShape;
   return [
     projection.drawingNodeId,
     projection.ownerPartName,
@@ -207,6 +270,7 @@ function drawingProjectionLayoutToken(projection: DrawingProjection): string {
           picture.presetGeometry ?? '',
         ].join(':')
       : '',
+    vector ? vectorShapeLayoutToken(vector) : '',
     wrap
       ? [
           wrap.element,
@@ -309,8 +373,11 @@ function createPartDrawingContextSlot(options: {
   let resourceEpoch = 0;
 
   const resolveRelationshipTarget = createDrawingRelationshipResolver(pkg, ownerPartName);
+  const theme = createPackageShapeThemeResolvers(pkg);
   const atomProjections = indexInlineDrawingProjectionsInPart(part, {
     resolveRelationship: resolveRelationshipTarget,
+    resolveSchemeColor: theme.resolveSchemeColor,
+    resolveStyleMatrixReference: theme.resolveStyleMatrixReference,
   });
   const atomIdentities = drawingAtomIdentities(part);
 
@@ -456,6 +523,8 @@ function createPartDrawingContextSlot(options: {
       `${ownerPartName}|${resourceEpoch}|${generation}|${atomProjections.size}`,
     drawingTokenForParagraph,
     isCompatibleWith: (nextPart, nextPkg) => {
+      const nextTheme = createPackageShapeThemeResolvers(nextPkg);
+      if (nextTheme.cacheToken !== theme.cacheToken) return false;
       if (nextPart === part) return true;
       const nextAtomIdentities = drawingAtomIdentities(nextPart);
       if (atomIdentities && nextAtomIdentities && atomIdentities.size === nextAtomIdentities.size) {
@@ -470,6 +539,8 @@ function createPartDrawingContextSlot(options: {
       }
       const nextProjections = indexInlineDrawingProjectionsInPart(nextPart, {
         resolveRelationship: createDrawingRelationshipResolver(nextPkg, ownerPartName),
+        resolveSchemeColor: nextTheme.resolveSchemeColor,
+        resolveStyleMatrixReference: nextTheme.resolveStyleMatrixReference,
       });
       if (nextProjections.size !== atomProjections.size) return false;
       for (const [atomId, projection] of atomProjections) {

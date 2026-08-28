@@ -4,23 +4,27 @@
 // (2) type solid-fill polygon geometry so paint can draw the shape instead of a card.
 
 import { describe, expect, test } from 'bun:test';
-import { readOoxmlPart, WML_NAMESPACE_URI } from '../index.ts';
+import { readOoxmlPart, WML_NAMESPACE_URI, type OoxmlPackage } from '../index.ts';
 import {
   indexInlineDrawingProjectionsInPart,
   DEFAULT_DRAWING_PROJECTION_LIMITS,
 } from '../package/drawing-projection.ts';
+import { createPackageShapeThemeResolvers } from '../package/theme-color-resolution.ts';
 
 const WP = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
 const A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 const WPS = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape';
+const WPG = 'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup';
 const MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
 const V = 'urn:schemas-microsoft-com:vml';
 const OWNER = '/word/document.xml';
+const ELLIPSE_POINT_COUNT = 32;
 
 function parsePart(body: string) {
   const xml =
     `<w:document xmlns:w="${WML_NAMESPACE_URI}" xmlns:wp="${WP}" xmlns:a="${A}" ` +
-    `xmlns:wps="${WPS}" xmlns:mc="${MC}" xmlns:v="${V}"><w:body>${body}</w:body></w:document>`;
+    `xmlns:wps="${WPS}" xmlns:wpg="${WPG}" xmlns:mc="${MC}" xmlns:v="${V}">` +
+    `<w:body>${body}</w:body></w:document>`;
   const parsed = readOoxmlPart(xml, {
     name: OWNER,
     contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml',
@@ -77,7 +81,129 @@ function mcWrapped(drawing: string): string {
   );
 }
 
+/** Attribute-escape a raw value so a hostile spelling reaches the parser intact. */
+function escapeAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+}
+
+/** A `wpg:wgp` group of two independently filled children, with a group `a:xfrm`. */
+function groupShapeDrawing(): string {
+  return (
+    '<w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">' +
+    '<wp:extent cx="200000" cy="100000"/><wp:docPr id="13" name="Group 13"/>' +
+    `<a:graphic><a:graphicData uri="${WPG}"><wpg:wgp><wpg:grpSpPr>` +
+    '<a:xfrm><a:chOff x="0" y="0"/><a:chExt cx="200000" cy="100000"/></a:xfrm>' +
+    '</wpg:grpSpPr>' +
+    '<wps:wsp><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm>' +
+    '<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>' +
+    '<a:solidFill><a:schemeClr val="accent1"/></a:solidFill></wps:spPr></wps:wsp>' +
+    '<wps:wsp><wps:spPr><a:xfrm><a:off x="100000" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm>' +
+    '<a:custGeom><a:pathLst><a:path w="100000" h="100000">' +
+    '<a:moveTo><a:pt x="0" y="0"/></a:moveTo>' +
+    '<a:cubicBezTo><a:pt x="25000" y="0"/><a:pt x="75000" y="100000"/>' +
+    '<a:pt x="100000" y="100000"/></a:cubicBezTo><a:close/>' +
+    '</a:path></a:pathLst></a:custGeom>' +
+    '<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></wps:spPr></wps:wsp>' +
+    '</wpg:wgp></a:graphicData></a:graphic></wp:inline></w:drawing>'
+  );
+}
+
 describe('wps vector shape projection', () => {
+  test('package theme colours honor the settings colour mapping', () => {
+    const theme = readOoxmlPart(
+      `<a:theme xmlns:a="${A}"><a:themeElements><a:clrScheme name="Test">` +
+        '<a:accent1><a:srgbClr val="112233"/></a:accent1>' +
+        '<a:accent2><a:srgbClr val="AABBCC"/></a:accent2>' +
+        '<a:dk2><a:srgbClr val="334455"/></a:dk2>' +
+        '</a:clrScheme><a:fmtScheme name="Test">' +
+        '<a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst>' +
+        '<a:lnStyleLst/><a:effectStyleLst/><a:bgFillStyleLst/>' +
+        '</a:fmtScheme></a:themeElements></a:theme>',
+      { name: '/word/theme/theme1.xml', contentType: 'application/xml' }
+    );
+    const settings = readOoxmlPart(
+      `<w:settings xmlns:w="${WML_NAMESPACE_URI}">` +
+        '<w:clrSchemeMapping w:accent1="accent2" w:bg1="dark2"/>' +
+        '</w:settings>',
+      { name: '/word/settings.xml', contentType: 'application/xml' }
+    );
+    if (!theme.ok || !settings.ok) throw new Error('test package parts must parse');
+    const pkg = {
+      parts: new Map([
+        ['/word/theme/theme1.xml', theme.part],
+        ['/word/settings.xml', settings.part],
+      ]),
+      partBytes: new Map(),
+      relationships: new Map(),
+      externalTargets: [],
+      contentTypes: {},
+      mainDocumentPart: OWNER,
+    } as unknown as OoxmlPackage;
+    const themeResolvers = createPackageShapeThemeResolvers(pkg);
+    const resolve = themeResolvers.resolveSchemeColor;
+    expect(resolve('accent1')).toBe('AABBCC');
+    expect(resolve('accent2')).toBe('AABBCC');
+    expect(resolve('bg1')).toBe('334455');
+    expect(resolve('missing')).toBeNull();
+    expect(themeResolvers.resolveStyleMatrixReference('fill', 1)?.localName).toBe('solidFill');
+    const changedTheme = readOoxmlPart(
+      `<a:theme xmlns:a="${A}"><a:themeElements><a:clrScheme name="Changed">` +
+        '<a:accent1><a:srgbClr val="FFFFFF"/></a:accent1>' +
+        '</a:clrScheme></a:themeElements></a:theme>',
+      { name: '/word/theme/theme1.xml', contentType: 'application/xml' }
+    );
+    if (!changedTheme.ok) throw new Error(changedTheme.reason);
+    const changedPackage = {
+      ...pkg,
+      parts: new Map(pkg.parts).set('/word/theme/theme1.xml', changedTheme.part),
+    };
+    expect(createPackageShapeThemeResolvers(changedPackage).cacheToken).not.toBe(
+      themeResolvers.cacheToken
+    );
+  });
+
+  // `word/settings.xml` and `word/theme/theme1.xml` are sender-controlled, so an attribute
+  // name or value that names a prototype member must answer "no mapping" rather than a
+  // function. Before the lookups became Maps, `w:accent1="constructor"` made
+  // `resolveSchemeColor('accent1')` return null and every accent1-filled shape in the
+  // document stop painting.
+  test('a prototype-member name in the colour mapping does not break resolution', () => {
+    const theme = readOoxmlPart(
+      `<a:theme xmlns:a="${A}"><a:themeElements><a:clrScheme name="T">` +
+        '<a:accent1><a:srgbClr val="112233"/></a:accent1>' +
+        '<a:accent2><a:srgbClr val="AABBCC"/></a:accent2>' +
+        '<a:constructor><a:srgbClr val="DDEEFF"/></a:constructor>' +
+        '</a:clrScheme></a:themeElements></a:theme>',
+      { name: '/word/theme/theme1.xml', contentType: 'application/xml' }
+    );
+    const hostile = readOoxmlPart(
+      `<w:settings xmlns:w="${WML_NAMESPACE_URI}">` +
+        '<w:clrSchemeMapping w:accent1="constructor" w:accent2="__proto__" ' +
+        'w:__proto__="accent2" w:constructor="accent2"/>' +
+        '</w:settings>',
+      { name: '/word/settings.xml', contentType: 'application/xml' }
+    );
+    if (!theme.ok || !hostile.ok) throw new Error('test package parts must parse');
+    const resolvers = createPackageShapeThemeResolvers({
+      parts: new Map([
+        ['/word/theme/theme1.xml', theme.part],
+        ['/word/settings.xml', hostile.part],
+      ]),
+      partBytes: new Map(),
+      relationships: new Map(),
+      externalTargets: [],
+      contentTypes: {},
+      mainDocumentPart: OWNER,
+    } as unknown as OoxmlPackage);
+    // Unmappable values leave the default mapping in place, so both slots still resolve.
+    expect(resolvers.resolveSchemeColor('accent1')).toBe('112233');
+    expect(resolvers.resolveSchemeColor('accent2')).toBe('AABBCC');
+    // A prototype member is never a slot, and nothing was polluted along the way.
+    expect(resolvers.resolveSchemeColor('__proto__')).toBeNull();
+    expect(resolvers.resolveSchemeColor('toString')).toBeNull();
+    expect(({} as Record<string, unknown>)['accent2']).toBeUndefined();
+  });
+
   test('MC-wrapped anchored custGeom shape projects with typed vector geometry', () => {
     const part = parsePart(`<w:p><w:r>${mcWrapped(doubleRuleShapeDrawing())}</w:r></w:p>`);
     const atoms = indexInlineDrawingProjectionsInPart(part);
@@ -114,6 +240,459 @@ describe('wps vector shape projection', () => {
     const atoms = indexInlineDrawingProjectionsInPart(part);
     expect(atoms.size).toBe(1);
     expect([...atoms.values()][0]!.vectorShape).not.toBeNull();
+  });
+
+  test('scheme colours apply luminance and alpha transforms', () => {
+    const drawing = doubleRuleShapeDrawing().replace(
+      '<a:solidFill><a:srgbClr val="000000"/></a:solidFill>',
+      '<a:solidFill><a:schemeClr val="accent1">' +
+        '<a:lumMod val="50000"/><a:alpha val="50000"/>' +
+        '</a:schemeClr></a:solidFill>'
+    );
+    const part = parsePart(`<w:p><w:r>${drawing}</w:r></w:p>`);
+    const atoms = indexInlineDrawingProjectionsInPart(part, {
+      resolveSchemeColor: (token) => (token === 'accent1' ? '4472C4' : null),
+    });
+    const shape = [...atoms.values()][0]!.vectorShape!;
+    expect(shape.fillHex).toBe('203864');
+    expect(shape.fillAlpha).toBe(0.5);
+  });
+
+  // `a:tint` and `a:shade` are a blend in LINEAR light, and `val` is the fraction of the
+  // INPUT colour (ECMA-376 20.1.2.3.34/20.1.2.3.31) — not of white, and not a blend on the
+  // stored channel. Every expectation below is the pixel LibreOffice paints for that exact
+  // fill; the two right-hand columns are what the readings this engine rejects would give.
+  //
+  // `a:shade` has only two readings, since the white-fraction question does not arise. Of the
+  // tint rows, `0000FF` and `336699` separate all three; `808080` at 50% is the one point
+  // where the two rejected readings agree with each other, and it is here only to pin the
+  // case the old fixture leaned on:
+  //
+  //   base    transform        this engine   `val` as white-fraction   blend in gamma space
+  //   0000FF  tint  20000      E7E7FF        3333FF                    CCCCFF
+  //   0000FF  shade 20000      00007E        —                         000033
+  //   808080  tint  50000      CCCCCC        C0C0C0                    C0C0C0
+  //   808080  shade 50000      5E5E5E        —                         404040
+  //   336699  tint  60000      ADB8CA        ADC2D6                    85A3C2
+  //   336699  shade 40000      224466        —                         14293D
+  //
+  // Mid-gray at 50% is exactly where the white-fraction reading and the input-fraction
+  // reading agree, so it cannot be the only tint case.
+  test('theme colours apply tint, shade, and luminance offset transforms', () => {
+    const cases = [
+      ['0000FF', 'tint', '20000', 'E7E7FF'],
+      ['0000FF', 'shade', '20000', '00007E'],
+      ['808080', 'tint', '50000', 'CCCCCC'],
+      ['808080', 'shade', '50000', '5E5E5E'],
+      ['336699', 'tint', '60000', 'ADB8CA'],
+      ['336699', 'shade', '40000', '224466'],
+      // `lumMod`/`lumOff` are NOT linear-light: they stay in HSL over the stored channels.
+      ['808080', 'lumOff', '10000', '9A9A9A'],
+      ['6F55D7', 'lumMod', '50000', '2F1D79'],
+      ['6F55D7', 'lumMod', '75000', '472BB6'],
+    ] as const;
+    for (const [base, transform, value, expected] of cases) {
+      const drawing = doubleRuleShapeDrawing().replace(
+        '<a:solidFill><a:srgbClr val="000000"/></a:solidFill>',
+        `<a:solidFill><a:schemeClr val="accent1"><a:${transform} val="${value}"/>` +
+          '</a:schemeClr></a:solidFill>'
+      );
+      const part = parsePart(`<w:p><w:r>${drawing}</w:r></w:p>`);
+      const atoms = indexInlineDrawingProjectionsInPart(part, {
+        resolveSchemeColor: () => base,
+      });
+      expect([...atoms.values()][0]!.vectorShape?.fillHex).toBe(expected);
+    }
+  });
+
+  // ECMA-376 gives `val` two legal spellings: the 1000ths-of-a-percent integer Word writes
+  // (`50000`, Part 4 Transitional) and the percentage literal (`50%`, Part 1 Strict), which
+  // is what the spec's own worked examples use. Both must resolve, and to the same colour.
+  test('a colour transform accepts both the integer and the percentage spelling', () => {
+    const fillFor = (val: string): string | null => {
+      const drawing = doubleRuleShapeDrawing().replace(
+        '<a:solidFill><a:srgbClr val="000000"/></a:solidFill>',
+        `<a:solidFill><a:srgbClr val="00FF00"><a:shade val="${val}"/></a:srgbClr></a:solidFill>`
+      );
+      const part = parsePart(`<w:p><w:r>${drawing}</w:r></w:p>`);
+      return (
+        [...indexInlineDrawingProjectionsInPart(part).values()][0]?.vectorShape?.fillHex ?? null
+      );
+    };
+    // ECMA-376 Part 1 20.1.2.3.31's worked `a:shade` example: `00FF00` at 50% is `00BC00`.
+    // It is the one check on this colour model that does not come from a renderer, so it is
+    // pinned in both spellings. A blend on the stored channel would give `008000`; note the
+    // sRGB curve would give `00BB00`, so this example separates the two BLENDS decisively and
+    // the two CURVES only just.
+    expect(fillFor('50%')).toBe('00BC00');
+    expect(fillFor('50000')).toBe('00BC00');
+    for (const [percent, integer] of [
+      ['0%', '0'],
+      ['100%', '100000'],
+      ['12.5%', '12500'],
+      ['99.99%', '99990'],
+    ] as const) {
+      expect(`${percent}: ${fillFor(percent)}`).toBe(`${percent}: ${fillFor(integer)}`);
+      expect(fillFor(percent)).not.toBeNull();
+    }
+    // Everything else refuses, and a refused transform fails the whole colour closed.
+    // `100.99%` is the case the PATTERN admits but the value space does not: 22.9.2.10's
+    // regex matches it, and it is 1.0099 as a ratio. The explicit ceiling refuses it, the
+    // same way the integer branch refuses `100001`.
+    for (const rejected of [
+      '101%',
+      '100.99%',
+      '100.1%',
+      '-5%',
+      ' 50% ',
+      '50.123%',
+      '1e2%',
+      '%',
+      '50 %',
+      '1000000',
+    ]) {
+      expect(`${rejected}: ${fillFor(rejected)}`).toBe(`${rejected}: null`);
+    }
+  });
+
+  // A ratio of 100000 is the identity, so the round trip through linear light and back must
+  // return the authored byte. The floor in `channelFromLinear` is one ulp away from turning
+  // every channel into the one below it, which no other case here would catch.
+  //
+  // This is the ONE expectation in this file asserted from first principles rather than
+  // measured: LibreOffice renders `010203` + `tint val="100000"` as `000103`, because it
+  // quantises through an integer percentage and loses the bottom channel. A 100% tint is by
+  // definition a no-op, so do not "correct" this toward the oracle.
+  test('a full-strength tint or shade returns the authored colour unchanged', () => {
+    for (const transform of ['tint', 'shade'] as const) {
+      const drawing = doubleRuleShapeDrawing().replace(
+        '<a:solidFill><a:srgbClr val="000000"/></a:solidFill>',
+        `<a:solidFill><a:srgbClr val="010203"><a:${transform} val="100000"/></a:srgbClr>` +
+          '</a:solidFill>'
+      );
+      const part = parsePart(`<w:p><w:r>${drawing}</w:r></w:p>`);
+      const atoms = indexInlineDrawingProjectionsInPart(part);
+      expect([...atoms.values()][0]!.vectorShape?.fillHex).toBe('010203');
+    }
+  });
+
+  // `flipH`/`flipV` are `xsd:boolean`. The engine cannot paint a flip, so a set flag refuses
+  // the shape — and a spelling the schema does not allow must refuse too, not fall through
+  // to "unset" and paint the shape the wrong way round.
+  //
+  // Four call sites read a flip: `flipH` and `flipV` on a shape's own `a:xfrm`, and the same
+  // pair on a group's `wpg:grpSpPr/a:xfrm`. The group pair is the lane this file exists for,
+  // so every spelling runs against all four.
+  test('an unset flip paints and any other spelling refuses, at all four sites', () => {
+    const spellings = [
+      // Legal `xsd:boolean` false, including the forms the fixed `whiteSpace="collapse"`
+      // facet makes valid. The XML reader does not trim, so the helper has to.
+      [undefined, true],
+      ['0', true],
+      ['false', true],
+      [' 0 ', true],
+      ['\nfalse\n', true],
+      // Legal true — the engine cannot paint a flip, so it refuses.
+      ['1', false],
+      ['true', false],
+      [' 1 ', false],
+      // Schema-invalid: refuse rather than read as unset.
+      ['TRUE', false],
+      ['True', false],
+      ['yes', false],
+      ['2', false],
+      ['', false],
+      ['0 1', false],
+    ] as const;
+
+    const SHAPE_XFRM = '<a:xfrm><a:off x="0" y="0"/><a:ext cx="6696075" cy="47625"/></a:xfrm>';
+    const GROUP_XFRM = '<a:xfrm><a:chOff x="0" y="0"/><a:chExt cx="200000" cy="100000"/></a:xfrm>';
+    const sites = [
+      {
+        name: 'shape flipH',
+        drawing: (attrs: string) =>
+          doubleRuleShapeDrawing().replace(SHAPE_XFRM, `<a:xfrm${attrs}>${SHAPE_XFRM.slice(9)}`),
+        attr: 'flipH',
+      },
+      {
+        name: 'shape flipV',
+        drawing: (attrs: string) =>
+          doubleRuleShapeDrawing().replace(SHAPE_XFRM, `<a:xfrm${attrs}>${SHAPE_XFRM.slice(9)}`),
+        attr: 'flipV',
+      },
+      {
+        name: 'group flipH',
+        drawing: (attrs: string) =>
+          groupShapeDrawing().replace(GROUP_XFRM, `<a:xfrm${attrs}>${GROUP_XFRM.slice(9)}`),
+        attr: 'flipH',
+      },
+      {
+        name: 'group flipV',
+        drawing: (attrs: string) =>
+          groupShapeDrawing().replace(GROUP_XFRM, `<a:xfrm${attrs}>${GROUP_XFRM.slice(9)}`),
+        attr: 'flipV',
+      },
+    ];
+
+    for (const site of sites) {
+      for (const [value, paints] of spellings) {
+        const attrs = value === undefined ? '' : ` ${site.attr}="${escapeAttribute(value)}"`;
+        const part = parsePart(`<w:p><w:r>${site.drawing(attrs)}</w:r></w:p>`);
+        const shape = [
+          ...indexInlineDrawingProjectionsInPart(part, {
+            resolveSchemeColor: () => '4472C4',
+          }).values(),
+        ][0]?.vectorShape;
+        const label = `${site.name}=${JSON.stringify(value)}`;
+        expect(`${label}: ${shape !== null && shape !== undefined}`).toBe(`${label}: ${paints}`);
+      }
+    }
+  });
+
+  // `rot` is `ST_Angle`, which derives from `xsd:int` — so it carries the same fixed
+  // `whiteSpace="collapse"` facet as the flip flags, plus a sign and leading zeros. Every
+  // spelling of zero below is a shape Word paints upright; comparing the raw string to `'0'`
+  // refused all but the bare one. Both `a:xfrm` sites read `rot`, so both are driven.
+  test('every legal spelling of a zero rotation paints, and any real angle refuses', () => {
+    const spellings = [
+      [undefined, true],
+      ['0', true],
+      [' 0 ', true],
+      ['\n0\n', true],
+      ['00', true],
+      ['+0', true],
+      ['-0', true],
+      ['000000', true],
+      // A real angle: the engine cannot paint a rotated vector shape.
+      ['60000', false],
+      ['-60000', false],
+      ['1', false],
+      // Not a legal `xsd:int` at all.
+      ['0.0', false],
+      ['0deg', false],
+      ['', false],
+      ['0 0', false],
+    ] as const;
+
+    const SHAPE_XFRM = '<a:xfrm><a:off x="0" y="0"/><a:ext cx="6696075" cy="47625"/></a:xfrm>';
+    const GROUP_XFRM = '<a:xfrm><a:chOff x="0" y="0"/><a:chExt cx="200000" cy="100000"/></a:xfrm>';
+    const sites = [
+      { name: 'shape rot', base: SHAPE_XFRM, drawing: doubleRuleShapeDrawing },
+      { name: 'group rot', base: GROUP_XFRM, drawing: groupShapeDrawing },
+    ];
+
+    for (const site of sites) {
+      for (const [value, paints] of spellings) {
+        const attrs = value === undefined ? '' : ` rot="${escapeAttribute(value)}"`;
+        const xml = site.drawing().replace(site.base, `<a:xfrm${attrs}>${site.base.slice(9)}`);
+        const part = parsePart(`<w:p><w:r>${xml}</w:r></w:p>`);
+        const shape = [
+          ...indexInlineDrawingProjectionsInPart(part, {
+            resolveSchemeColor: () => '4472C4',
+          }).values(),
+        ][0]?.vectorShape;
+        const label = `${site.name}=${JSON.stringify(value)}`;
+        expect(`${label}: ${shape !== null && shape !== undefined}`).toBe(`${label}: ${paints}`);
+      }
+    }
+  });
+
+  // One bound (16 entries) covers the fill list, the background fill list based at 1001 and
+  // the line list. The index is file content, so both edges of each range must refuse.
+  test('a style matrix index past the list size resolves to nothing', () => {
+    const entries = (name: string, tag: string): string =>
+      `<a:${name}>` +
+      Array.from({ length: 20 }, (_, index) => `<${tag} n="${index}"/>`).join('') +
+      `</a:${name}>`;
+    const theme = readOoxmlPart(
+      `<a:theme xmlns:a="${A}"><a:themeElements><a:clrScheme name="T">` +
+        '<a:accent1><a:srgbClr val="112233"/></a:accent1>' +
+        '</a:clrScheme><a:fmtScheme name="T">' +
+        entries('fillStyleLst', 'a:solidFill') +
+        entries('lnStyleLst', 'a:ln') +
+        '<a:effectStyleLst/>' +
+        entries('bgFillStyleLst', 'a:gradFill') +
+        '</a:fmtScheme></a:themeElements></a:theme>',
+      { name: '/word/theme/theme1.xml', contentType: 'application/xml' }
+    );
+    if (!theme.ok) throw new Error(theme.reason);
+    const resolvers = createPackageShapeThemeResolvers({
+      parts: new Map([['/word/theme/theme1.xml', theme.part]]),
+      partBytes: new Map(),
+      relationships: new Map(),
+      externalTargets: [],
+      contentTypes: {},
+      mainDocumentPart: OWNER,
+    } as unknown as OoxmlPackage);
+    const resolved = (kind: 'fill' | 'line', index: number): string | null =>
+      resolvers.resolveStyleMatrixReference(kind, index)?.localName ?? null;
+    expect(resolved('fill', 1)).toBe('solidFill');
+    expect(resolved('fill', 16)).toBe('solidFill');
+    expect(resolved('fill', 17)).toBeNull();
+    expect(resolved('fill', 1001)).toBe('gradFill');
+    expect(resolved('fill', 1016)).toBe('gradFill');
+    expect(resolved('fill', 1017)).toBeNull();
+    expect(resolved('line', 16)).toBe('ln');
+    expect(resolved('line', 17)).toBeNull();
+    // A line index never selects the background list, however large it is.
+    expect(resolved('line', 1001)).toBeNull();
+  });
+
+  test('a shape style fill reference resolves its theme colour', () => {
+    const drawing = doubleRuleShapeDrawing()
+      .replace('<a:solidFill><a:srgbClr val="000000"/></a:solidFill>', '')
+      .replace(
+        '</wps:spPr>',
+        '</wps:spPr><wps:style><a:fillRef idx="1">' +
+          '<a:schemeClr val="accent1"/>' +
+          '</a:fillRef></wps:style>'
+      );
+    const part = parsePart(`<w:p><w:r>${drawing}</w:r></w:p>`);
+    const matrix = readOoxmlPart(
+      `<a:solidFill xmlns:a="${A}"><a:schemeClr val="phClr"/></a:solidFill>`,
+      { name: '/word/theme/test.xml', contentType: 'application/xml' }
+    );
+    if (!matrix.ok) throw new Error(matrix.reason);
+    const atoms = indexInlineDrawingProjectionsInPart(part, {
+      resolveSchemeColor: () => '4472C4',
+      resolveStyleMatrixReference: () => matrix.part.root,
+    });
+    expect([...atoms.values()][0]!.vectorShape?.fillHex).toBe('4472C4');
+  });
+
+  test('explicit noFill does not fall through to a style fill reference', () => {
+    const drawing = doubleRuleShapeDrawing()
+      .replace('<a:solidFill><a:srgbClr val="000000"/></a:solidFill>', '<a:noFill/>')
+      .replace(
+        '</wps:spPr>',
+        '</wps:spPr><wps:style><a:fillRef idx="1">' +
+          '<a:schemeClr val="accent1"/>' +
+          '</a:fillRef></wps:style>'
+      );
+    const matrix = readOoxmlPart(
+      `<a:solidFill xmlns:a="${A}"><a:schemeClr val="phClr"/></a:solidFill>`,
+      { name: '/word/theme/test.xml', contentType: 'application/xml' }
+    );
+    if (!matrix.ok) throw new Error(matrix.reason);
+    const part = parsePart(`<w:p><w:r>${drawing}</w:r></w:p>`);
+    const projection = [
+      ...indexInlineDrawingProjectionsInPart(part, {
+        resolveSchemeColor: () => '4472C4',
+        resolveStyleMatrixReference: () => matrix.part.root,
+      }).values(),
+    ][0]!;
+    expect(projection.vectorShape).toBeNull();
+  });
+
+  test('a line style reference paints without a direct line node', () => {
+    const drawing = doubleRuleShapeDrawing().replace(
+      '</wps:spPr>',
+      '</wps:spPr><wps:style><a:lnRef idx="1">' +
+        '<a:schemeClr val="accent1"/>' +
+        '</a:lnRef></wps:style>'
+    );
+    const matrix = readOoxmlPart(
+      `<a:ln xmlns:a="${A}" w="25400">` +
+        '<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>' +
+        '</a:ln>',
+      { name: '/word/theme/test.xml', contentType: 'application/xml' }
+    );
+    if (!matrix.ok) throw new Error(matrix.reason);
+    const part = parsePart(`<w:p><w:r>${drawing}</w:r></w:p>`);
+    const shape = [
+      ...indexInlineDrawingProjectionsInPart(part, {
+        resolveSchemeColor: () => '4472C4',
+        resolveStyleMatrixReference: () => matrix.part.root,
+      }).values(),
+    ][0]!.vectorShape!;
+    expect(shape.strokeHex).toBe('4472C4');
+    expect(shape.strokeWidthEmu).toBe(25_400);
+  });
+
+  test('an out-of-range colour transform refuses the vector payload', () => {
+    const drawing = doubleRuleShapeDrawing().replace(
+      '<a:solidFill><a:srgbClr val="000000"/></a:solidFill>',
+      '<a:solidFill><a:schemeClr val="accent1">' +
+        '<a:lumMod val="100001"/>' +
+        '</a:schemeClr></a:solidFill>'
+    );
+    const part = parsePart(`<w:p><w:r>${mcWrapped(drawing)}</w:r></w:p>`);
+    const atoms = indexInlineDrawingProjectionsInPart(part, {
+      resolveSchemeColor: () => '4472C4',
+    });
+    expect(atoms.size).toBe(0);
+  });
+
+  test('an MC wpg group projects each child with its own geometry and colour', () => {
+    const drawing = groupShapeDrawing();
+    const wrapped =
+      '<mc:AlternateContent><mc:Choice Requires="wpg">' +
+      drawing +
+      '</mc:Choice><mc:Fallback><w:pict><v:shape id="fallback"/></w:pict></mc:Fallback>' +
+      '</mc:AlternateContent>';
+    const directPart = parsePart(`<w:p><w:r>${drawing}</w:r></w:p>`);
+    expect(
+      indexInlineDrawingProjectionsInPart(directPart, {
+        resolveSchemeColor: () => '4472C4',
+      }).size
+    ).toBe(1);
+    const part = parsePart(`<w:p><w:r>${wrapped}</w:r></w:p>`);
+    const atoms = indexInlineDrawingProjectionsInPart(part, {
+      resolveSchemeColor: () => '4472C4',
+    });
+    expect(atoms.size).toBe(1);
+    const shape = [...atoms.values()][0]!.vectorShape!;
+    expect(shape.components).toHaveLength(2);
+    expect(shape.components?.map((component) => component.fillHex)).toEqual(['4472C4', 'FF0000']);
+    expect(shape.components?.[0]!.subpathsEmu[0]).toHaveLength(ELLIPSE_POINT_COUNT);
+    expect(shape.components?.[1]!.subpathsEmu[0]![0]).toEqual({ x: 100000, y: 0 });
+
+    const rotated = parsePart(
+      `<w:p><w:r>${drawing.replace('<a:xfrm><a:chOff', '<a:xfrm rot="60000"><a:chOff')}</w:r></w:p>`
+    );
+    expect(
+      [
+        ...indexInlineDrawingProjectionsInPart(rotated, {
+          resolveSchemeColor: () => '4472C4',
+        }).values(),
+      ][0]!.vectorShape
+    ).toBeNull();
+
+    const childFlipped = parsePart(
+      `<w:p><w:r>${drawing.replace(
+        '<wps:wsp><wps:spPr><a:xfrm>',
+        '<wps:wsp><wps:spPr><a:xfrm flipH="true">'
+      )}</w:r></w:p>`
+    );
+    expect(
+      [
+        ...indexInlineDrawingProjectionsInPart(childFlipped, {
+          resolveSchemeColor: () => '4472C4',
+        }).values(),
+      ][0]!.vectorShape
+    ).toBeNull();
+
+    const withMetadata = parsePart(
+      `<w:p><w:r>${drawing.replace('<wpg:wgp>', '<wpg:wgp><wpg:cNvPr id="1"/>')}</w:r></w:p>`
+    );
+    expect(
+      [
+        ...indexInlineDrawingProjectionsInPart(withMetadata, {
+          resolveSchemeColor: () => '4472C4',
+        }).values(),
+      ][0]!.vectorShape
+    ).not.toBeNull();
+
+    const nested = parsePart(
+      `<w:p><w:r>${drawing.replace('</wpg:wgp>', '<wpg:grpSp/></wpg:wgp>')}</w:r></w:p>`
+    );
+    expect(
+      [
+        ...indexInlineDrawingProjectionsInPart(nested, {
+          resolveSchemeColor: () => '4472C4',
+        }).values(),
+      ][0]!.vectorShape
+    ).toBeNull();
   });
 
   test('an MC-wrapped wps textbox projects a story; the VML fallback never renders', () => {
@@ -174,7 +753,7 @@ describe('wps vector shape projection', () => {
   test('unsupported path verbs refuse vector geometry and stay invisible under MC', () => {
     const bezier = doubleRuleShapeDrawing().replace(
       '<a:lnTo><a:pt x="0" y="38100"/></a:lnTo>',
-      '<a:cubicBezTo><a:pt x="1" y="1"/><a:pt x="2" y="2"/><a:pt x="0" y="38100"/></a:cubicBezTo>'
+      '<a:quadBezTo><a:pt x="1" y="1"/><a:pt x="0" y="38100"/></a:quadBezTo>'
     );
     const part = parsePart(`<w:p><w:r>${mcWrapped(bezier)}</w:r></w:p>`);
     const atoms = indexInlineDrawingProjectionsInPart(part);
@@ -183,6 +762,22 @@ describe('wps vector shape projection', () => {
 
   test('limits are respected', () => {
     expect(DEFAULT_DRAWING_PROJECTION_LIMITS.maxVisitedElements).toBeGreaterThan(0);
+  });
+
+  test('an over-limit group does not project unbounded child geometry', () => {
+    const child =
+      '<wps:wsp><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/></a:xfrm>' +
+      '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>' +
+      '<a:solidFill><a:srgbClr val="000000"/></a:solidFill></wps:spPr></wps:wsp>';
+    const drawing =
+      '<w:drawing><wp:inline><wp:extent cx="100" cy="100"/><wp:docPr id="14" name="Group"/>' +
+      `<a:graphic><a:graphicData uri="${WPG}"><wpg:wgp><wpg:grpSpPr>` +
+      '<a:xfrm><a:chOff x="0" y="0"/><a:chExt cx="100" cy="100"/></a:xfrm>' +
+      `</wpg:grpSpPr>${child.repeat(129)}</wpg:wgp></a:graphicData></a:graphic>` +
+      '</wp:inline></w:drawing>';
+    const part = parsePart(`<w:p><w:r>${drawing}</w:r></w:p>`);
+    const projection = [...indexInlineDrawingProjectionsInPart(part).values()][0]!;
+    expect(projection.vectorShape).toBeNull();
   });
 
   test('a drawing deep in a large document is still discovered', () => {
