@@ -9,7 +9,14 @@
  * Nothing loads until an app calls in. Importing this module fetches no bytes, and the editor
  * engine never calls it on its own.
  *
- * @example Load the packaged substitutes and hand them to the editor
+ * @example Serve the packaged substitutes on demand
+ * ```ts
+ * import { packagedFonts } from '@docx-editor.dev/fonts';
+ *
+ * const editor = createDocxEditor({ document: bytes, fonts: packagedFonts() });
+ * ```
+ *
+ * @example Load Word's five document defaults up front instead
  * ```ts
  * import { defaultFonts } from '@docx-editor.dev/fonts';
  *
@@ -36,8 +43,10 @@
 //
 // The first five are Word's DOCUMENT defaults, so they are what `loadDefaultFonts()` loads
 // when `families` is omitted. Century Gothic is not a document default and most files never
-// name it, so its four ~175 KB assets are opt-in: pass `families` to include it, or use
-// `googleFonts()`, which loads the same packaged bytes only when a document asks for it.
+// name it, so its four ~175 KB assets are opt-in: use `packagedFonts()`, which loads the
+// packaged bytes for any of the six only when a document asks — no network either way — or
+// pass `families` explicitly to the eager loader. `googleFonts()` serves it from the same
+// bundled bytes too, for an app already opted into the catalog.
 //
 // `loadDefaultFonts()` fetches the packaged font files (lazily, only the families asked for)
 // and returns a configuration FRAGMENT — sources plus the Word-name→substitute map —
@@ -157,8 +166,10 @@ export const WORD_DOCUMENT_DEFAULT_FAMILIES: readonly WordDefaultFamily[] = Obje
  * const fonts = await defaultFonts({ families: ALL_WORD_DEFAULT_FAMILIES });
  * ```
  *
- * `googleFonts()` covers the extra families on demand instead, so a document that never
- * names Century Gothic never pays for its assets.
+ * {@link packagedFonts} covers the extra families on demand instead, so a document that
+ * never names Century Gothic never pays for its assets — from these same bundled bytes,
+ * with no network involved. `googleFonts()` covers them too, for an app already opted into
+ * the catalog.
  */
 export const ALL_WORD_DEFAULT_FAMILIES: readonly WordDefaultFamily[] = Object.freeze([
   ...WORD_DOCUMENT_DEFAULT_FAMILIES,
@@ -350,6 +361,233 @@ export async function defaultFonts(
   // face arrives, and blocking the document on it would delay first paint for nothing.
   void installDefaultFontFaces(loadOptions);
   return fragment;
+}
+
+/**
+ * The mark that tells `useDocxSource` a function is an on-demand resolver rather than a
+ * zero-argument loader. `Symbol.for` of the same key `@docx-editor.dev/core`'s
+ * `defineFontResolver` uses.
+ *
+ * Written out here rather than imported, for the same reason the face types above are
+ * structural copies: this package has no runtime or type dependency on the engine, so a
+ * host can install font bytes without installing an editor. A registered symbol is
+ * identical across module copies, so both spellings produce the same mark.
+ */
+const FONT_RESOLVER_BRAND: unique symbol = Symbol.for('docx-editor.dev/font-resolver') as never;
+
+/** The string half of the same mark; see {@link FontResolverMark}. */
+const FONT_RESOLVER_MARK_KEY = 'docx-editor.dev/font-resolver';
+
+/**
+ * The TYPE-level half of the resolver mark, structurally identical to the editor
+ * contract's `FontResolverMark`.
+ *
+ * A string key rather than a symbol precisely so the two unify without this package
+ * importing anything from the engine: two `unique symbol` declarations in two packages are
+ * two different types. Because they unify, `useFonts(packagedFonts())` typechecks against
+ * a `FontOrigin` list that REQUIRES the mark, and a hand-written resolver that forgot
+ * `defineFontResolver` does not.
+ */
+export interface FontResolverMark {
+  /** Always `true`. Set non-enumerably on the resolvers this package builds. */
+  readonly 'docx-editor.dev/font-resolver': true;
+}
+
+/** Set both halves of the mark on a resolver, non-enumerably. */
+function markResolver<T extends object>(resolve: T): T & FontResolverMark {
+  const descriptor = { value: true, enumerable: false, configurable: true } as const;
+  Object.defineProperty(resolve, FONT_RESOLVER_BRAND, descriptor);
+  Object.defineProperty(resolve, FONT_RESOLVER_MARK_KEY, descriptor);
+  return resolve as T & FontResolverMark;
+}
+
+/**
+ * One face an earlier origin can already paint, structurally identical to the editor
+ * contract's `FontFaceRequest`.
+ */
+export interface ResolvedFontFace {
+  /** The family name, matched case-insensitively as Word matches font names. */
+  readonly family: string;
+  /** CSS numeric weight; the packaged faces are 400 and 700. */
+  readonly weight: number;
+  /** Whether this is the upright or the italic face. */
+  readonly style: 'normal' | 'italic';
+}
+
+/**
+ * The request both resolvers in this package take, structurally identical to the editor
+ * contract's `FontResolutionRequest`.
+ *
+ * Named rather than written inline at each call site so a mismatch reports one line rather
+ * than a four-line structural wall.
+ *
+ * @public
+ */
+export interface FontOriginRequest {
+  /** Families the document declares, already name-validated and capped by the engine. */
+  readonly families: readonly string[];
+  /** The face a run naming no font resolves to. The engine reports Calibri by default. */
+  readonly defaultFamily: string;
+  /** Faces an earlier origin in the same composition can already paint. */
+  readonly resolvedFaces?: readonly ResolvedFontFace[];
+}
+
+/** Case-folded face identity, matching how the engine keys `resolvedFaces`. */
+const faceKey = (family: string, weight: number, style: string): string =>
+  `${family.trim().toLowerCase()} ${weight} ${style}`;
+
+/**
+ * How {@link packagedFonts} behaves once a document hands it a family list. Every field is
+ * optional; `packagedFonts()` with no options serves any of the six families a document
+ * names, over the global `fetch`, warning to the console on failure.
+ */
+export interface PackagedFontsOptions {
+  /**
+   * Narrow what may ever be loaded. Omitted, any of the six substituted families a
+   * document names is fair game — {@link ALL_WORD_DEFAULT_FAMILIES}, not the smaller set
+   * the eager loader defaults to. Set it to run against a shorter list.
+   */
+  readonly allow?: readonly WordDefaultFamily[];
+  /** Injectable for tests; defaults to global `fetch`. */
+  readonly fetcher?: typeof fetch;
+  /** Per-face failures. Defaults to a console warning; pass a handler to route them. */
+  readonly onFailure?: (failure: DefaultFontLoadFailure) => void;
+  /**
+   * Set `false` to skip the paint-side `FontFace` registration
+   * {@link installDefaultFontFaces} performs. Measurement is unaffected; painted glyphs
+   * fall back to whatever the platform substitutes for the Word family name.
+   *
+   * The registration goes through the BROWSER's own loader (`new FontFace(family,
+   * 'url(…)')`), which cannot be given {@link PackagedFontsOptions.fetcher} — so an
+   * injected fetcher measures the byte cost of the measurement half only, and a real
+   * browser makes a second request per face. Same-origin and immutable, so it is normally
+   * served from cache; the registration is idempotent per document either way.
+   */
+  readonly install?: boolean;
+}
+
+/**
+ * What {@link packagedFonts} returns: a marked resolver over the packaged substitutes.
+ *
+ * @public
+ */
+export type PackagedFontsResolver = ((
+  request: FontOriginRequest
+) => Promise<PackagedFontsFragment>) &
+  FontResolverMark;
+
+/** What one {@link packagedFonts} resolver call produced. */
+export interface PackagedFontsFragment extends DefaultFontsFragment {
+  /** The Word families this call actually loaded, in {@link ALL_WORD_DEFAULT_FAMILIES} order. */
+  readonly families: readonly WordDefaultFamily[];
+}
+
+/**
+ * Case-folded Word family name -> the canonical spelling, built once.
+ *
+ * ALL six, deliberately, not the five in {@link WORD_DOCUMENT_DEFAULT_FAMILIES}. Those two
+ * lists exist because the eager loader pays for a family on EVERY load, so the set it
+ * defaults to stays as small as correctness allows. This resolver has the opposite cost
+ * shape: a family it can serve costs nothing until a document names it. Century Gothic is
+ * the family that distinction was drawn for, and serving it here is the same on-demand
+ * bargain {@link ALL_WORD_DEFAULT_FAMILIES} points at — from bundled bytes, with no third
+ * party involved.
+ */
+const wordFamiliesByFoldedName: ReadonlyMap<string, WordDefaultFamily> = new Map(
+  ALL_WORD_DEFAULT_FAMILIES.map((family) => [family.toLowerCase(), family] as const)
+);
+
+/**
+ * The packaged substitutes, served ON DEMAND: an editor-shaped font resolver that loads
+ * the families a document turns out to name, plus its default face, rather than every
+ * family this package ships.
+ *
+ * Same call shape as `googleFonts()` from `@docx-editor.dev/fonts/google`, so the two
+ * compose by sitting next to each other rather than by being combined differently:
+ *
+ * ```ts
+ * const fonts = useFonts(packagedFonts());                  // bundled faces only
+ * const fonts = useFonts(packagedFonts(), googleFonts());   // and the Google catalog
+ * ```
+ *
+ * Prefer this to {@link defaultFonts} unless you need the eager guarantee. `defaultFonts()`
+ * loads all 20 faces of {@link WORD_DOCUMENT_DEFAULT_FAMILIES} — 7.4 MB — whichever
+ * document opens, because it is called before there is a document to ask. This is called
+ * AFTER the parse, so a file using only Times New Roman costs Liberation Serif plus the
+ * four Carlito faces instead.
+ *
+ * A family loads when a document NAMES it, or when it is that document's DEFAULT face. The
+ * default counts because a run that authors no font still has to be measured in one. The
+ * engine reports Calibri as the default, so Carlito is a floor here: even a document
+ * naming none of the six loads it. Narrow that with {@link PackagedFontsOptions.allow} if a
+ * document's families are known in advance.
+ *
+ * What you trade for that is one reflow. The eager form settles before the first layout, so
+ * the document paginates once; this form cannot know the families until the file is parsed,
+ * so the document opens on the engine's fixed measurer and re-paginates when the faces
+ * arrive. Nothing is fetched from a third party either way — the bytes are the ones inside
+ * this package.
+ *
+ * The families are file-derived, so they are matched case-insensitively against the closed
+ * {@link ALL_WORD_DEFAULT_FAMILIES} list and never used to build a path. A name outside it
+ * resolves to nothing here; pair with `googleFonts()` to cover more.
+ */
+export function packagedFonts(options: PackagedFontsOptions = {}): PackagedFontsResolver {
+  const allowed = options.allow
+    ? new Set(options.allow.map((family) => family.toLowerCase()))
+    : null;
+
+  async function resolvePackagedFonts(request: FontOriginRequest): Promise<PackagedFontsFragment> {
+    // Faces an earlier origin in the composition can already PAINT. Loading them again
+    // would spend the bytes on a fragment first-wins composition is bound to drop.
+    const already = new Set(
+      (request.resolvedFaces ?? []).map((face) => faceKey(face.family, face.weight, face.style))
+    );
+    // ALL FOUR faces, or none. This loads a family at a time, so skipping one whose
+    // regular is covered but whose bold is not would leave the bold with neither bytes nor
+    // a substitution — which is exactly what the family-grained version of this check did.
+    const fullyCovered = (family: WordDefaultFamily): boolean => {
+      const substitute = FAMILY_PLANS.get(family)!.substitute;
+      return FACES.every(
+        // Under the Word name the document wrote, or under the face this would load: an
+        // earlier origin may have reported either.
+        (face) =>
+          already.has(faceKey(family, face.weight, face.style)) ||
+          already.has(faceKey(substitute, face.weight, face.style))
+      );
+    };
+    // The default family counts as declared: a document whose runs name no font still
+    // renders in one, and leaving it out would load nothing for a file that is entirely
+    // default-styled.
+    const wanted = new Set<WordDefaultFamily>();
+    for (const declared of [request.defaultFamily, ...request.families]) {
+      const family = wordFamiliesByFoldedName.get(declared.toLowerCase());
+      if (!family) continue;
+      if (allowed && !allowed.has(family.toLowerCase())) continue;
+      if (fullyCovered(family)) continue;
+      wanted.add(family);
+    }
+    // Stable order regardless of how the document happened to declare them, so the same
+    // file composes to the same configuration on every load.
+    const families = ALL_WORD_DEFAULT_FAMILIES.filter((family) => wanted.has(family));
+    if (families.length === 0) return { sources: [], substitutions: [], failures: [], families };
+
+    const loadOptions = {
+      families,
+      ...(options.fetcher ? { fetcher: options.fetcher } : {}),
+    };
+    const fragment = await loadDefaultFonts(loadOptions);
+    for (const failure of fragment.failures) {
+      if (options.onFailure) options.onFailure(failure);
+      else console.warn(`[fonts] ${failure.family} (${failure.file}): ${failure.diagnostic}`);
+    }
+    // Not awaited, exactly as in `defaultFonts`: painting can start on the platform's
+    // substitute and swap when the real face arrives.
+    if (options.install !== false) void installDefaultFontFaces(loadOptions);
+    return { ...fragment, families };
+  }
+
+  return markResolver(resolvePackagedFonts);
 }
 
 export { FONT_ASSET_MANIFEST, type FontAssetManifestEntry } from './manifest.generated.ts';

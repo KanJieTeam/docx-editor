@@ -437,4 +437,95 @@ describe('googleFonts resolver', () => {
     const second = await resolve(['Cousine', 'Tinos'], fetcher);
     expect(first.sources.map((source) => source.id)).toEqual(second.sources.map((s) => s.id));
   });
+
+  const FOUR_FACES = [
+    { weight: 400, style: 'normal' as const },
+    { weight: 700, style: 'normal' as const },
+    { weight: 400, style: 'italic' as const },
+    { weight: 700, style: 'italic' as const },
+  ];
+  const allFacesOf = (family: string) => FOUR_FACES.map((face) => ({ family, ...face }));
+
+  test('never asks the CDN for a WORD name an earlier origin already substituted for', async () => {
+    const { fetcher, requested } = fakeFetcher();
+    // Only the document's own name is reported, which is what `packagedFonts()` covering
+    // Calibri looks like from here. Carlito must not be fetched on its account.
+    const fragment = await googleFonts({ fetcher, onFailure: () => {} })({
+      families: ['Cousine'],
+      defaultFamily: 'Calibri',
+      resolvedFaces: allFacesOf('calibri'),
+    });
+
+    expect(requested.some((url) => url.includes('Carlito'))).toBe(false);
+    expect(requested).toHaveLength(4);
+    expect(new Set(fragment.sources.map((source) => source.request.family))).toEqual(
+      new Set(['Cousine'])
+    );
+  });
+
+  test('never asks the CDN for a catalog FACE an earlier origin already supplied', async () => {
+    const { fetcher, requested } = fakeFetcher();
+    // Only the FACE is reported — an origin that handed over Carlito bytes without saying
+    // which Word name they stand in for. The substitution here maps Calibri onto exactly
+    // that face, so matching on the declared name alone would fetch it a second time.
+    const fragment = await googleFonts({ fetcher, onFailure: () => {} })({
+      families: ['Cousine'],
+      defaultFamily: 'Calibri',
+      resolvedFaces: allFacesOf('Carlito'),
+    });
+
+    expect(requested.every((url) => url.includes('Cousine'))).toBe(true);
+    expect(requested).toHaveLength(4);
+    expect(new Set(fragment.sources.map((source) => source.request.family))).toEqual(
+      new Set(['Cousine'])
+    );
+  });
+
+  test('a PARTLY covered family is fetched whole, so no face is left without bytes', async () => {
+    const { fetcher, requested } = fakeFetcher();
+    // Regular Carlito only. Reading that as "Calibri is covered" left bold and the italics
+    // with neither bytes nor a substitution.
+    const fragment = await googleFonts({ fetcher, onFailure: () => {} })({
+      families: [],
+      defaultFamily: 'Calibri',
+      resolvedFaces: [{ family: 'Carlito', weight: 400, style: 'normal' }],
+    });
+
+    expect(requested.every((url) => url.includes('Carlito'))).toBe(true);
+    expect(requested).toHaveLength(4);
+    expect(fragment.substitutions).toHaveLength(4);
+  });
+
+  test('never re-reads a BUNDLED family an earlier origin already supplied', async () => {
+    const { fetcher, requested } = fakeFetcher();
+    // The composition this package advertises: `[packagedFonts(), googleFonts()]` on a
+    // document naming Century Gothic. Both resolvers answer that family from the SAME
+    // bundled bytes, so without this the pair read TeX Gyre Adventor twice — 709,200
+    // duplicate bytes, in exactly the shape `resolvedFaces` exists to prevent.
+    const fragment = await googleFonts({ fetcher, onFailure: () => {} })({
+      families: ['Century Gothic'],
+      defaultFamily: 'Tinos',
+      resolvedFaces: allFacesOf('TeX Gyre Adventor'),
+    });
+
+    expect(requested.some((url) => url.includes('TeXGyreAdventor'))).toBe(false);
+    expect(fragment.sources.some((source) => source.request.family === 'TeX Gyre Adventor')).toBe(
+      false
+    );
+  });
+
+  test('a PARTLY covered bundled family is read whole, so no face is left without bytes', async () => {
+    const { fetcher } = fakeFetcher();
+    // Regular only. The same all-faces-or-none rule the catalog path uses: skipping here
+    // would leave bold and the italics with no bytes at all.
+    const fragment = await googleFonts({ fetcher, onFailure: () => {} })({
+      families: ['Century Gothic'],
+      defaultFamily: 'Tinos',
+      resolvedFaces: [{ family: 'TeX Gyre Adventor', weight: 400, style: 'normal' }],
+    });
+
+    expect(
+      fragment.sources.filter((source) => source.request.family === 'TeX Gyre Adventor')
+    ).toHaveLength(4);
+  });
 });
