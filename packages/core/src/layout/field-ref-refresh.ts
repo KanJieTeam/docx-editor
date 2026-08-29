@@ -97,7 +97,8 @@ function resolveRefreshContext(
     blocks,
     listItems,
     notes,
-    options.package ? noteRefNumberingForPart(options.package, part, blocks) : undefined
+    options.package ? noteRefNumberingForPart(options.package, part, blocks) : undefined,
+    options.displayMode ?? DEFAULT_REVISION_DISPLAY_MODE
   );
   return { blocks, notes, context };
 }
