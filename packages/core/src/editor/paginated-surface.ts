@@ -72,6 +72,7 @@ import {
   type SemanticSelection,
 } from '@docx-editor.dev/core/layout';
 import { attachListResolveChangeEvidence } from '../layout/list-resolve.ts';
+import { planNoteRefFieldResultRefreshes } from '../layout/field-ref-refresh.ts';
 import {
   DEFAULT_REVISION_DISPLAY_MODE,
   type RevisionDisplayMode,
@@ -4485,22 +4486,40 @@ export function mountPaginatedSurface(
   }
 
   /**
-   * Rewrite stale REF field results in the body story, so a save exports what the pages
-   * paint. Planning is read-only: a document whose results are already fresh commits no
-   * transaction, bumps no revision and adds no undo entry. A refresh that does rewrite is
-   * one ordinary journaled transaction — undoable, like a TOC refresh. Viewing writes
-   * nothing; note-part results still save cached (see `field-ref-refresh.ts`).
+   * Rewrite stale REF field results in the body and note stories, so a save exports what
+   * the pages paint. Planning is read-only — the note parts are read from the package,
+   * never through `partFor`, which would durably open a notes store — so a document whose
+   * results are already fresh commits no transaction, bumps no revision and adds no undo
+   * entry. Every stale story commits together as ONE transaction and ONE undo unit
+   * (`applyTreeOpsAtomic`): a refusal anywhere rolls the whole refresh back, so the saved
+   * file can never mix refreshed and stale values, and a single undo restores the exact
+   * pre-save document. Viewing and a non-editable session write nothing.
+   *
+   * COLLABORATIVE SESSIONS SKIP THE REFRESH: the collaboration gate admits only body
+   * insert/delete text ops, so the rewrite cannot journal to peers. The save then exports
+   * the cached results (the pre-refresh behavior; Word refreshes fields on open), and the
+   * `false` return says so rather than claiming freshness.
    */
   function refreshRefFieldResults(): boolean {
-    if (editingMode === 'view') return true;
-    const op = planRefFieldResultRefresh(session.part(), {
+    if (editingMode === 'view' || !session.editable) return true;
+    if (collaborationSession) return false;
+    const refreshOptions = {
       package: session.currentPackage(),
       styleCascade: styleCascade(),
       numberingIndex: numberingIndex(),
       displayMode: revisionDisplayMode(),
-    });
-    if (!op) return true;
-    return applyJournaledOps([op], undefined, undefined, BODY_STORY).committed;
+    };
+    // Both plans read before the write lands, and they share one memoized resolution
+    // context — the note values are the ones the pages painted, per calibration verdict.
+    const bodyOp = planRefFieldResultRefresh(session.part(), refreshOptions);
+    const notePlans = planNoteRefFieldResultRefreshes(session.part(), refreshOptions);
+    if (!bodyOp && notePlans.length === 0) return true;
+    const groups: { scope: StoryScope; ops: readonly TreeDocOp[] }[] = [];
+    if (bodyOp) groups.push({ scope: BODY_STORY, ops: [bodyOp] });
+    for (const plan of notePlans) {
+      groups.push({ scope: { kind: 'notesPart', noteKind: plan.noteKind }, ops: [plan.op] });
+    }
+    return session.applyTreeOpsAtomic(groups).committed;
   }
 
   // Which range a destructive or replacing gesture acts on, and where content replacing it
