@@ -12,7 +12,7 @@
   <a href="https://www.docx-editor.dev/docs"><img src="https://img.shields.io/badge/Docs-3B5BDB?style=flat-square&logo=readthedocs&logoColor=white" alt="Documentation" /></a>
 </p>
 
-Open-source WYSIWYG `.docx` editor for React and Vue. Word-faithful pagination, tracked changes, comments, and lossless round-trip: untouched content and unsupported OOXML survive the save. **[Live demo](https://docx-editor.dev/editor)** | **[Documentation](https://www.docx-editor.dev/docs)**
+Open-source WYSIWYG `.docx` editor for React and Vue. Word-faithful pagination, tracked changes, comments, and lossless round-trip: untouched content and unsupported OOXML survive the save. **[Live demo](https://docx-editor.dev/editor)** | **[Documentation](https://www.docx-editor.dev/docs)** | **[Roadmap](https://github.com/orgs/eigenpal/projects/2)**
 
 ## Quick Start
 
@@ -125,6 +125,27 @@ Examples: [Vite](examples/vite) | [Next.js](examples/nextjs) | [Remix](examples/
 ## Contributing
 
 Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, and the one-time CLA signature.
+
+### Issue conventions
+
+Every issue gets exactly one `area:*` label and one `priority:*` label. Maintainers assign them during triage — you don't need to (and can't) set labels when filing. The labels drive the [public roadmap board](https://github.com/orgs/eigenpal/projects/2): a workflow mirrors them into the board's **Area** and **Priority** fields, adds an issue to the board when it gets an area label, and removes it from the board when the area label is removed.
+
+| Area | What belongs in it |
+| ---- | ------------------ |
+| `area:word-fidelity` | Rendering, layout, and round-trip fidelity against Microsoft Word |
+| `area:performance` | Typing latency, incremental layout, load, save, and memory |
+| `area:collaboration` | Real-time collaboration, tracked changes, and comments |
+| `area:agent-ready` | Headless automation and the `editor-api` object model |
+| `area:ux` | Toolbar, caret, selection, IME, printing, and editor chrome |
+| `area:developer-experience` | Packaging, adapters, public API, docs, and CI |
+
+| Priority | Meaning |
+| -------- | ------- |
+| `priority:high` | Data loss, corruption, crashes, or a broken core promise |
+| `priority:medium` | A real defect or gap with a workaround; the default |
+| `priority:low` | Polish, internal cleanup, or a narrow edge case |
+
+Optional `component:*` labels (`component:core`, `component:react`, `component:vue`, `component:pro`, `component:editor-api`) name the affected package.
 
 ## Translations
 
