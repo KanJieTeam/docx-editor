@@ -197,6 +197,24 @@ export interface NotesLayoutInput {
    * sanitized record a body one does instead of painting dead text.
    */
   readonly projectLink?: import('./field-pieces.ts').HyperlinkProjector;
+  /**
+   * Per notes-part link projector, preferred over `projectLink`: a `w:hyperlink` inside
+   * `/word/footnotes.xml` or `/word/endnotes.xml` declares its `r:id` in that part's own
+   * `.rels`, not the body part's. The surface supplies this; the inherited body projector
+   * remains only a fallback for callers without per-part resolution.
+   */
+  readonly projectLinkForPart?: (
+    ownerPartName: string
+  ) => import('./field-pieces.ts').HyperlinkProjector | undefined;
+  /**
+   * Content token over the notes parts' relationship records, standing in for
+   * {@link projectLinkForPart}'s closure in the notes-pass memo. The projector reads
+   * relationship state the pinned part identity cannot see move: a replicated rels-only
+   * change lands without splicing the notes part, so only a content token catches it.
+   * Required whenever `projectLinkForPart` is supplied — without it the memo is disabled,
+   * the same fail-closed rule `drawingsForPart` follows through `drawingLayoutEpoch`.
+   */
+  readonly linkRelsEpoch?: string;
   readonly projectFieldLink?: import('./field-pieces.ts').FieldLinkProjector;
   /** Document properties for a document-property field inside a note story. */
   readonly documentProperties?: import('@docx-editor.dev/core/store').DocumentProperties;
@@ -342,17 +360,23 @@ function fingerprintNoteProps(props: {
  */
 function fingerprintNotesInput(input: NotesLayoutInput): string | null {
   if (input.drawingsForPart !== undefined && input.drawingLayoutEpoch === undefined) return null;
+  if (input.projectLinkForPart !== undefined && input.linkRelsEpoch === undefined) return null;
   return [
     input.producer,
     input.defaultTabStopPt ?? '',
     input.drawingLayoutEpoch ?? '',
+    input.linkRelsEpoch ?? '',
     // By CONTENT, not identity: a keystroke rebuilds the context object while every
     // resolved value stands still, and only a value move should invalidate the memo.
     input.refFields?.valuesToken ?? '',
     // By CONTENT for the same reason as the REF values above: the properties object is
     // re-read per package revision, and only a value move should repaint a DOCPROPERTY
-    // field inside a note. The link projectors are deliberately absent: they are rebuilt
-    // per pass but are pure over parts this memo already pins.
+    // field inside a note. projectLink and projectFieldLink are deliberately absent: they
+    // are rebuilt per pass but pure over parts this memo already pins. projectLinkForPart
+    // is NOT — it reads relationship records a replicated rels-only change can move
+    // without touching the notes part — so linkRelsEpoch above stands in for it, and the
+    // guard at the top disables the memo for a caller that supplies the projector without
+    // the epoch.
     input.documentProperties ? JSON.stringify(input.documentProperties) : '',
     fingerprintNoteProps(input.documentFootnoteProps),
     fingerprintNoteProps(input.documentEndnoteProps),
@@ -712,6 +736,7 @@ function layoutOpts(input: NotesLayoutInput, noteMarks?: NoteMarkContext): Layou
     numberingIndex: input.numberingIndex,
     defaultTabStopPt: input.defaultTabStopPt,
     projectLink: input.projectLink,
+    projectLinkForPart: input.projectLinkForPart,
     projectFieldLink: input.projectFieldLink,
     documentProperties: input.documentProperties,
     refFields: input.refFields,

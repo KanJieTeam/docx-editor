@@ -1645,6 +1645,7 @@ export interface NotesLayoutInput {
     readonly footnotePropsBySection: readonly ResolvedFootnoteProperties[];
     // (undocumented)
     readonly footnotesPart: OoxmlPart | null;
+    readonly linkRelsEpoch?: string;
     // (undocumented)
     readonly measurer: TextMeasurer;
     readonly numberingIndex?: NumberingIndex;
@@ -1653,6 +1654,7 @@ export interface NotesLayoutInput {
     // (undocumented)
     readonly projectFieldLink?: FieldLinkProjector;
     readonly projectLink?: HyperlinkProjector;
+    readonly projectLinkForPart?: (ownerPartName: string) => HyperlinkProjector | undefined;
     readonly refFields?: RefFieldContext;
     // (undocumented)
     readonly styleCascade?: StyleCascadeTable;
