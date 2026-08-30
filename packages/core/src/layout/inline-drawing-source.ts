@@ -35,6 +35,7 @@ import {
 import { createPackageShapeThemeResolvers } from '../store/package/theme-color-resolution.ts';
 import type { OoxmlPackage } from '../store/package/ooxml-package.ts';
 import type { InlineDrawingLayoutContext } from './drawing-layout.ts';
+import { aggregateParagraphTokensForTableBlock } from './layout-cache.ts';
 
 /** Layout-owned read surface for inline drawing package state (no binding/session lane). */
 export interface InlineDrawingPackageReader {
@@ -785,24 +786,21 @@ const tableDrawingTokenCache = new WeakMap<
   { readonly epoch: string; readonly token: string }
 >();
 
-/** Aggregate per-paragraph drawing tokens for a table subtree (cache + incremental keys). */
+/**
+ * Aggregate per-paragraph drawing tokens for a table subtree (cache + incremental keys).
+ *
+ * The shared position-preserving walk (`aggregateParagraphTokensForTableBlock`): a
+ * per-paragraph token embeds file-influenced values and its own printable separators, so a
+ * printable join lets a token value shift a boundary, and sorting or skipping empties lets
+ * two different paragraph-to-token ASSIGNMENTS over one byte-identical subtree concatenate
+ * to the same string — and the table's prepared-block memo then serves a break with stale
+ * drawing layout.
+ */
 export function drawingTokenForTableBlock(
   table: OoxmlNode,
   drawingTokenForParagraph: (paragraph: OoxmlNode) => string
 ): string {
-  const tokens: string[] = [];
-  const visit = (node: OoxmlNode): void => {
-    if (node.kind === 'paragraph') {
-      const token = drawingTokenForParagraph(node);
-      if (token) tokens.push(token);
-      return;
-    }
-    if ('children' in node) {
-      for (const child of node.children) visit(child);
-    }
-  };
-  visit(table);
-  return tokens.sort().join(';');
+  return aggregateParagraphTokensForTableBlock(table, drawingTokenForParagraph);
 }
 
 export { drawingProjectionLayoutToken, drawingResourceLayoutToken };
