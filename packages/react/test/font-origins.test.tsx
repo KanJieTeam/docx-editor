@@ -103,14 +103,19 @@ describe('useDocxSource: the eager path still holds the document', () => {
 
     function Probe() {
       fonts = useDocxSource(BYTES, {
-        fonts: [{ sources: [source('Calibri', 'first')] }, { sources: [source('Calibri', 'last')] }],
+        fonts: [
+          { sources: [source('Calibri', 'first')] },
+          { sources: [source('Calibri', 'last')] },
+        ],
       }).fonts;
       return null;
     }
     render(<Probe />);
     await flush();
 
-    expect((fonts as { sources: FontSource[] }).sources.map((entry) => entry.id)).toEqual(['first']);
+    expect((fonts as { sources: FontSource[] }).sources.map((entry) => entry.id)).toEqual([
+      'first',
+    ]);
   });
 });
 
@@ -227,9 +232,9 @@ describe('useFonts keeps every call shape that compiled before the mark existed'
     }
     render(<Probe />);
 
-    const merged = (await (compose as (r: FontResolutionRequest) => Promise<unknown>)(
-      REQUEST
-    )) as { sources: FontSource[] };
+    const merged = (await (compose as (r: FontResolutionRequest) => Promise<unknown>)(REQUEST)) as {
+      sources: FontSource[];
+    };
     expect(seen).toEqual([REQUEST]);
     expect(merged.sources.map((entry) => entry.id)).toEqual(['unmarked', 'fragment']);
   });

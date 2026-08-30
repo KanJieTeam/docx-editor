@@ -20,6 +20,10 @@ interface FragmentInput {
   readonly body: string;
   readonly styles?: string;
   readonly numbering?: string;
+  readonly footnotes?: string;
+  readonly endnotes?: string;
+  readonly footnotesRels?: string;
+  readonly endnotesRels?: string;
   /** Extra `<Relationship .../>` rows for word/_rels/document.xml.rels. */
   readonly docRels?: string;
   /** Media entries by zip name, e.g. `word/media/image1.png`. */
@@ -49,6 +53,25 @@ function fragment(input: FragmentInput): Uint8Array {
     );
     docRels += `<Relationship Id="rId9002" Type="${R}/numbering" Target="numbering.xml"/>`;
   }
+  for (const kind of ['footnotes', 'endnotes'] as const) {
+    const xml = input[kind];
+    if (xml === undefined) continue;
+    entries.set(
+      `word/${kind}.xml`,
+      strToU8(`<w:${kind} xmlns:w="${W}" xmlns:r="${R}">${xml}</w:${kind}>`)
+    );
+    overrides.push(
+      `<Override PartName="/word/${kind}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${kind}+xml"/>`
+    );
+    docRels += `<Relationship Id="rId-${kind}" Type="${R}/${kind}" Target="${kind}.xml"/>`;
+    const rels = input[`${kind}Rels`];
+    if (rels !== undefined) {
+      entries.set(
+        `word/_rels/${kind}.xml.rels`,
+        strToU8(`<Relationships xmlns="${REL}">${rels}</Relationships>`)
+      );
+    }
+  }
   for (const [name, bytes] of Object.entries(input.media ?? {})) entries.set(name, bytes);
 
   entries.set(
@@ -58,6 +81,12 @@ function fragment(input: FragmentInput): Uint8Array {
         '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
         '<Default Extension="xml" ContentType="application/xml"/>' +
         '<Default Extension="png" ContentType="image/png"/>' +
+        '<Default Extension="bmp" ContentType="image/bmp"/>' +
+        '<Default Extension="webp" ContentType="image/webp"/>' +
+        '<Default Extension="svg" ContentType="image/svg+xml"/>' +
+        '<Default Extension="tiff" ContentType="image/tiff"/>' +
+        '<Default Extension="emf" ContentType="image/x-emf"/>' +
+        '<Default Extension="wmf" ContentType="image/x-wmf"/>' +
         overrides.join('') +
         '</Types>'
     )
@@ -95,9 +124,11 @@ describe('interopHtmlFromFragment', () => {
     const html = interopHtmlFromFragment(
       fragment({
         body:
-          '<w:p><w:r><w:rPr>' +
-          '<w:rFonts w:ascii="Courier New"/><w:b/><w:i/>' +
-          '<w:color w:val="FF0000"/><w:sz w:val="28"/><w:u w:val="single"/>' +
+          '<w:p><w:pPr><w:bidi/></w:pPr><w:r><w:rPr>' +
+          '<w:rFonts w:eastAsia="微软雅黑"/><w:b/><w:i/>' +
+          '<w:color w:val="FF0000"/><w:spacing w:val="30"/><w:sz w:val="28"/>' +
+          '<w:u w:val="wave" w:color="00AAFF"/>' +
+          '<w:rtl/><w:lang w:val="ar-SA"/>' +
           '</w:rPr><w:t>styled</w:t></w:r></w:p>',
       })
     );
@@ -105,17 +136,59 @@ describe('interopHtmlFromFragment', () => {
     expect(html).toContain('font-style:italic');
     expect(html).toContain('color:#ff0000');
     expect(html).toContain('font-size:14pt');
-    expect(html).toContain("font-family:'Courier New'");
+    expect(html).toContain('font-family:&quot;微软雅黑&quot;');
     expect(html).toContain('text-decoration:underline');
+    expect(html).toContain('text-decoration-style:wavy');
+    expect(html).toContain('text-decoration-color:#00aaff');
+    expect(html).toContain('letter-spacing:1.5pt');
+    expect(html).toContain('<p dir="rtl"');
+    expect(html).toContain('lang="ar-SA" dir="rtl"');
     expect(html).toContain('>styled<');
+  });
+
+  test('an RTL run exports its complex-script font', () => {
+    const html = interopHtmlFromFragment(
+      fragment({
+        body:
+          '<w:p><w:r><w:rPr><w:rFonts w:ascii="Arial" w:cs="Amiri"/>' +
+          '<w:rtl/></w:rPr><w:t>مرحبا</w:t></w:r></w:p>',
+      })
+    );
+    expect(html).toContain('font-family:&quot;Amiri&quot;');
+    expect(html).not.toContain('font-family:Arial');
+  });
+
+  test('a complex-script font remains the last fallback for an LTR run', () => {
+    const html = interopHtmlFromFragment(
+      fragment({
+        body: '<w:p><w:r><w:rPr><w:rFonts w:cs="Amiri"/></w:rPr><w:t>text</w:t></w:r></w:p>',
+      })
+    );
+    expect(html).toContain('font-family:&quot;Amiri&quot;');
+  });
+
+  test('an RTL run prefers complex-script size, bold, and italic properties', () => {
+    const html = interopHtmlFromFragment(
+      fragment({
+        body:
+          '<w:p><w:r><w:rPr><w:rtl/><w:sz w:val="20"/><w:szCs w:val="30"/>' +
+          '<w:bCs/><w:iCs/></w:rPr><w:t>مرحبا</w:t></w:r></w:p>',
+      })
+    );
+    expect(html).toContain('font-size:15pt');
+    expect(html).toContain('font-weight:bold');
+    expect(html).toContain('font-style:italic');
   });
 
   test('a style chain reaching Heading2 emits an h2 with the cascaded CSS', () => {
     const html = interopHtmlFromFragment(
       fragment({
         styles:
+          '<w:style w:type="paragraph" w:styleId="Heading1">' +
+          '<w:pPr><w:outlineLvl w:val="0"/></w:pPr></w:style>' +
           '<w:style w:type="paragraph" w:styleId="Heading2">' +
-          '<w:name w:val="heading 2"/><w:pPr><w:spacing w:before="240"/><w:jc w:val="center"/></w:pPr>' +
+          '<w:basedOn w:val="Heading1"/><w:name w:val="heading 2"/>' +
+          '<w:pPr><w:outlineLvl w:val="1"/><w:spacing w:before="240"/><w:jc w:val="center"/></w:pPr>' +
           '</w:style>' +
           '<w:style w:type="paragraph" w:styleId="Fancy"><w:basedOn w:val="Heading2"/></w:style>',
         body: '<w:p><w:pPr><w:pStyle w:val="Fancy"/></w:pPr>' + '<w:r><w:t>Title</w:t></w:r></w:p>',
@@ -127,18 +200,45 @@ describe('interopHtmlFromFragment', () => {
     expect(html).toContain('text-align:center');
   });
 
+  test('Word built-in paragraph styles emit their interop classes', () => {
+    const html = interopHtmlFromFragment(
+      fragment({
+        styles:
+          '<w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>' +
+          '<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/></w:style>' +
+          '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/></w:style>' +
+          '<w:style w:type="paragraph" w:styleId="Caption"><w:name w:val="Caption"/></w:style>' +
+          '<w:style w:type="paragraph" w:styleId="Heading7"><w:name w:val="heading 7"/></w:style>',
+        body:
+          '<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:t>normal</w:t></w:r></w:p>' +
+          '<w:p><w:pPr><w:pStyle w:val="Title"/></w:pPr><w:r><w:t>title</w:t></w:r></w:p>' +
+          '<w:p><w:pPr><w:pStyle w:val="Caption"/></w:pPr><w:r><w:t>caption</w:t></w:r></w:p>' +
+          '<w:p><w:pPr><w:pStyle w:val="Heading7"/></w:pPr><w:r><w:t>deep</w:t></w:r></w:p>',
+      })
+    );
+    expect(html).toContain('<p class="MsoNormal"');
+    expect(html).toContain('<p class="MsoTitle"');
+    expect(html).toContain('<p class="MsoCaption"');
+    expect(html).toContain('<p class="MsoHeading7"');
+  });
+
   test('numbered and bulleted levels nest as ol/ul with list-style-type', () => {
     const item = (ilvl: number, text: string): string =>
-      `<w:p><w:pPr><w:numPr><w:ilvl w:val="${ilvl}"/><w:numId w:val="5"/></w:numPr></w:pPr>` +
+      `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr>` +
+      `<w:ilvl w:val="${ilvl}"/><w:numId w:val="5"/></w:numPr></w:pPr>` +
       `<w:r><w:t>${text}</w:t></w:r></w:p>`;
     const html = interopHtmlFromFragment(
       fragment({
+        styles:
+          '<w:style w:type="paragraph" w:styleId="ListParagraph">' +
+          '<w:name w:val="List Paragraph"/></w:style>',
         numbering:
           '<w:abstractNum w:abstractNumId="0">' +
-          '<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>' +
+          '<w:lvl w:ilvl="0"><w:start w:val="5"/><w:numFmt w:val="decimal"/></w:lvl>' +
           '<w:lvl w:ilvl="1"><w:numFmt w:val="bullet"/></w:lvl>' +
           '</w:abstractNum>' +
-          '<w:num w:numId="5"><w:abstractNumId w:val="0"/></w:num>',
+          '<w:num w:numId="5"><w:abstractNumId w:val="0"/>' +
+          '<w:lvlOverride w:ilvl="0"><w:startOverride w:val="3"/></w:lvlOverride></w:num>',
         body:
           item(0, 'one') +
           item(1, 'sub') +
@@ -146,7 +246,8 @@ describe('interopHtmlFromFragment', () => {
           '<w:p><w:r><w:t>after</w:t></w:r></w:p>',
       })
     );
-    expect(html).toContain('<ol style="list-style-type:decimal">');
+    expect(html).toContain('<ol start="3" style="list-style-type:decimal">');
+    expect(html).toContain('<li class="MsoListParagraph"');
     expect(count(html, '<li')).toBe(3);
     // The bulleted level nests inside the ordered list and closes before "two".
     const ulOpen = html.indexOf('<ul>');
@@ -160,6 +261,42 @@ describe('interopHtmlFromFragment', () => {
     expect(html).toContain('<p>after</p>');
   });
 
+  test('a list fragment starting below level zero opens one valid root list', () => {
+    const item = (text: string): string =>
+      '<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="5"/>' +
+      `</w:numPr></w:pPr><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const html = interopHtmlFromFragment(
+      fragment({
+        numbering:
+          '<w:abstractNum w:abstractNumId="0">' +
+          '<w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl>' +
+          '<w:lvl w:ilvl="1"><w:numFmt w:val="bullet"/></w:lvl>' +
+          '</w:abstractNum><w:num w:numId="5"><w:abstractNumId w:val="0"/></w:num>',
+        body: item('sub one') + item('sub two'),
+      })
+    );
+    expect(html).toBe('<ul><li>sub one</li><li>sub two</li></ul>');
+  });
+
+  test('a numbered heading keeps its semantic heading class', () => {
+    const html = interopHtmlFromFragment(
+      fragment({
+        styles:
+          '<w:style w:type="paragraph" w:styleId="Heading2">' +
+          '<w:name w:val="heading 2"/></w:style>',
+        numbering:
+          '<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0">' +
+          '<w:numFmt w:val="decimal"/></w:lvl></w:abstractNum>' +
+          '<w:num w:numId="5"><w:abstractNumId w:val="0"/></w:num>',
+        body:
+          '<w:p><w:pPr><w:pStyle w:val="Heading2"/><w:numPr>' +
+          '<w:ilvl w:val="0"/><w:numId w:val="5"/></w:numPr></w:pPr>' +
+          '<w:r><w:t>Numbered heading</w:t></w:r></w:p>',
+      })
+    );
+    expect(html).toContain('<li class="Heading2"');
+  });
+
   test('a table emits colspan, rowspan, shading, and swallows vMerge continuations', () => {
     const cell = (props: string, text: string): string =>
       `<w:tc><w:tcPr>${props}</w:tcPr><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:tc>`;
@@ -167,18 +304,27 @@ describe('interopHtmlFromFragment', () => {
       fragment({
         body:
           '<w:tbl>' +
-          `<w:tr>${cell('<w:gridSpan w:val="2"/>', 'head')}</w:tr>` +
+          '<w:tblPr><w:tblW w:w="4320" w:type="dxa"/><w:jc w:val="center"/>' +
+          '<w:tblBorders><w:bottom w:val="single" w:color="112233"/>' +
+          '<w:insideH w:val="dotted" w:color="445566"/></w:tblBorders></w:tblPr>' +
+          `<w:tr><w:trPr><w:trHeight w:val="360" w:hRule="exact"/></w:trPr>${cell('<w:gridSpan w:val="999"/>', 'head')}</w:tr>` +
           `<w:tr>${cell('<w:vMerge w:val="restart"/><w:shd w:val="clear" w:fill="DDEEFF"/>', 'merged')}${cell('<w:vAlign w:val="center"/>', 'b1')}</w:tr>` +
-          `<w:tr>${cell('<w:vMerge/>', '')}${cell('<w:tcW w:w="2400" w:type="dxa"/>', 'b2')}</w:tr>` +
+          `<w:tr>${cell('<w:vMerge/>', '')}${cell('<w:tcW w:w="2400" w:type="dxa"/><w:tcMar><w:left w:w="120" w:type="dxa"/></w:tcMar>', 'b2')}</w:tr>` +
           '</w:tbl>',
       })
     );
-    expect(html).toContain('<table style="border-collapse:collapse">');
-    expect(html).toContain('colspan="2"');
+    expect(html).toContain(
+      '<table style="border-collapse:collapse;width:216pt;margin-left:auto;margin-right:auto;'
+    );
+    expect(html).toContain('<tr style="height:18pt;mso-height-rule:exactly">');
+    expect(html).toContain('colspan="63"');
     expect(html).toContain('rowspan="2"');
+    // A missing w:sz defaults to the painter's 0.5pt hairline, not 1pt.
+    expect(html).toMatch(/rowspan="2" style="[^"]*border-bottom:0\.5pt solid #112233/);
     expect(html).toContain('background-color:#ddeeff');
     expect(html).toContain('vertical-align:middle');
     expect(html).toContain('width:120pt');
+    expect(html).toContain('padding-left:6pt');
     // The continuation cell is spanned, not emitted: 1 + 2 + 1 cells.
     expect(count(html, '<td')).toBe(4);
     expect(count(html, 'merged')).toBe(1);
@@ -196,10 +342,30 @@ describe('interopHtmlFromFragment', () => {
           '</w:tbl>',
       })
     );
-    expect(html).toContain('border-top:1pt solid #112233');
-    expect(html).toContain('border-left:1pt solid #000000');
-    expect(html).toContain('border-right:1pt solid #000000');
+    // Width-less borders take the painter's 0.5pt default.
+    expect(html).toContain('border-top:0.5pt solid #112233');
+    expect(html).toContain('border-left:0.5pt solid #000000');
+    expect(html).toContain('border-right:0.5pt solid #000000');
     expect(html).not.toContain('border-bottom');
+  });
+
+  test('table inside borders remain Word hints and interior cell edges', () => {
+    const cell = (text: string): string => `<w:tc><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:tc>`;
+    const html = interopHtmlFromFragment(
+      fragment({
+        body:
+          '<w:tbl><w:tblPr><w:tblBorders>' +
+          '<w:insideH w:val="dotted" w:sz="4" w:color="112233"/>' +
+          '<w:insideV w:val="dashed" w:sz="8" w:color="445566"/>' +
+          '</w:tblBorders></w:tblPr>' +
+          `<w:tr>${cell('a')}${cell('b')}</w:tr><w:tr>${cell('c')}${cell('d')}</w:tr>` +
+          '</w:tbl>',
+      })
+    );
+    expect(html).toContain('mso-border-insideh-alt:0.5pt dotted #112233');
+    expect(html).toContain('mso-border-insidev-alt:1pt dashed #445566');
+    expect(html).toContain('border-right:1pt dashed #445566');
+    expect(html).toContain('border-bottom:0.5pt dotted #112233');
   });
 
   test('hyperlinks sanitize their targets; a refused scheme keeps the text only', () => {
@@ -207,20 +373,26 @@ describe('interopHtmlFromFragment', () => {
       fragment({
         docRels:
           `<Relationship Id="rId5" Type="${R}/hyperlink" Target="https://example.com/x" TargetMode="External"/>` +
-          `<Relationship Id="rId6" Type="${R}/hyperlink" Target="javascript:alert(1)" TargetMode="External"/>`,
+          `<Relationship Id="rId6" Type="${R}/hyperlink" Target="javascript:alert(1)" TargetMode="External"/>` +
+          `<Relationship Id="rId7" Type="${R}/hyperlink" Target="#_Ref1"/>`,
         body:
           '<w:p>' +
+          '<w:bookmarkStart w:id="1" w:name="_Ref1"/>' +
           '<w:hyperlink r:id="rId5"><w:r><w:t>good</w:t></w:r></w:hyperlink>' +
           '<w:hyperlink r:id="rId6"><w:r><w:t>bad</w:t></w:r></w:hyperlink>' +
+          '<w:hyperlink r:id="rId7"><w:r><w:t>related</w:t></w:r></w:hyperlink>' +
           '<w:hyperlink w:anchor="_Ref1"><w:r><w:t>internal</w:t></w:r></w:hyperlink>' +
+          '<w:bookmarkEnd w:id="1"/>' +
           '</w:p>',
       })
     );
     expect(html).toContain('<a href="https://example.com/x">good</a>');
     expect(html).toContain('bad');
-    expect(html).toContain('internal');
+    expect(html).toContain('<a id="_Ref1"></a>');
+    expect(html).toContain('<a href="#_Ref1">internal</a>');
+    expect(html).toContain('<a href="#_Ref1">related</a>');
     expect(html).not.toContain('javascript:');
-    expect(count(html, '<a ')).toBe(1);
+    expect(count(html, '<a ')).toBe(4);
   });
 
   test('an in-budget image inlines as a data: URI with px dimensions', () => {
@@ -240,6 +412,59 @@ describe('interopHtmlFromFragment', () => {
     );
     expect(html).toContain('<img src="data:image/png;base64,aGVsbG8gd29ybGQh"');
     expect(html).toContain('width="100" height="50"');
+  });
+
+  test('WebP and BMP images inline with their declared MIME types', () => {
+    for (const [extension, mime] of [
+      ['webp', 'image/webp'],
+      ['bmp', 'image/bmp'],
+    ] as const) {
+      const mediaName = `word/media/image1.${extension}`;
+      const html = interopHtmlFromFragment(
+        fragment({
+          docRels: `<Relationship Id="rId7" Type="${R}/image" Target="media/image1.${extension}"/>`,
+          media: { [mediaName]: strToU8('hello world!') },
+          body:
+            '<w:p><w:r><w:drawing><wp:inline>' +
+            '<wp:extent cx="952500" cy="476250"/>' +
+            `<a:graphic><a:graphicData uri="${PIC}">` +
+            '<pic:pic><pic:blipFill><a:blip r:embed="rId7"/></pic:blipFill></pic:pic>' +
+            '</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>',
+        })
+      );
+      expect(html).toContain(`<img src="data:${mime};base64,aGVsbG8gd29ybGQh"`);
+    }
+  });
+
+  test('SVG and preserved images remain byte-faithful data URIs', () => {
+    const images = [
+      {
+        extension: 'svg',
+        mime: 'image/svg+xml',
+        bytes: strToU8('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'),
+      },
+      {
+        extension: 'emf',
+        mime: 'image/x-emf',
+        bytes: Uint8Array.from({ length: 44 }, (_, index) => (index === 0 ? 1 : 0)),
+      },
+    ] as const;
+    for (const image of images) {
+      const mediaName = `word/media/image1.${image.extension}`;
+      const html = interopHtmlFromFragment(
+        fragment({
+          docRels: `<Relationship Id="rId7" Type="${R}/image" Target="media/image1.${image.extension}"/>`,
+          media: { [mediaName]: image.bytes },
+          body:
+            '<w:p><w:r><w:drawing><wp:inline>' +
+            '<wp:extent cx="952500" cy="476250"/>' +
+            `<a:graphic><a:graphicData uri="${PIC}">` +
+            '<pic:pic><pic:blipFill><a:blip r:embed="rId7"/></pic:blipFill></pic:pic>' +
+            '</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>',
+        })
+      );
+      expect(html).toContain(`<img src="data:${image.mime};base64,`);
+    }
   });
 
   test('an image over either budget is omitted', () => {
@@ -271,8 +496,7 @@ describe('interopHtmlFromFragment', () => {
           '<w:fldSimple w:instr=" PAGE "><w:r><w:t>7</w:t></w:r></w:fldSimple>' +
           '<w:r><w:fldChar w:fldCharType="begin"/></w:r>' +
           '<w:r><w:instrText> DATE </w:instrText></w:r>' +
-          '<w:r><w:fldChar w:fldCharType="separate"/></w:r>' +
-          '<w:r><w:t>2026</w:t></w:r>' +
+          '<w:r><w:fldChar w:fldCharType="separate"/><w:t>2026</w:t></w:r>' +
           '<w:r><w:fldChar w:fldCharType="end"/></w:r>' +
           '</w:p>',
       })
@@ -285,14 +509,96 @@ describe('interopHtmlFromFragment', () => {
     expect(html).not.toContain('DATE');
   });
 
-  test('tabs and breaks map to pre-space spans and br', () => {
+  test('paragraph flow controls, tabs, shading, and borders become Word-compatible CSS', () => {
     const html = interopHtmlFromFragment(
       fragment({
-        body: '<w:p><w:r><w:t>a</w:t><w:tab/><w:t>b</w:t><w:br/><w:t>c</w:t></w:r></w:p>',
+        body:
+          '<w:p><w:pPr>' +
+          '<w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9026"/></w:tabs>' +
+          '<w:pageBreakBefore/><w:keepNext/><w:keepLines/><w:widowControl/>' +
+          '<w:spacing w:line="360" w:lineRule="exact"/>' +
+          '<w:shd w:fill="DDEEFF"/>' +
+          '<w:pBdr><w:bottom w:val="double" w:sz="12" w:color="112233"/></w:pBdr>' +
+          '</w:pPr><w:r><w:t>flow</w:t></w:r></w:p>',
       })
     );
-    expect(html).toContain('<span style="white-space:pre">\t</span>');
+    expect(html).toContain('tab-stops:right dotted 451.3pt');
+    expect(html).toContain('page-break-before:always');
+    expect(html).toContain('page-break-after:avoid');
+    expect(html).toContain('page-break-inside:avoid');
+    expect(html).toContain('widows:2');
+    expect(html).toContain('orphans:2');
+    expect(html).toContain('line-height:18pt');
+    expect(html).toContain('mso-line-height-rule:exactly');
+    expect(html).toContain('background-color:#ddeeff');
+    expect(html).toContain('border-bottom:1.5pt double #112233');
+    expect(html).toContain('mso-border-bottom-alt:1.5pt double #112233');
+  });
+
+  test('tabs and typed page breaks map to Word-compatible HTML', () => {
+    const html = interopHtmlFromFragment(
+      fragment({
+        footnotes:
+          '<w:footnote w:id="3"><w:p><w:r><w:footnoteRef/><w:t>Foot body.</w:t></w:r>' +
+          '<w:hyperlink r:id="rIdNote"><w:r><w:t>source</w:t></w:r></w:hyperlink>' +
+          '</w:p></w:footnote>',
+        footnotesRels:
+          `<Relationship Id="rIdNote" Type="${R}/hyperlink" ` +
+          'Target="https://notes.example/source" TargetMode="External"/>',
+        endnotes:
+          '<w:endnote w:id="2"><w:p><w:r><w:endnoteRef/>' +
+          '<w:t>End body.</w:t></w:r></w:p></w:endnote>',
+        body:
+          '<w:p><w:r><w:t>a</w:t><w:tab/><w:t>b</w:t>' +
+          '<w:ptab w:alignment="right" w:relativeTo="margin" w:leader="dot"/>' +
+          '<w:ptab w:alignment="center" w:relativeTo="indent" w:leader="heavy"/>' +
+          '<w:footnoteReference w:id="3"/><w:endnoteReference w:id="2"/>' +
+          '<w:br w:type="page"/><w:t>c</w:t><w:br/><w:t>d</w:t></w:r></w:p>',
+      })
+    );
+    expect(html).toContain('<span style="white-space:pre;mso-tab-count:1">\t</span>');
+    expect(html).toContain('<w:PTab Alignment="RIGHT" RelativeTo="MARGIN" Leader="DOT"></w:PTab>');
+    expect(html).toContain(
+      '<w:PTab Alignment="CENTER" RelativeTo="INDENT" Leader="HEAVY"></w:PTab>'
+    );
+    expect(html).toContain('<br style="page-break-before:always">');
     expect(html).toContain('<br>');
+    expect(html).toContain('<span class="MsoFootnoteReference">');
+    expect(html).toContain('<span class="MsoEndnoteReference">');
+    // The visible text shows the display ordinal, not the raw w:id; the id stays in
+    // the machine-readable attributes.
+    expect(html).toContain('mso-footnote-id:ftn3');
+    expect(html).toContain('mso-endnote-id:edn2');
+    expect(html).toContain('[1]');
+    expect(html).not.toContain('[3]');
+    expect(html).toContain('mso-element:footnote-list');
+    expect(html).toContain('mso-element:endnote-list');
+    expect(html).toContain('Foot body.');
+    expect(html).toContain('End body.');
+    expect(html).toContain('<a href="https://notes.example/source">source</a>');
+  });
+
+  test('hidden note citations in conditional table cells do not ship note bodies', () => {
+    const html = interopHtmlFromFragment(
+      fragment({
+        styles:
+          '<w:style w:type="table" w:styleId="HiddenFirst">' +
+          '<w:tblStylePr w:type="firstRow"><w:rPr><w:vanish/></w:rPr></w:tblStylePr>' +
+          '</w:style>',
+        footnotes:
+          '<w:footnote w:id="1"><w:p><w:r><w:footnoteRef/><w:t>Primary body.</w:t></w:r></w:p>' +
+          '<w:tbl><w:tblPr><w:tblStyle w:val="HiddenFirst"/>' +
+          '<w:tblLook w:firstRow="1"/></w:tblPr><w:tr><w:tc><w:p><w:r>' +
+          '<w:footnoteReference w:id="2"/></w:r></w:p></w:tc></w:tr></w:tbl>' +
+          '</w:footnote>' +
+          '<w:footnote w:id="2"><w:p><w:r><w:footnoteRef/>' +
+          '<w:t>Hidden target body.</w:t></w:r></w:p></w:footnote>',
+        body: '<w:p><w:r><w:t>Body</w:t><w:footnoteReference w:id="1"/></w:r></w:p>',
+      })
+    );
+    expect(html).toContain('Primary body.');
+    expect(html).not.toContain('Hidden target body.');
+    expect(html).not.toContain('mso-footnote-id:ftn2');
   });
 
   test('every text value is escaped, never markup', () => {
@@ -321,7 +627,7 @@ describe('interopHtmlFromFragment', () => {
       })
     );
     // The unstyled run resolves through docDefaults and the default style.
-    expect(html).toContain('font-family:Arial');
+    expect(html).toContain('font-family:&quot;Arial&quot;');
     expect(html).toContain('font-size:11pt');
     expect(html).toContain('color:#222222');
     // Direct formatting wins over both.
@@ -340,7 +646,10 @@ describe('interopHtmlFromFragment', () => {
           '</w:rPr><w:t>note</w:t></w:r></w:p>',
       })
     );
-    expect(html).toContain('background-color:yellow');
+    // The painter's own hex for the yellow highlighter, plus the machine-readable
+    // mso-highlight name the read lane reconstructs w:highlight from.
+    expect(html).toContain('background-color:#ffff00');
+    expect(html).toContain('mso-highlight:yellow');
     expect(html).not.toContain('background-color:#00ff00');
     expect(html).not.toContain('font-weight:bold');
     expect(html).toContain('<sup>note</sup>');

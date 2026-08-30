@@ -1,46 +1,72 @@
-// External `text/html` projected into a WordprocessingML clipboard fragment package
-// (rich-clipboard-fidelity tasks 5.1-5.4, design D2).
-//
-// A pasted payload is attacker-controlled, so the projection reuses the bounded
-// file-open trust boundary instead of trusting the markup: the HTML is size-capped
-// BEFORE parse, parsed with `DOMParser` into an INERT document that is never attached
-// to the live document, and walked under node-count and depth caps. This module parses;
-// it is not an HTML sink — no `innerHTML`/`outerHTML`/`insertAdjacentHTML` anywhere,
-// nothing executes (scripts, styles and event handlers are simply never projected),
-// and nothing here fetches: hrefs pass `sanitizeHref`, images are accepted from
-// bounded `data:` URIs only, and every external image source is dropped.
-//
-// The output is the SAME shape the internal copy lane produces — a minimal OPC zip
-// readable by `readOoxmlPackage` — so the paste router feeds internal fragments and
-// external HTML through one lane (`readOoxmlPackage` → merge → insertFragment).
-
-import { sanitizeHref, escapeXml, escapeXmlAttribute } from '../store/package/sinks.ts';
+// Project attacker-controlled HTML into a bounded WordprocessingML fragment.
+// HTML is size-capped before `DOMParser` creates an inert, detached document.
+// The allowlist walker has fixed node and depth limits.
+// It never attaches parsed nodes, executes markup, or fetches remote resources.
+// Hyperlinks pass `sanitizeHref`, and images accept bounded `data:` URIs only.
+// XML emission escapes all file-derived text and attributes.
+import { sanitizeHref, escapeXmlAttribute } from '../store/package/sinks.ts';
+import { projectHtmlImage } from './clipboard-html-images.ts';
 import {
-  sniffImageMime,
-  validateRasterHeader,
-  type SupportedImageMime,
-} from '../store/package/image-resources.ts';
-import { writeZip, strToU8 } from '../store/package/zip.ts';
-import {
-  numberingPartXml,
+  semanticHtmlListKind,
+  semanticHtmlListStart,
+  wordListDefinitionsFromStyleText,
   type HtmlListAllocation as ListAllocation,
+  type WordListLevelDefinition,
 } from './clipboard-html-numbering.ts';
+import { clipboardBookmarkName, isClipboardHyperlink } from './clipboard-html-links.ts';
+import { createGestureMemo } from './clipboard-html-memo.ts';
+import { reconcileUnreachableNotes } from './clipboard-html-note-reconcile.ts';
+import { allocateList, msoListNumPr } from './clipboard-html-list-alloc.ts';
 import {
+  writeProjectedHtmlPackage,
+  type HtmlFragmentRel as RelEntry,
+} from './clipboard-html-package.ts';
+import {
+  clipboardNoteDefinitions,
+  clipboardNoteReference,
+  collectReferencedNoteIds,
+  isClipboardNoteList,
+  stripNoteMarks,
+  type ClipboardNoteKind,
+} from './clipboard-html-notes.ts';
+import {
+  HEADING_SZ,
+  appendPageBreak,
+  isFurnitureOnly,
+  paragraphXml,
+  rPrXml,
+  textRunXml,
+} from './clipboard-html-run-xml.ts';
+import {
+  applyInlineTag,
+  applyElementRunProps,
   applyParaCss,
   applyRunCss,
   applyWordParagraphAlignment,
-  imageDimensionPx,
   isElement,
+  isMsoListIgnoreMarker,
   isWordClipboardHtml,
-  parseCssColor,
   parseInlineStyle,
   tagOf,
   wordClassAlignmentsFromDocument,
   wordParagraphStyleId,
+  wordStyleTextFromDocument,
   type HtmlParagraphAlign,
   type HtmlParaProps,
   type HtmlRunProps,
 } from './clipboard-html-styles.ts';
+import { projectHtmlTable } from './clipboard-html-table-project.ts';
+import { htmlPositionalTabXml, htmlTabRunContents } from './clipboard-html-tabs.ts';
+import {
+  CONTAINER_TAGS,
+  IGNORED_TAGS,
+  PARAGRAPH_TAGS,
+  domDepthOf,
+  hasBlockChild,
+  isWordPageBreakBlock,
+  isWordPageBreakSpacer,
+  wordBlockSdtNodes,
+} from './clipboard-html-word-structure.ts';
 
 export interface HtmlProjectionLimits {
   /** UTF-8 size cap applied BEFORE parse. Default 4 MiB. */
@@ -62,6 +88,9 @@ export type HtmlProjectionResult =
       readonly lastMarkCovered: boolean;
       /** How many `data:` images the projection accepted into the fragment. */
       readonly imageCount: number;
+      /** True when the node budget dropped content (body tail or starved note
+       *  bodies), so callers can prefer a lossier lane over silent loss. */
+      readonly truncated: boolean;
     }
   | { readonly ok: false; readonly reason: 'too-large' | 'no-content' | 'parse-unavailable' };
 
@@ -70,63 +99,28 @@ const DEFAULT_MAX_NODES = 100_000;
 const DEFAULT_MAX_DEPTH = 64;
 const DEFAULT_MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
-const WML_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
-const WP_NS = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
-const A_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main';
-const PIC_NS = 'http://schemas.openxmlformats.org/drawingml/2006/picture';
-const RELS_XMLNS = 'http://schemas.openxmlformats.org/package/2006/relationships';
-const CT_XMLNS = 'http://schemas.openxmlformats.org/package/2006/content-types';
-
-const DOCUMENT_CT =
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml';
-const NUMBERING_CT = 'application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml';
-const RELS_CT = 'application/vnd.openxmlformats-package.relationships+xml';
-
-const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
-
-/** Whole elements that never contribute anything to the projection. */
-const IGNORED_TAGS = new Set(
-  (
-    'script style head template iframe object embed noscript svg math ' +
-    'meta link title base select textarea'
-  ).split(' ')
-);
-
-/** Heading direct formatting: bold plus these sizes in half-points (h1=32pt … h6=14pt). */
-const HEADING_SZ: Record<string, number> = { h1: 64, h2: 52, h3: 44, h4: 36, h5: 32, h6: 28 };
-
-const PARAGRAPH_TAGS = new Set('p div h1 h2 h3 h4 h5 h6 li blockquote pre'.split(' '));
-
-/** Structural containers whose children flow through transparently. */
-const CONTAINER_TAGS = new Set(
-  'thead tbody tfoot tr section article main header footer aside nav figure form body html'.split(
-    ' '
-  )
-);
 
 type RunProps = HtmlRunProps;
 type ParaProps = HtmlParaProps;
 
 type ListState = { readonly numId: string; readonly level: number };
 
-type RelEntry = {
-  readonly id: string;
-  readonly type: string;
-  readonly target: string;
-  readonly external: boolean;
-};
-
-interface FlowContext {
+export interface FlowContext {
   readonly run: RunProps;
   readonly para: ParaProps;
   readonly paragraphMarkCovered: boolean;
   readonly pre: boolean;
   readonly list: ListState | null;
+  /** Set while projecting a note definition body: the note the blocks belong to. */
+  readonly noteBody?: { readonly kind: ClipboardNoteKind; readonly id: number };
+  readonly rels?: RelEntry[];
 }
 
-interface Projection {
+export interface Projection {
   nodesLeft: number;
+  /** Set when a walk stopped with work remaining because the budget ran out. */
+  truncated: boolean;
   readonly maxDepth: number;
   readonly maxImageBytes: number;
   readonly wordHtml: boolean;
@@ -134,224 +128,51 @@ interface Projection {
   readonly rels: RelEntry[];
   readonly media: Map<string, Uint8Array>;
   readonly mediaExtensions: Map<string, string>;
+  /** Media part per `src`, so a repeated image decodes and ships exactly once. */
+  readonly mediaBySrc: Map<string, string>;
   readonly lists: Map<string, ListAllocation>;
+  /** Secondary index over `lists`, so nested lists resolve without a linear scan. */
+  readonly listsByNumId: Map<string, ListAllocation>;
   semanticListCount: number;
   imageCount: number;
   docPrId: number;
+  nextBookmarkId: number;
   readonly classAlignments: ReadonlyMap<string, HtmlParagraphAlign>;
-}
-
-function clamp(value: number, low: number, high: number): number {
-  return Math.min(high, Math.max(low, value));
-}
-
-// --- XML emission
-
-/** Drop code units XML 1.0 forbids in run text; mirrors the store's `isValidXmlText`. */
-function xmlSafeText(text: string): string {
-  let out = '';
-  for (let i = 0; i < text.length; i += 1) {
-    const unit = text.charCodeAt(i);
-    if (unit !== 0x09 && (unit < 0x20 || unit === 0xfffe || unit === 0xffff)) continue;
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      const next = text.charCodeAt(i + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        out += text[i]! + text[i + 1]!;
-        i += 1;
-      }
-      continue;
-    }
-    if (unit >= 0xdc00 && unit <= 0xdfff) continue;
-    out += text[i]!;
-  }
-  return out;
-}
-
-/** `w:rPr`, children in CT_RPr sequence order. */
-function rPrXml(props: RunProps): string {
-  let inner = '';
-  if (props.font !== undefined) {
-    const face = escapeXmlAttribute(xmlSafeText(props.font));
-    inner += `<w:rFonts w:ascii="${face}" w:hAnsi="${face}"/>`;
-  }
-  if (props.bold) inner += '<w:b/>';
-  if (props.italic) inner += '<w:i/>';
-  if (props.strike) inner += '<w:strike/>';
-  if (props.color !== undefined) inner += `<w:color w:val="${props.color}"/>`;
-  if (props.szHalfPoints !== undefined) inner += `<w:sz w:val="${props.szHalfPoints}"/>`;
-  if (props.highlight !== undefined) {
-    inner += `<w:highlight w:val="${escapeXmlAttribute(props.highlight)}"/>`;
-  }
-  if (props.underline) inner += '<w:u w:val="single"/>';
-  if (props.shdFill !== undefined) {
-    inner += `<w:shd w:val="clear" w:color="auto" w:fill="${props.shdFill}"/>`;
-  }
-  if (props.vertAlign !== undefined) inner += `<w:vertAlign w:val="${props.vertAlign}"/>`;
-  return inner.length > 0 ? `<w:rPr>${inner}</w:rPr>` : '';
-}
-
-function textRunXml(text: string, props: RunProps): string {
-  return `<w:r>${rPrXml(props)}<w:t xml:space="preserve">${escapeXml(xmlSafeText(text))}</w:t></w:r>`;
-}
-
-/** `w:pPr`, children in CT_PPr sequence order: numPr, spacing, ind, jc. */
-function pPrXml(para: ParaProps): string {
-  let inner = '';
-  if (para.styleId !== undefined) {
-    inner += `<w:pStyle w:val="${escapeXmlAttribute(para.styleId)}"/>`;
-  }
-  if (para.numPr) {
-    inner +=
-      `<w:numPr><w:ilvl w:val="${para.numPr.ilvl}"/>` +
-      `<w:numId w:val="${escapeXmlAttribute(para.numPr.numId)}"/></w:numPr>`;
-  }
-  if (para.lineTwentieths !== undefined) {
-    inner += `<w:spacing w:line="${para.lineTwentieths}" w:lineRule="auto"/>`;
-  }
-  const first = para.firstLineTwips;
-  if (para.indLeftTwips !== undefined || first !== undefined) {
-    let ind = '<w:ind';
-    if (para.indLeftTwips !== undefined) ind += ` w:left="${para.indLeftTwips}"`;
-    if (first !== undefined) {
-      ind += first >= 0 ? ` w:firstLine="${first}"` : ` w:hanging="${-first}"`;
-    }
-    inner += `${ind}/>`;
-  }
-  if (para.jc !== undefined) inner += `<w:jc w:val="${para.jc}"/>`;
-  return inner.length > 0 ? `<w:pPr>${inner}</w:pPr>` : '';
-}
-
-function paragraphXml(para: ParaProps, runs: readonly string[]): string {
-  return `<w:p>${pPrXml(para)}${runs.join('')}</w:p>`;
-}
-
-// --- Images: bounded base64 `data:` URIs only, never a fetch
-
-const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-const BASE64_LOOKUP: Int16Array = (() => {
-  const table = new Int16Array(128).fill(-1);
-  for (let i = 0; i < BASE64_ALPHABET.length; i += 1) {
-    table[BASE64_ALPHABET.charCodeAt(i)] = i;
-  }
-  return table;
-})();
-
-/** Strict bounded base64 decode: the size cap applies BEFORE any allocation. */
-function decodeBase64(data: string, maxBytes: number): Uint8Array | null {
-  if (data.length === 0 || data.length % 4 !== 0) return null;
-  const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0;
-  const byteLength = (data.length / 4) * 3 - padding;
-  if (byteLength <= 0 || byteLength > maxBytes) return null;
-  const out = new Uint8Array(byteLength);
-  let at = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    let chunk = 0;
-    let bits = 0;
-    for (let j = 0; j < 4; j += 1) {
-      const code = data.charCodeAt(i + j);
-      if (code === 0x3d) {
-        // `=` only in the final positions.
-        if (i + j < data.length - padding) return null;
-        continue;
-      }
-      const value = code < 128 ? BASE64_LOOKUP[code]! : -1;
-      if (value < 0) return null;
-      chunk = (chunk << 6) | value;
-      bits += 6;
-    }
-    chunk <<= 24 - bits;
-    if (bits >= 12) out[at++] = (chunk >>> 16) & 0xff;
-    if (bits >= 18) out[at++] = (chunk >>> 8) & 0xff;
-    if (bits >= 24) out[at++] = chunk & 0xff;
-  }
-  return at === byteLength ? out : null;
-}
-
-const DATA_IMAGE_RE = /^data:image\/(png|jpeg|jpg|gif);base64,([A-Za-z0-9+/=]+)$/;
-
-/** Project a `data:` image into a media part + rel + inline `w:drawing` run. */
-function projectImage(element: Element, runs: string[], p: Projection): void {
-  const src = element.getAttribute('src');
-  if (src === null || src.length > p.maxImageBytes * 2) return;
-  const match = DATA_IMAGE_RE.exec(src);
-  if (!match) return; // External/blob/http sources drop with no fetch.
-  const declared: SupportedImageMime =
-    match[1] === 'png' ? 'image/png' : match[1] === 'gif' ? 'image/gif' : 'image/jpeg';
-  const bytes = decodeBase64(match[2]!, p.maxImageBytes);
-  if (bytes === null) return;
-  if (sniffImageMime(bytes) !== declared) return; // Magic bytes must match the claim.
-  const header = validateRasterHeader(bytes, declared);
-
-  const style = parseInlineStyle(element);
-  let widthPx = imageDimensionPx(element, style, 'width', p.wordHtml);
-  let heightPx = imageDimensionPx(element, style, 'height', p.wordHtml);
-  if (widthPx === null && heightPx === null && header) {
-    widthPx = (header.pixelWidth * 96) / (header.dpiX ?? 96);
-    heightPx = (header.pixelHeight * 96) / (header.dpiY ?? 96);
-  } else if (widthPx !== null && heightPx === null) {
-    heightPx = header ? (widthPx * header.pixelHeight) / header.pixelWidth : (widthPx * 2) / 3;
-  } else if (widthPx === null && heightPx !== null) {
-    widthPx = header ? (heightPx * header.pixelWidth) / header.pixelHeight : (heightPx * 3) / 2;
-  }
-  // Unknown extent falls back to 300x200pt.
-  const cx = widthPx === null ? 3_810_000 : clamp(Math.round(widthPx * 9525), 9525, 30_000_000);
-  const cy = heightPx === null ? 2_540_000 : clamp(Math.round(heightPx * 9525), 9525, 30_000_000);
-
-  const extension = declared === 'image/png' ? 'png' : declared === 'image/gif' ? 'gif' : 'jpeg';
-  p.imageCount += 1;
-  p.media.set(`word/media/image${p.imageCount}.${extension}`, bytes);
-  if (!p.mediaExtensions.has(extension)) p.mediaExtensions.set(extension, declared);
-  const relId = allocateRel(p, `${R_NS}/image`, `media/image${p.imageCount}.${extension}`, false);
-  p.docPrId += 1;
-  runs.push(
-    '<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">' +
-      `<wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${p.docPrId}" name=""/>` +
-      `<wp:cNvGraphicFramePr/><a:graphic><a:graphicData uri="${PIC_NS}"><pic:pic>` +
-      '<pic:nvPicPr><pic:cNvPr id="0" name="" descr=""/><pic:cNvPicPr/></pic:nvPicPr>' +
-      `<pic:blipFill><a:blip r:embed="${relId}"/>` +
-      '<a:srcRect/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>' +
-      `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>` +
-      '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>' +
-      '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>'
-  );
+  /** Word's structured `@list lN:levelM` head rules, keyed `l<N>:level<M>`. */
+  readonly listDefinitions: ReadonlyMap<string, WordListLevelDefinition>;
+  readonly notes: Record<ClipboardNoteKind, Map<number, readonly string[]>>;
+  readonly noteRels: Record<ClipboardNoteKind, RelEntry[]>;
+  /** Ids with a PROJECTED definition — the only ids a live note reference may carry. */
+  readonly definedNotes: Record<ClipboardNoteKind, ReadonlySet<number>>;
+  /** Ids the BODY emitted a live reference for — the reachability seeds. */
+  readonly bodyNoteRefs: Record<ClipboardNoteKind, Set<number>>;
+  /** Cross-note reference edges, keyed by the CITING note (`kind:id`). A claimed
+   *  note unreachable from the body through these edges is reconciled back into
+   *  visible body text after the walk. */
+  readonly noteNoteRefs: Map<string, Array<{ kind: ClipboardNoteKind; id: number }>>;
+  /** Emitted mark's visible text (as a run), keyed `kind:id` — the strip fallback
+   *  when a claimed note is later dropped or moved, so '[1]' stays visible. */
+  readonly noteMarkFallbacks: Map<string, string>;
+  /** The exact definition elements the notes pass consumed; only these skip the body
+   *  walk, so a duplicate-id or unreferenced definition stays lossless in the body. */
+  readonly definedNoteElements: ReadonlySet<Element>;
 }
 
 // --- Allocation
 
-function allocateRel(p: Projection, type: string, target: string, external: boolean): string {
-  const id = `rId${p.rels.length + 1}`;
-  p.rels.push({ id, type, target, external });
+function allocateRel(
+  p: Projection,
+  type: string,
+  target: string,
+  external: boolean,
+  rels = p.rels
+): string {
+  const id = `rId${rels.length + 1}`;
+  rels.push({ id, type, target, external });
   return id;
 }
 
-function allocateList(p: Projection, key: string, kind: 'ordered' | 'bullet'): string {
-  const existing = p.lists.get(key);
-  if (existing) return existing.numId;
-  const numId = String(1001 + p.lists.size);
-  p.lists.set(key, { numId, kind });
-  return numId;
-}
-
 // --- Walk
-
-/** True for the literal marker span Word emits beside `mso-list` paragraphs. */
-function isMsoListIgnoreMarker(style: ReadonlyMap<string, string>): boolean {
-  const value = style.get('mso-list');
-  return value !== undefined && value.toLowerCase().includes('ignore');
-}
-
-function applyInlineTag(base: RunProps, tag: string): RunProps {
-  if (tag === 'b' || tag === 'strong') return { ...base, bold: true };
-  if (tag === 'i' || tag === 'em') return { ...base, italic: true };
-  if (tag === 'u' || tag === 'ins') return { ...base, underline: true };
-  if (tag === 's' || tag === 'strike' || tag === 'del') return { ...base, strike: true };
-  if (tag === 'sub') return { ...base, vertAlign: 'subscript' };
-  if (tag === 'sup') return { ...base, vertAlign: 'superscript' };
-  if (tag === 'code' || tag === 'tt' || tag === 'kbd' || tag === 'samp') {
-    return { ...base, font: 'Courier New' };
-  }
-  return base;
-}
 
 function collectInline(
   node: Node,
@@ -360,21 +181,40 @@ function collectInline(
   runs: string[],
   p: Projection
 ): void {
-  if (p.nodesLeft <= 0 || depth > p.maxDepth) return;
+  if (p.nodesLeft <= 0) {
+    p.truncated = true;
+    return;
+  }
+  if (depth > p.maxDepth) return;
   p.nodesLeft -= 1;
   if (node.nodeType === 3 /* TEXT_NODE */) {
     const raw = node.nodeValue ?? '';
     if (ctx.pre) {
       const parts = raw.replace(/\r\n?/g, '\n').split('\n');
-      parts.forEach((part, index) => {
-        if (index > 0) runs.push(`<w:r>${rPrXml(ctx.run)}<w:br/></w:r>`);
+      for (let index = 0; index < parts.length; index += 1) {
+        // Every line past the first charges the walk budget: one text node full
+        // of newlines must not amplify one charged unit into unbounded output.
+        if (index > 0) {
+          p.nodesLeft -= 1;
+          if (p.nodesLeft <= 0) {
+            p.truncated = true;
+            return;
+          }
+          runs.push(`<w:r>${rPrXml(ctx.run)}<w:br/></w:r>`);
+        }
+        const part = parts[index]!;
         if (part.length > 0) runs.push(textRunXml(part, ctx.run));
-      });
+      }
       return;
     }
-    const collapsed = raw.replace(/\s+/g, ' ');
+    // Collapse ASCII whitespace only: an NBSP is real content Word preserves, and
+    // JS `\s` would fold it into a plain breakable space.
+    const collapsed = raw.replace(/[ \t\r\n\f\v]+/g, ' ');
     if (collapsed.length === 0) return;
-    if (collapsed === ' ' && runs.length === 0) return; // Whitespace between blocks.
+    // Whitespace between blocks: bookmark furniture is not visible content, so a
+    // standalone anchor must not turn the gap into a space paragraph — but a
+    // bookmark WRAPPING real content stays visible and keeps the word gap.
+    if (collapsed === ' ' && isFurnitureOnly(runs)) return;
     runs.push(textRunXml(collapsed, ctx.run));
     return;
   }
@@ -382,34 +222,148 @@ function collectInline(
   const tag = tagOf(node);
   if (IGNORED_TAGS.has(tag)) return;
   const style = parseInlineStyle(node);
-  if (isMsoListIgnoreMarker(style)) return; // Word's literal list marker never becomes text.
+  // Word's literal list marker never becomes text — but ONLY when the paragraph
+  // projected `w:numPr` to replace it; otherwise the visible marker stays.
+  if (isMsoListIgnoreMarker(node) && ctx.para.numPr !== undefined) return;
+  const msoElement = style.get('mso-element')?.trim().toLowerCase();
+  if (
+    msoElement === 'comment-reference' ||
+    style.get('mso-special-character')?.trim().toLowerCase() === 'comment' ||
+    node.classList.contains('msocomanchor')
+  ) {
+    return;
+  }
+  // A note definition the notes pass consumed projects only there; landing it here
+  // would duplicate the note text into the body. Unconsumed definitions descend
+  // normally, so their text stays lossless.
+  if (p.definedNoteElements.has(node)) return;
+  if (tag === 'w:ptab') {
+    const tab = htmlPositionalTabXml(node);
+    if (tab.length > 0) runs.push(`<w:r>${rPrXml(ctx.run)}${tab}</w:r>`);
+    return;
+  }
+  const tabContent = htmlTabRunContents(style.get('mso-tab-count'));
+  if (tabContent.length > 0) {
+    // Every synthesized tab past the first charges the walk budget: the repeat
+    // count is clipboard-supplied, and one charged span must not amplify into
+    // 64x output across a span flood.
+    p.nodesLeft -= tabContent.split('<w:tab/>').length - 2;
+    if (p.nodesLeft <= 0) {
+      p.truncated = true;
+      return;
+    }
+    // The tab run carries the SPAN's own formatting (an underlined leader keeps its
+    // underline), not just the parent context's.
+    const tabRun = applyRunCss(applyInlineTag(ctx.run, tag), style);
+    runs.push(`<w:r>${rPrXml(tabRun)}${tabContent}</w:r>`);
+    // Word's tab spans hold only spacer whitespace; an element with real content —
+    // text OR element children like an image — keeps it after the tabs.
+    if ((node.textContent ?? '').trim().length === 0 && node.children.length === 0) return;
+  }
   if (tag === 'br') {
-    runs.push(`<w:r>${rPrXml(ctx.run)}<w:br/></w:r>`);
+    const pageBreak =
+      style.get('page-break-before')?.trim().toLowerCase() === 'always' ||
+      style.get('break-before')?.trim().toLowerCase() === 'page';
+    runs.push(`<w:r>${rPrXml(ctx.run)}${pageBreak ? '<w:br w:type="page"/>' : '<w:br/>'}</w:r>`);
     return;
   }
   if (tag === 'img') {
-    projectImage(node, runs, p);
+    projectHtmlImage(node, runs, p, (target) =>
+      allocateRel(p, `${R_NS}/image`, target, false, ctx.rels ?? p.rels)
+    );
     return;
   }
+  let taggedRun = applyInlineTag(ctx.run, tag);
+  const linkHref = tag === 'a' ? node.getAttribute('href') : null;
+  const noteReference = tag === 'a' ? clipboardNoteReference(style) : null;
+  if (noteReference === null && isClipboardHyperlink(linkHref)) {
+    // The Hyperlink CHARACTER STYLE, not frozen direct formatting: the host's
+    // theme and style definitions then control the link's look.
+    taggedRun = { ...taggedRun, rStyle: 'Hyperlink' };
+  }
+  // Never mutate the shared context run: helpers return `base` by identity when idle.
+  const nextRun = applyElementRunProps(taggedRun, node);
   const nextCtx: FlowContext = {
     ...ctx,
-    run: applyRunCss(applyInlineTag(ctx.run, tag), style),
+    run: nextRun,
     pre: ctx.pre || tag === 'pre',
   };
+  if (noteReference !== null) {
+    // Word renders note marks superscript via a character style the fragment does
+    // not carry; direct formatting keeps the number off the baseline — always.
+    const markRun: RunProps = { ...nextCtx.run, vertAlign: 'superscript' };
+    if (
+      ctx.noteBody !== undefined &&
+      ctx.noteBody.kind === noteReference.kind &&
+      ctx.noteBody.id === noteReference.id
+    ) {
+      // The note's own number mark, inside its own body.
+      const localName = noteReference.kind === 'footnote' ? 'footnoteRef' : 'endnoteRef';
+      runs.push(`<w:r>${rPrXml(markRun)}<w:${localName}/></w:r>`);
+      return;
+    }
+    // A live reference, in the body OR a cross-note citation inside another note's
+    // body — the merge remaps note ids in note stories too.
+    if (p.definedNotes[noteReference.kind].has(noteReference.id)) {
+      const localName =
+        noteReference.kind === 'footnote' ? 'footnoteReference' : 'endnoteReference';
+      runs.push(`<w:r>${rPrXml(markRun)}<w:${localName} w:id="${noteReference.id}"/></w:r>`);
+      // The anchor's visible number, kept as the strip fallback: if the note is
+      // later dropped (budget) or moved, the mark degrades to this text instead
+      // of vanishing — main pasted the literal '[1]' and so must we.
+      const visible = (node.textContent ?? '').replace(/[ \t\r\n\f\v]+/g, ' ').trim();
+      const markKey = `${noteReference.kind}:${noteReference.id}`;
+      if (visible.length > 0 && !p.noteMarkFallbacks.has(markKey)) {
+        p.noteMarkFallbacks.set(markKey, textRunXml(visible, markRun));
+      }
+      if (ctx.noteBody === undefined) {
+        p.bodyNoteRefs[noteReference.kind].add(noteReference.id);
+      } else {
+        const from = `${ctx.noteBody.kind}:${ctx.noteBody.id}`;
+        const edges = p.noteNoteRefs.get(from) ?? [];
+        edges.push({ kind: noteReference.kind, id: noteReference.id });
+        p.noteNoteRefs.set(from, edges);
+      }
+      return;
+    }
+    // A dangling reference (definition absent from the payload) keeps its visible
+    // text ONLY: falling into the anchor branch would emit a hyperlink to a
+    // bookmark that will never exist plus a stray `_ftnref` bookmark.
+    for (const child of Array.from(node.childNodes)) {
+      collectInline(child, depth + 1, nextCtx, runs, p);
+    }
+    return;
+  }
   if (tag === 'a') {
     const href = node.getAttribute('href');
+    const bookmarkName = clipboardBookmarkName(
+      node.getAttribute('name') || node.getAttribute('id')
+    );
     const inner: string[] = [];
     for (const child of Array.from(node.childNodes)) {
       collectInline(child, depth + 1, nextCtx, inner, p);
     }
-    const sanitized = href === null ? null : sanitizeHref(href);
-    if (sanitized !== null && sanitized.ok && sanitized.href.length > 0) {
-      const relId = allocateRel(p, `${R_NS}/hyperlink`, sanitized.href, true);
-      runs.push(`<w:hyperlink r:id="${relId}">${inner.join('')}</w:hyperlink>`);
-    } else {
-      // A refused href drops the link wrapper but keeps its text.
-      for (const run of inner) runs.push(run);
+    const anchor = href?.startsWith('#') ? clipboardBookmarkName(href.slice(1)) : null;
+    let content = inner.join('');
+    if (anchor !== null) {
+      content = `<w:hyperlink w:anchor="${escapeXmlAttribute(anchor)}">${content}</w:hyperlink>`;
+    } else if (href !== null && !href.startsWith('#')) {
+      // A fragment-only href never becomes an EXTERNAL relationship: Word treats
+      // that target as a URI and the click errors. Unstorable fragment names are
+      // mangled into bookmark names upstream, so this branch is URL-only.
+      const sanitized = sanitizeHref(href);
+      if (sanitized.ok && sanitized.href.length > 0) {
+        const relId = allocateRel(p, `${R_NS}/hyperlink`, sanitized.href, true, ctx.rels ?? p.rels);
+        content = `<w:hyperlink r:id="${relId}">${content}</w:hyperlink>`;
+      }
     }
+    if (bookmarkName !== null) {
+      const id = String(p.nextBookmarkId++);
+      content =
+        `<w:bookmarkStart w:id="${id}" w:name="${escapeXmlAttribute(bookmarkName)}"/>` +
+        `${content}<w:bookmarkEnd w:id="${id}"/>`;
+    }
+    if (content.length > 0) runs.push(content);
     return;
   }
   for (const child of Array.from(node.childNodes)) {
@@ -417,36 +371,60 @@ function collectInline(
   }
 }
 
-/** Word desktop's `mso-list:l<N> level<M> lfo<K>` convention on `MsoListParagraph`. */
-function msoListNumPr(
+/** The styled flow context a paragraph-shaped element hands its children. */
+function paragraphContextOf(
   element: Element,
-  style: ReadonlyMap<string, string>,
-  p: Projection
-): ParaProps['numPr'] {
-  const declaration = style.get('mso-list');
-  if (declaration === undefined) return undefined;
-  const match = /\bl(\d{1,4})\s+level(\d{1,2})\b/i.exec(declaration);
-  if (!match) return undefined;
-  const ilvl = clamp(Number.parseInt(match[2]!, 10) - 1, 0, 8);
-  const marker = msoMarkerText(element, p);
-  const kind: 'ordered' | 'bullet' = /\d|[a-z][.)]/i.test(marker) ? 'ordered' : 'bullet';
-  return { numId: allocateList(p, `mso:l${match[1]}`, kind), ilvl };
-}
-
-/** The text of the `mso-list:Ignore` marker span, for number-vs-bullet detection. */
-function msoMarkerText(element: Element, p: Projection): string {
-  let found = '';
-  const walk = (node: Node, depth: number): void => {
-    if (found.length > 0 || depth > 8 || p.nodesLeft <= 0) return;
-    if (!isElement(node)) return;
-    if (isMsoListIgnoreMarker(parseInlineStyle(node))) {
-      found = (node.textContent ?? '').slice(0, 16);
-      return;
-    }
-    for (const child of Array.from(node.childNodes)) walk(child, depth + 1);
+  ctx: FlowContext,
+  p: Projection,
+  pageBreakBefore: boolean
+): FlowContext {
+  const tag = tagOf(element);
+  const style = parseInlineStyle(element);
+  const para: ParaProps = {};
+  if (pageBreakBefore) para.pageBreakBefore = true;
+  const styleId = wordParagraphStyleId(element, p.wordHtml);
+  if (styleId !== undefined) para.styleId = styleId;
+  if (ctx.para.numPr) para.numPr = ctx.para.numPr;
+  if (ctx.para.jc) para.jc = ctx.para.jc;
+  if (ctx.para.bidi) para.bidi = true;
+  let run = { ...ctx.run };
+  const heading = HEADING_SZ[tag];
+  // `docx-outline` marks a DIRECT w:outlineLvl on otherwise plain text: the
+  // writer's inline CSS already carries its real formatting, and the bold+size
+  // heading fallback would mint bold the source never had.
+  if (
+    heading !== undefined &&
+    styleId === undefined &&
+    !element.classList.contains('docx-outline')
+  ) {
+    run.bold = true;
+    run.szHalfPoints = heading;
+  }
+  const pre = ctx.pre || tag === 'pre';
+  if (tag === 'pre') run.font = 'Courier New';
+  const mso = msoListNumPr(element, style, p, ctx.noteBody);
+  if (mso) para.numPr = mso;
+  applyWordParagraphAlignment(para, element, p.classAlignments);
+  applyParaCss(para, style);
+  // The background lands on BOTH the paragraph (w:pPr/w:shd) and its runs: the
+  // single-paragraph inline paste path keeps only run content, so a run-level fill
+  // is what survives a mid-paragraph paste.
+  run = applyElementRunProps(run, element);
+  if (element.getAttribute('dir')?.trim().toLowerCase() === 'rtl') {
+    para.bidi = true;
+  }
+  return {
+    run,
+    para,
+    // Only mark-defining properties (style, numbering) justify replacing the host
+    // paragraph's mark on paste; incidental CSS (margins, alignment) must not force
+    // the structural path for a plain single-paragraph snippet.
+    paragraphMarkCovered: para.styleId !== undefined || para.numPr !== undefined,
+    pre,
+    list: ctx.list,
+    ...(ctx.noteBody ? { noteBody: ctx.noteBody } : {}),
+    ...(ctx.rels ? { rels: ctx.rels } : {}),
   };
-  for (const child of Array.from(element.childNodes)) walk(child, 0);
-  return found;
 }
 
 function projectParagraph(
@@ -454,37 +432,16 @@ function projectParagraph(
   depth: number,
   ctx: FlowContext,
   p: Projection,
-  out: string[]
+  out: string[],
+  pageBreakBefore = false
 ): void {
-  if (p.nodesLeft <= 0 || depth > p.maxDepth) return;
-  const tag = tagOf(element);
-  const style = parseInlineStyle(element);
-  const para: ParaProps = {};
-  const styleId = wordParagraphStyleId(element, p.wordHtml);
-  if (styleId !== undefined) para.styleId = styleId;
-  if (ctx.para.numPr) para.numPr = ctx.para.numPr;
-  if (ctx.para.jc) para.jc = ctx.para.jc;
-  let run = { ...ctx.run };
-  const heading = HEADING_SZ[tag];
-  if (heading !== undefined && styleId === undefined) {
-    run.bold = true;
-    run.szHalfPoints = heading;
+  if (p.nodesLeft <= 0) {
+    p.truncated = true;
+    return;
   }
-  const pre = ctx.pre || tag === 'pre';
-  if (tag === 'pre') run.font = 'Courier New';
-  const mso = msoListNumPr(element, style, p);
-  if (mso) para.numPr = mso;
-  applyWordParagraphAlignment(para, element, p.classAlignments);
-  applyParaCss(para, style);
-  run = applyRunCss(run, style);
-  const next: FlowContext = {
-    run,
-    para,
-    paragraphMarkCovered: styleId !== undefined,
-    pre,
-    list: ctx.list,
-  };
-  projectFlow(Array.from(element.childNodes), depth + 1, next, p, out, true);
+  if (depth > p.maxDepth) return;
+  const next = paragraphContextOf(element, ctx, p, pageBreakBefore);
+  projectFlow(Array.from(element.childNodes), depth + 1, next, p, out, true, undefined, false);
 }
 
 function projectList(
@@ -492,30 +449,59 @@ function projectList(
   depth: number,
   ctx: FlowContext,
   p: Projection,
-  out: string[]
+  out: string[],
+  pageBreakBefore = false
 ): void {
-  if (p.nodesLeft <= 0 || depth > p.maxDepth) return;
+  if (p.nodesLeft <= 0) {
+    p.truncated = true;
+    return;
+  }
+  if (depth > p.maxDepth) return;
   p.nodesLeft -= 1;
-  const kind: 'ordered' | 'bullet' = tagOf(element) === 'ol' ? 'ordered' : 'bullet';
-  // One numId per distinct top-level list; nested lists share their root's definition.
+  const kind = semanticHtmlListKind(element);
+  // One numId per distinct top-level list; nested lists share their root's definition
+  // and record their own format at their level.
   if (!ctx.list) p.semanticListCount += 1;
   const state: ListState = ctx.list
     ? { numId: ctx.list.numId, level: Math.min(ctx.list.level + 1, 8) }
-    : { numId: allocateList(p, `sem:${p.semanticListCount}`, kind), level: 0 };
+    : {
+        numId: allocateList(p, `sem:${p.semanticListCount}`, kind, semanticHtmlListStart(element)),
+        level: 0,
+      };
+  if (ctx.list) {
+    const allocation = p.listsByNumId.get(state.numId);
+    if (allocation !== undefined && !allocation.levels.has(state.level)) {
+      allocation.levels.set(state.level, { kind, start: semanticHtmlListStart(element) });
+    }
+  }
   const itemCtx: FlowContext = {
     ...ctx,
     list: state,
     para: { numPr: { numId: state.numId, ilvl: state.level } },
   };
+  let pendingPageBreak = pageBreakBefore;
   for (const child of Array.from(element.childNodes)) {
+    if (p.nodesLeft <= 0) {
+      p.truncated = true;
+      break;
+    }
     if (!isElement(child)) continue;
     const childTag = tagOf(child);
-    if (childTag === 'li') projectParagraph(child, depth + 1, itemCtx, p, out);
-    else if (childTag === 'ol' || childTag === 'ul') {
-      projectList(child, depth + 1, { ...ctx, list: state }, p, out);
+    if (childTag === 'li') {
+      // Each item charges the walk budget HERE (the flow loop is not involved), so
+      // a flood of empty auto-closed `<li>`s cannot emit blocks at zero cost.
+      p.nodesLeft -= 1;
+      projectParagraph(child, depth + 1, itemCtx, p, out, pendingPageBreak);
+      pendingPageBreak = false;
+    } else if (childTag === 'ol' || childTag === 'ul') {
+      const beforeNested = out.length;
+      projectList(child, depth + 1, { ...ctx, list: state }, p, out, pendingPageBreak);
+      if (out.length > beforeNested) pendingPageBreak = false;
     }
   }
 }
+
+type PageBreakState = { pending: boolean; skipSpacer: boolean };
 
 function projectFlow(
   nodes: readonly Node[],
@@ -523,90 +509,258 @@ function projectFlow(
   ctx: FlowContext,
   p: Projection,
   out: string[],
-  forceEmit = false
+  forceEmit = false,
+  pageBreakState?: PageBreakState,
+  extractPageBreakBlocks = true
 ): void {
-  // Container chains (`<section>` in `<section>` …) recurse here too; without the cap a
-  // deep chain overflowed the stack instead of degrading.
   if (depth > p.maxDepth) return;
   const before = out.length;
+  const ownsPageBreakState = pageBreakState === undefined;
   let pending: string[] = [];
+  // Furniture that preceded THIS flow's first block; it splices into the first
+  // emitted paragraph's START after the walk, so a leading anchor targets the
+  // position BEFORE the text it precedes.
+  let leadingFurniture: string[] = [];
+  // The context's own page-break-before is consumed by the FIRST emission only.
+  let flushPara = ctx.para;
+  const pageBreak = pageBreakState ?? { pending: false, skipSpacer: false };
+  // A furniture-only paragraph never inherits the context's page break or list
+  // item: it would double the break and mint a stray numbered ordinal.
+  const furniturePara = (): ParaProps => ({
+    ...flushPara,
+    pageBreakBefore: undefined,
+    numPr: undefined,
+  });
   const flush = (): void => {
-    if (pending.length > 0) {
-      out.push(paragraphXml(ctx.para, pending));
-      p.lastMarkCovered = ctx.paragraphMarkCovered;
+    if (pending.length === 0) return;
+    if (!pending.some((piece) => piece.includes('<w:r'))) {
+      // Furniture-only pending (a standalone bookmark anchor): fold it into the
+      // previous paragraph. Before this flow's first block it queues as LEADING
+      // furniture; after a non-paragraph block (a table) it takes its own
+      // paragraph NOW — queued, it would splice into the END of the next
+      // paragraph, past the content.
+      if (out.length === before) {
+        leadingFurniture = leadingFurniture.concat(pending);
+        pending = [];
+        return;
+      }
+      const last = out[out.length - 1];
+      if (last?.endsWith('</w:p>')) {
+        out[out.length - 1] = `${last.slice(0, -6)}${pending.join('')}</w:p>`;
+        pending = [];
+      } else if (last !== undefined && pending.length > 0) {
+        out.push(paragraphXml(furniturePara(), pending));
+        pending = [];
+        p.lastMarkCovered = false;
+      }
+      return;
     }
+    // Bare inline text consumes a pending Word page break like a block would,
+    // so the break lands BEFORE the text, not appended after it.
+    const para = pageBreak.pending ? { ...flushPara, pageBreakBefore: true } : flushPara;
+    out.push(paragraphXml(para, pending));
+    if (flushPara.pageBreakBefore) flushPara = { ...flushPara, pageBreakBefore: undefined };
+    pageBreak.pending = false;
+    pageBreak.skipSpacer = false;
+    p.lastMarkCovered = ctx.paragraphMarkCovered;
     pending = [];
   };
   for (const node of nodes) {
-    if (p.nodesLeft <= 0) break;
+    if (p.nodesLeft <= 0) {
+      p.truncated = true;
+      break;
+    }
     if (isElement(node)) {
       const tag = tagOf(node);
+      const blockSdtNodes = tag === 'w:sdt' ? wordBlockSdtNodes(node) : null;
+      if (extractPageBreakBlocks && isWordPageBreakBlock(node)) {
+        flush();
+        p.nodesLeft -= 1;
+        // Consecutive break blocks: materialize the earlier one so an intentionally
+        // blank page survives instead of the two breaks collapsing into one.
+        if (pageBreak.pending) appendPageBreak(out);
+        pageBreak.pending = true;
+        pageBreak.skipSpacer = true;
+        continue;
+      }
       if (IGNORED_TAGS.has(tag)) {
+        p.nodesLeft -= 1;
+        continue;
+      }
+      const elementStyle = parseInlineStyle(node);
+      if (elementStyle.get('mso-element')?.trim().toLowerCase() === 'comment-list') {
+        p.nodesLeft -= 1;
+        continue;
+      }
+      // The note-list wrapper is transparent: collected definitions inside it are
+      // skipped below (they re-emit through the notes pass), while definitions past
+      // the collection caps project into the body — ugly but lossless.
+      if (isClipboardNoteList(elementStyle)) {
+        flush();
+        p.nodesLeft -= 1;
+        projectFlow(
+          Array.from(node.childNodes),
+          depth + 1,
+          ctx,
+          p,
+          out,
+          false,
+          pageBreak,
+          extractPageBreakBlocks
+        );
+        continue;
+      }
+      // A note definition the notes pass consumed projects only there; walking it
+      // here would land the note text twice, once in the body.
+      if (p.definedNoteElements.has(node)) {
         p.nodesLeft -= 1;
         continue;
       }
       if (PARAGRAPH_TAGS.has(tag)) {
         flush();
         p.nodesLeft -= 1;
-        projectParagraph(node, depth, ctx, p, out);
+        if (pageBreak.pending && pageBreak.skipSpacer && isWordPageBreakSpacer(node)) {
+          pageBreak.skipSpacer = false;
+          continue;
+        }
+        if (tag === 'div' && hasBlockChild(node)) {
+          // Word's section wrapper (`WordSection1`): block flow continues through it,
+          // so page-break extraction and the spacer state must survive the descent.
+          // A break declared ON the wrapper carries to its first child paragraph.
+          const wrapperCtx = paragraphContextOf(node, ctx, p, false);
+          if (wrapperCtx.para.pageBreakBefore) pageBreak.pending = true;
+          projectFlow(
+            Array.from(node.childNodes),
+            depth + 1,
+            wrapperCtx,
+            p,
+            out,
+            false,
+            pageBreak,
+            extractPageBreakBlocks
+          );
+          continue;
+        }
+        const beforeParagraph = out.length;
+        projectParagraph(node, depth, ctx, p, out, pageBreak.pending);
+        // The pending break is consumed only when the paragraph actually emitted;
+        // a cap-truncated paragraph leaves it for the end-of-flow synthesis.
+        if (out.length > beforeParagraph) {
+          pageBreak.pending = false;
+          pageBreak.skipSpacer = false;
+        }
         continue;
       }
       if (tag === 'ol' || tag === 'ul') {
         flush();
-        projectList(node, depth, ctx, p, out);
+        const beforeList = out.length;
+        projectList(node, depth, ctx, p, out, pageBreak.pending);
+        if (out.length > beforeList) {
+          pageBreak.pending = false;
+          pageBreak.skipSpacer = false;
+        }
         continue;
       }
       if (tag === 'table') {
         flush();
+        if (pageBreak.pending) appendPageBreak(out);
         projectTable(node, depth, ctx, p, out);
+        pageBreak.pending = false;
+        pageBreak.skipSpacer = false;
         continue;
       }
-      if (CONTAINER_TAGS.has(tag)) {
+      // A span wrapping block children behaves as a block container (browsers do the
+      // same for block-in-inline); flattened SDT wrappers rely on this transparency.
+      if (
+        CONTAINER_TAGS.has(tag) ||
+        blockSdtNodes !== null ||
+        (tag === 'span' && hasBlockChild(node))
+      ) {
         flush();
         p.nodesLeft -= 1;
-        projectFlow(Array.from(node.childNodes), depth + 1, ctx, p, out);
+        projectFlow(
+          blockSdtNodes ?? Array.from(node.childNodes),
+          depth + 1,
+          ctx,
+          p,
+          out,
+          false,
+          pageBreak,
+          extractPageBreakBlocks
+        );
         continue;
       }
     }
+    // An inter-block text node of pure whitespace — NBSP included — is layout
+    // chrome, never a paragraph of its own. NBSP INSIDE a paragraph's flow (real
+    // pending runs exist) stays real content Word preserves.
+    if (
+      node.nodeType === 3 &&
+      /^[\s\u00a0]+$/.test(node.nodeValue ?? '') &&
+      isFurnitureOnly(pending)
+    ) {
+      p.nodesLeft -= 1;
+      continue;
+    }
     collectInline(node, depth, ctx, pending, p);
   }
+  // An explicit paragraph holding only furniture (a bookmark in an empty <p>)
+  // keeps its furniture: the fold-into-previous in flush() would land the anchor
+  // one paragraph early and the forced paragraph would emit empty.
+  if (
+    forceEmit &&
+    out.length === before &&
+    pending.length > 0 &&
+    !pending.some((piece) => piece.includes('<w:r'))
+  ) {
+    out.push(paragraphXml(flushPara, pending));
+    pending = [];
+    p.lastMarkCovered = ctx.paragraphMarkCovered;
+  }
   flush();
+  // Leading furniture splices into this flow's FIRST paragraph right after its
+  // pPr, so a bookmark that preceded the content targets the position BEFORE
+  // it; a non-paragraph first block gets a furniture paragraph ahead of it. This
+  // runs AFTER the final flush — a bookmark-only flow moves its furniture here
+  // during that flush, and resolving earlier would discard it.
+  if (leadingFurniture.length > 0) {
+    const first = out[before];
+    if (first !== undefined && first.startsWith('<w:p>')) {
+      out[before] = first.replace(
+        /^(<w:p>(?:<w:pPr>(?:(?!<\/w:pPr>)[\s\S])*?<\/w:pPr>)?)/,
+        `$1${leadingFurniture.join('')}`
+      );
+    } else if (first !== undefined) {
+      out.splice(before, 0, paragraphXml(furniturePara(), leadingFurniture));
+    } else {
+      pending = leadingFurniture.concat(pending);
+    }
+    leadingFurniture = [];
+  }
+  // Furniture the fold could not place (previous block is a table, or nothing
+  // followed) keeps its own paragraph — internal links point at these bookmarks.
+  // It emits BEFORE a pending page break: the anchor preceded the break in the
+  // source, and moving it past the break would land the link one page late.
+  if (pending.length > 0) {
+    out.push(paragraphXml(furniturePara(), pending));
+    pending = [];
+    p.lastMarkCovered = false;
+  }
+  if (ownsPageBreakState && pageBreak.pending) {
+    appendPageBreak(out);
+    pageBreak.pending = false;
+    pageBreak.skipSpacer = false;
+    p.lastMarkCovered = false;
+  }
   // An explicit block emits its paragraph even when empty.
   if (forceEmit && out.length === before) {
-    out.push(paragraphXml(ctx.para, []));
+    out.push(paragraphXml(flushPara, pending));
+    pending = [];
     p.lastMarkCovered = ctx.paragraphMarkCovered;
   }
 }
 
-// --- Tables
-
-const TABLE_TOTAL_TWIPS = 9360; // 6.5 inches, Word's default content width.
-
-function tableRowsOf(table: Element): Element[] {
-  return Array.from(table.children).flatMap((child) => {
-    const tag = tagOf(child);
-    if (tag === 'tr') return [child];
-    if (tag !== 'thead' && tag !== 'tbody' && tag !== 'tfoot') return [];
-    return Array.from(child.children).filter((inner) => tagOf(inner) === 'tr');
-  });
-}
-
-function spanOf(cell: Element, attribute: 'colspan' | 'rowspan', max: number): number {
-  const raw = cell.getAttribute(attribute);
-  if (raw === null || !/^\d{1,4}$/.test(raw.trim())) return 1;
-  return clamp(Number.parseInt(raw, 10), 1, max);
-}
-
-function tableHasVisibleBorders(table: Element, style: ReadonlyMap<string, string>): boolean {
-  const attr = table.getAttribute('border');
-  if (attr !== null && attr.trim() !== '0' && attr.trim() !== '') return true;
-  const border = style.get('border') ?? style.get('border-width');
-  if (border === undefined) return false;
-  const lowered = border.toLowerCase();
-  return !(lowered.includes('none') || lowered.includes('hidden') || /^0(px)?$/.test(lowered));
-}
-
-type RowSpanCarry = { remaining: number; readonly span: number };
+// --- Tables (clipboard-html-table-project.ts owns the walk)
 
 function projectTable(
   table: Element,
@@ -615,180 +769,20 @@ function projectTable(
   p: Projection,
   out: string[]
 ): void {
-  if (p.nodesLeft <= 0 || depth > p.maxDepth) return;
-  p.nodesLeft -= 1;
-  const rows = tableRowsOf(table);
-  if (rows.length === 0) return;
-
-  let columns = 1;
-  for (const row of rows) {
-    let count = 0;
-    for (const cell of Array.from(row.children)) {
-      if (/^t[dh]$/.test(tagOf(cell))) count += spanOf(cell, 'colspan', 63);
-    }
-    columns = Math.max(columns, count);
-  }
-  columns = Math.min(columns, 63);
-  const columnWidth = Math.floor(TABLE_TOTAL_TWIPS / columns);
-
-  const style = parseInlineStyle(table);
-  const edges = ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']
-    .map((edge) => `<w:${edge} w:val="single" w:sz="4" w:space="0" w:color="auto"/>`)
-    .join('');
-  const borders = tableHasVisibleBorders(table, style)
-    ? `<w:tblBorders>${edges}</w:tblBorders>`
-    : '';
-  const grid = Array.from({ length: columns }, () => `<w:gridCol w:w="${columnWidth}"/>`).join('');
-
-  const carry: Array<RowSpanCarry | null> = new Array<RowSpanCarry | null>(columns).fill(null);
-  const rowXml: string[] = [];
-  for (const row of rows) {
-    if (p.nodesLeft <= 0) break;
-    p.nodesLeft -= 1;
-    const sourceCells = Array.from(row.children).filter((cell) => /^t[dh]$/.test(tagOf(cell)));
-    let sourceAt = 0;
-    const cells: string[] = [];
-    let column = 0;
-    while (column < columns) {
-      // Every emitted cell — carried continuation and missing-cell fill included — charges
-      // the node budget: the fill loop synthesizes up to 63 cells per row, and uncharged
-      // fills let a small payload amplify into hundreds of megabytes of strings.
-      p.nodesLeft -= 1;
-      if (p.nodesLeft <= 0) break;
-      const carried = carry[column];
-      if (carried) {
-        const span = carried.span;
-        const gridSpan = span > 1 ? `<w:gridSpan w:val="${span}"/>` : '';
-        cells.push(
-          `<w:tc><w:tcPr><w:tcW w:w="${columnWidth * span}" w:type="dxa"/>` +
-            `${gridSpan}<w:vMerge/></w:tcPr><w:p/></w:tc>`
-        );
-        carried.remaining -= 1;
-        if (carried.remaining <= 0) carry[column] = null;
-        column += span;
-        continue;
-      }
-      const cell = sourceCells[sourceAt];
-      if (cell === undefined) {
-        cells.push(
-          `<w:tc><w:tcPr><w:tcW w:w="${columnWidth}" w:type="dxa"/></w:tcPr><w:p/></w:tc>`
-        );
-        column += 1;
-        continue;
-      }
-      sourceAt += 1;
-      const span = Math.min(spanOf(cell, 'colspan', 63), columns - column);
-      const rowSpan = spanOf(cell, 'rowspan', 1000);
-      if (rowSpan > 1) carry[column] = { remaining: rowSpan - 1, span };
-      cells.push(projectCell(cell, span, columnWidth, rowSpan > 1, depth, ctx, p));
-      column += span;
-    }
-    rowXml.push(`<w:tr>${cells.join('')}</w:tr>`);
-  }
-
-  out.push(
-    `<w:tbl><w:tblPr><w:tblW w:w="${TABLE_TOTAL_TWIPS}" w:type="dxa"/>${borders}</w:tblPr>` +
-      `<w:tblGrid>${grid}</w:tblGrid>${rowXml.join('')}</w:tbl>`
-  );
-  p.lastMarkCovered = false;
-}
-
-function projectCell(
-  cell: Element,
-  span: number,
-  columnWidth: number,
-  vMergeRestart: boolean,
-  depth: number,
-  ctx: FlowContext,
-  p: Projection
-): string {
-  const isHeader = tagOf(cell) === 'th';
-  const style = parseInlineStyle(cell);
-  let tcPr = `<w:tcW w:w="${columnWidth * span}" w:type="dxa"/>`;
-  if (span > 1) tcPr += `<w:gridSpan w:val="${span}"/>`;
-  if (vMergeRestart) tcPr += '<w:vMerge w:val="restart"/>';
-  const background = style.get('background-color');
-  if (background !== undefined) {
-    const fill = parseCssColor(background);
-    if (fill) tcPr += `<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/>`;
-  }
-  const verticalAlign =
-    style.get('vertical-align')?.toLowerCase() ?? cell.getAttribute('valign')?.toLowerCase();
-  if (verticalAlign === 'top') tcPr += '<w:vAlign w:val="top"/>';
-  else if (verticalAlign === 'middle' || verticalAlign === 'center') {
-    tcPr += '<w:vAlign w:val="center"/>';
-  } else if (verticalAlign === 'bottom') tcPr += '<w:vAlign w:val="bottom"/>';
-
-  const cellCtx: FlowContext = {
-    run: isHeader ? { ...ctx.run, bold: true } : ctx.run,
-    para: isHeader ? { jc: 'center' } : {},
-    paragraphMarkCovered: false,
-    pre: false,
-    list: null,
-  };
-  const blocks: string[] = [];
-  projectFlow(Array.from(cell.childNodes), depth + 2, cellCtx, p, blocks, true);
-  // A cell must end with a paragraph.
-  if (blocks.length === 0 || blocks[blocks.length - 1]!.endsWith('</w:tbl>')) {
-    blocks.push('<w:p/>');
-  }
-  return `<w:tc><w:tcPr>${tcPr}</w:tcPr>${blocks.join('')}</w:tc>`;
-}
-
-// --- Zip assembly (entry names mirror the internal fragment extractor)
-
-function relationshipXml(rels: readonly RelEntry[]): string {
-  const rows = rels
-    .map(
-      (rel) =>
-        `<Relationship Id="${escapeXmlAttribute(rel.id)}" Type="${escapeXmlAttribute(rel.type)}" ` +
-        `Target="${escapeXmlAttribute(rel.target)}"${rel.external ? ' TargetMode="External"' : ''}/>`
-    )
-    .join('');
-  return `${XML_DECL}<Relationships xmlns="${RELS_XMLNS}">${rows}</Relationships>`;
+  projectHtmlTable(table, depth, ctx, p, out, projectFlow);
 }
 
 function assembleFragment(p: Projection, blocks: readonly string[]): Uint8Array {
-  const entries = new Map<string, Uint8Array>();
-  const hasNumbering = p.lists.size > 0;
-  if (hasNumbering) allocateRel(p, `${R_NS}/numbering`, 'numbering.xml', false);
-
-  const documentXml =
-    `${XML_DECL}<w:document xmlns:w="${WML_NS}" xmlns:r="${R_NS}" xmlns:wp="${WP_NS}" ` +
-    `xmlns:a="${A_NS}" xmlns:pic="${PIC_NS}"><w:body>${blocks.join('')}</w:body></w:document>`;
-  entries.set('word/document.xml', strToU8(documentXml));
-  entries.set('word/_rels/document.xml.rels', strToU8(relationshipXml(p.rels)));
-  const rootRel = {
-    id: 'rId1',
-    type: `${R_NS}/officeDocument`,
-    target: 'word/document.xml',
-    external: false,
-  };
-  entries.set('_rels/.rels', strToU8(relationshipXml([rootRel])));
-  if (hasNumbering) {
-    entries.set('word/numbering.xml', strToU8(numberingPartXml([...p.lists.values()])));
-  }
-  for (const [name, bytes] of p.media) entries.set(name, bytes);
-
-  let defaults =
-    `<Default Extension="rels" ContentType="${RELS_CT}"/>` +
-    '<Default Extension="xml" ContentType="application/xml"/>';
-  for (const [extension, contentType] of p.mediaExtensions) {
-    defaults += `<Default Extension="${extension}" ContentType="${contentType}"/>`;
-  }
-  const overrides =
-    `<Override PartName="/word/document.xml" ContentType="${DOCUMENT_CT}"/>` +
-    (hasNumbering
-      ? `<Override PartName="/word/numbering.xml" ContentType="${NUMBERING_CT}"/>`
-      : '');
-  entries.set(
-    '[Content_Types].xml',
-    strToU8(`${XML_DECL}<Types xmlns="${CT_XMLNS}">${defaults}${overrides}</Types>`)
-  );
-  return writeZip(entries);
+  return writeProjectedHtmlPackage({
+    blocks,
+    rels: p.rels,
+    lists: [...p.lists.values()],
+    notes: p.notes,
+    noteRels: p.noteRels,
+    media: p.media,
+    mediaExtensions: p.mediaExtensions,
+  });
 }
-
-// --- Entry point
 
 type ProjectedBlocks =
   | { readonly ok: true; readonly projection: Projection; readonly blocks: string[] }
@@ -816,67 +810,177 @@ function projectBlocks(html: string, limits: HtmlProjectionLimits): ProjectedBlo
   const body = parsed.body;
   if (!body) return { ok: false, reason: 'no-content' };
 
+  const noteDefinitions = clipboardNoteDefinitions(parsed);
+  const definedNotes: Record<ClipboardNoteKind, Set<number>> = {
+    footnote: new Set(),
+    endnote: new Set(),
+  };
+  const definedNoteElements = new Set<Element>();
+  // Only definitions a body anchor actually references become notes; the rest stay
+  // visible body text instead of unreachable note bodies.
+  const referencedNotes: Record<ClipboardNoteKind, Set<number>> = {
+    footnote: new Set(),
+    endnote: new Set(),
+  };
+  collectReferencedNoteIds(parsed, noteDefinitions, referencedNotes);
   const projection: Projection = {
     nodesLeft: limits.maxNodes ?? DEFAULT_MAX_NODES,
     maxDepth: limits.maxDepth ?? DEFAULT_MAX_DEPTH,
     maxImageBytes: limits.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES,
     wordHtml: isWordClipboardHtml(html),
+    truncated: false,
     lastMarkCovered: false,
     rels: [],
     media: new Map(),
     mediaExtensions: new Map(),
+    mediaBySrc: new Map(),
     lists: new Map(),
+    listsByNumId: new Map(),
     semanticListCount: 0,
     imageCount: 0,
     docPrId: 0,
+    nextBookmarkId: 1,
     classAlignments: wordClassAlignmentsFromDocument(parsed),
+    listDefinitions: wordListDefinitionsFromStyleText(wordStyleTextFromDocument(parsed)),
+    notes: { footnote: new Map(), endnote: new Map() },
+    noteRels: { footnote: [], endnote: [] },
+    definedNotes,
+    bodyNoteRefs: { footnote: new Set(), endnote: new Set() },
+    noteNoteRefs: new Map(),
+    noteMarkFallbacks: new Map(),
+    definedNoteElements,
   };
-  const blocks: string[] = [];
+  let rootRun: RunProps = {};
+  rootRun = applyElementRunProps(rootRun, parsed.documentElement);
+  rootRun = applyElementRunProps(rootRun, body);
   const rootCtx: FlowContext = {
-    run: {},
-    para: {},
+    run: rootRun,
+    para: rootRun.rtl ? { bidi: true } : {},
     paragraphMarkCovered: false,
     pre: false,
     list: null,
   };
+  // Claim (dedupe + reference-gate) and PRE-register the claimed elements, so an
+  // outer definition's body walk skips a nested definition it does not own.
+  const claimed: (typeof noteDefinitions)[number][] = [];
+  for (const note of noteDefinitions) {
+    if (!referencedNotes[note.kind].has(note.id)) continue;
+    if (definedNotes[note.kind].has(note.id)) continue;
+    definedNotes[note.kind].add(note.id);
+    definedNoteElements.add(note.element);
+    claimed.push(note);
+  }
+  // Project INNER definitions before their containers: if truncation un-claims the
+  // tail, an un-claimed inner note then projects inside its outer's body (or the
+  // document body) instead of being stranded by an already-projected outer.
+  claimed.sort((a, b) => domDepthOf(b.element) - domDepthOf(a.element));
+  // The BODY is the primary content: it walks first with the full budget. Notes
+  // spend what remains; a starved note un-claims and its citations strip.
+  projection.lastMarkCovered = false;
+  const blocks: string[] = [];
   projectFlow(Array.from(body.childNodes), 0, rootCtx, projection, blocks);
+  const bodyLastMarkCovered = projection.lastMarkCovered;
+  const bodyTruncated = projection.truncated;
+  let notesDropped = false;
+  for (let index = 0; index < claimed.length; index += 1) {
+    const note = claimed[index]!;
+    projection.truncated = false;
+    const budgetBeforeNote = projection.nodesLeft;
+    const noteBlocks: string[] = [];
+    projectFlow(
+      Array.from(note.element.childNodes),
+      0,
+      {
+        ...rootCtx,
+        noteBody: { kind: note.kind, id: note.id },
+        rels: projection.noteRels[note.kind],
+      },
+      projection,
+      noteBlocks,
+      true
+    );
+    if (projection.truncated || noteBlocks.length === 0) {
+      // The leftover budget starved this walk mid-note: un-claim this and every
+      // remaining definition so no live reference points at a blank note, then
+      // strip every dropped citation from body and kept-note blocks.
+      notesDropped = true;
+      const droppedKeys = new Set<string>();
+      for (let drop = index; drop < claimed.length; drop += 1) {
+        const dropped = claimed[drop]!;
+        definedNotes[dropped.kind].delete(dropped.id);
+        definedNoteElements.delete(dropped.element);
+        projection.notes[dropped.kind].delete(dropped.id);
+        projection.bodyNoteRefs[dropped.kind].delete(dropped.id);
+        droppedKeys.add(`${dropped.kind}:${dropped.id}`);
+      }
+      if (droppedKeys.size > 0) {
+        for (let at = 0; at < blocks.length; at += 1) {
+          blocks[at] = stripNoteMarks(blocks[at]!, droppedKeys, projection.noteMarkFallbacks);
+        }
+        for (const keptKind of ['footnote', 'endnote'] as const) {
+          for (const [keptId, keptBlocks] of projection.notes[keptKind]) {
+            projection.notes[keptKind].set(
+              keptId,
+              keptBlocks.map((block) =>
+                stripNoteMarks(block, droppedKeys, projection.noteMarkFallbacks)
+              )
+            );
+          }
+        }
+      }
+      // The body walk skipped the claimed divs, so their text lives NOWHERE yet.
+      // Refund exactly what the failed walk consumed and re-project the dropped
+      // definitions as body flow — partial text beats none, and the refund keeps
+      // the total bounded by what was already charged.
+      projection.nodesLeft = budgetBeforeNote;
+      for (let drop = index; drop < claimed.length && projection.nodesLeft > 0; drop += 1) {
+        projectFlow(Array.from(claimed[drop]!.element.childNodes), 0, rootCtx, projection, blocks);
+      }
+      break;
+    }
+    projection.notes[note.kind].set(note.id, noteBlocks);
+  }
+  // A dropped note is real loss, so it keeps the truncation flag raised.
+  projection.truncated = bodyTruncated || notesDropped;
+  projection.lastMarkCovered = bodyLastMarkCovered;
+  reconcileUnreachableNotes(projection, definedNotes, blocks, allocateRel);
   if (blocks.length === 0) return { ok: false, reason: 'no-content' };
   return { ok: true, projection, blocks };
 }
 
-/**
- * Project external `text/html` into a WordprocessingML fragment package.
- *
- * Pure over its input: parses into an inert document, walks under caps, and returns
- * fragment bytes the paste router reads through `readOoxmlPackage`. Never attaches
- * parsed nodes anywhere, never fetches, never executes.
- */
+const projectionMemo = createGestureMemo<ProjectedBlocks>();
+
+function projectBlocksMemoized(html: string, limits: HtmlProjectionLimits): ProjectedBlocks {
+  const limitsKey = `${limits.maxHtmlBytes ?? ''}:${limits.maxNodes ?? ''}:${limits.maxDepth ?? ''}:${limits.maxImageBytes ?? ''}`;
+  return projectionMemo(html, limitsKey, () => projectBlocks(html, limits));
+}
+
+/** Project external `text/html` into a bounded WordprocessingML fragment package. */
 export function projectExternalHtml(
   html: string,
   limits: HtmlProjectionLimits = {}
 ): HtmlProjectionResult {
-  const projected = projectBlocks(html, limits);
+  const projected = projectBlocksMemoized(html, limits);
   if (!projected.ok) return projected;
   return {
     ok: true,
     fragmentBytes: assembleFragment(projected.projection, projected.blocks),
     lastMarkCovered: projected.projection.lastMarkCovered,
     imageCount: projected.projection.imageCount,
+    truncated: projected.projection.truncated,
   };
 }
 
-/**
- * What the projection WOULD land, without paying for zip assembly.
- *
- * The file-lane stand-down predicate asks this per paste gesture; running the full
- * projection just to read a boolean doubled the parse-and-deflate cost of every
- * image-bearing paste (the router runs the real projection right after).
- */
+/** Probe projected content without paying for zip assembly. */
 export function probeExternalHtml(
   html: string,
   limits: HtmlProjectionLimits = {}
-): { readonly lands: boolean; readonly imageCount: number } {
-  const projected = projectBlocks(html, limits);
-  if (!projected.ok) return { lands: false, imageCount: 0 };
-  return { lands: true, imageCount: projected.projection.imageCount };
+): { readonly lands: boolean; readonly imageCount: number; readonly truncated: boolean } {
+  const projected = projectBlocksMemoized(html, limits);
+  if (!projected.ok) return { lands: false, imageCount: 0, truncated: false };
+  return {
+    lands: true,
+    imageCount: projected.projection.imageCount,
+    truncated: projected.projection.truncated,
+  };
 }

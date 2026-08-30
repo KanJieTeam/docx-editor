@@ -58,6 +58,11 @@ import {
   rewriteIdentifiers,
   withRewrittenAttribute,
 } from './clipboard-fragment-identifiers.ts';
+import {
+  canonicalNoteId,
+  noteReferenceClosure,
+  withoutDanglingNoteReferences,
+} from './clipboard-fragment-closure.ts';
 import { mintFragmentUniqueIds } from './clipboard-fragment-unique-ids.ts';
 
 const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -668,17 +673,41 @@ export function mergeFragmentIntoPackage(
   }
   const transplants: NoteTransplant[] = [];
 
-  for (const noteKind of ['footnote', 'endnote'] as const) {
-    const localName = noteKind === 'footnote' ? 'footnoteReference' : 'endnoteReference';
-    const idMap = noteKind === 'footnote' ? footnoteIdMap : endnoteIdMap;
-    const referenced = new Set<string>();
-    walkAll(blocks, (node) => {
-      if (node.kind === 'textValue') return;
-      if (node.kind === 'noteReference' && node.localName === localName) {
-        const id = attributeValueOf(node, 'id');
-        if (id !== undefined) referenced.add(id);
+  // Referenced note ids per kind: body blocks first, then the transitive closure
+  // over the fragment's own note bodies — a shipped note's citations must
+  // transplant too, or their ids would pass through the rewrite unmapped.
+  // One id→element index per kind, so the closure stays linear in refs + notes.
+  // A definition matches by SHAPE (w:footnote/w:endnote by name), not typed kind:
+  // an out-of-allowlist `w:type` demotes the element to generic while its typed
+  // reference stays, and missing it here would make the fail-closed scrub delete
+  // the citation — a silent drop where main pasted the reference through.
+  const isNoteShaped = (node: OoxmlNode, kind: 'footnote' | 'endnote'): node is OoxmlElement =>
+    isElementNode(node) && node.namespaceUri === WML_NAMESPACE_URI && node.localName === kind;
+  const noteIndexByKind: Partial<Record<'footnote' | 'endnote', Map<string, OoxmlNode>>> = {};
+  const referencedByKind = noteReferenceClosure(blocks, (kind, id) => {
+    let index = noteIndexByKind[kind];
+    if (index === undefined) {
+      index = new Map<string, OoxmlNode>();
+      noteIndexByKind[kind] = index;
+      const part = resolveNotesPart(fragment, kind);
+      if (part && isElementNode(part.root)) {
+        for (const child of part.root.children) {
+          if (!isNoteShaped(child, kind)) continue;
+          const noteId = attributeValueOf(child, 'id');
+          // Canonical keys: a `w:id="07"` definition must satisfy a `w:id="7"`
+          // reference (and vice versa), matching the HTML lane's numeric parse.
+          if (noteId === undefined) continue;
+          const key = canonicalNoteId(noteId);
+          if (!index.has(key)) index.set(key, child);
+        }
       }
-    });
+    }
+    return index.get(id) ?? null;
+  });
+
+  for (const noteKind of ['footnote', 'endnote'] as const) {
+    const idMap = noteKind === 'footnote' ? footnoteIdMap : endnoteIdMap;
+    const referenced = referencedByKind[noteKind];
     if (referenced.size === 0) continue;
     const fragmentNotes = resolveNotesPart(fragment, noteKind);
     if (!fragmentNotes || !isElementNode(fragmentNotes.root)) continue;
@@ -691,18 +720,22 @@ export function mergeFragmentIntoPackage(
 
     let nextNoteId =
       maxNumericAttribute(targetNotes.root, (node) =>
-        node.kind !== 'textValue' && node.kind === 'note' ? attributeValueOf(node, 'id') : undefined
+        isNoteShaped(node, noteKind) ? attributeValueOf(node, 'id') : undefined
       ) + 1;
 
     const bodies: OoxmlNode[] = [];
     for (const child of fragmentNotes.root.children) {
-      if (!isElementNode(child) || child.kind !== 'note') continue;
+      if (!isNoteShaped(child, noteKind)) continue;
       const id = attributeValueOf(child, 'id');
       const type = attributeValueOf(child, 'type');
       if (type === 'separator' || type === 'continuationSeparator') continue;
-      if (id === undefined || !referenced.has(id)) continue;
+      if (id === undefined || !referenced.has(canonicalNoteId(id))) continue;
+      // FIRST definition wins per canonical id, matching the closure's index: a
+      // crafted '07'/'7' pair must not transplant two bodies with one id-map slot
+      // (references would alias the second while the first orphans unseen).
+      if (idMap.has(canonicalNoteId(id))) continue;
       const fresh = String(nextNoteId++);
-      idMap.set(id, fresh);
+      idMap.set(canonicalNoteId(id), fresh);
       bodies.push(withRewrittenAttribute(child, WML_NAMESPACE_URI, 'id', fresh));
     }
     if (bodies.length > 0) {
@@ -831,7 +864,12 @@ export function mergeFragmentIntoPackage(
   // Transplant note bodies: per-owner rels, full identifier rewrite, drop dangling
   // drawings, and the same default materialization the blocks get.
   // ------------------------------------------------------------------
+  // Fail CLOSED on dangling note references (see clipboard-fragment-closure.ts).
+  const scrubDanglingNoteRefs = (node: OoxmlNode): OoxmlNode =>
+    withoutDanglingNoteReferences(node, footnoteIdMap, endnoteIdMap);
+
   for (const transplant of transplants) {
+    transplant.bodies = transplant.bodies.map(scrubDanglingNoteRefs);
     const targetNotes = resolveNotesPart(pkg, transplant.kind);
     if (!targetNotes) return { ok: false, reason: 'merge-refused' };
     const noteRels = mergeRels(
@@ -941,7 +979,9 @@ export function mergeFragmentIntoPackage(
   // Materialize BEFORE the identifier rewrite: `chainDefines` resolves style chains in
   // the FRAGMENT's styles part, which is keyed by original ids — a collision-remapped
   // `pStyle` would never resolve and the default value would stamp over the style's own.
-  const materialized = [...materializeDefaults(blocks, fragmentStyles, targetStyles)];
+  const materialized = [...materializeDefaults(blocks, fragmentStyles, targetStyles)].map(
+    scrubDanglingNoteRefs
+  );
   const rewritten = materialized.map((block) =>
     rewriteIdentifiers(block, {
       styleIds: styleIdMap,

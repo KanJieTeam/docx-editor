@@ -8,7 +8,6 @@
 
 import {
   extractFragmentPackage,
-  readOoxmlPackage,
   type FragmentCoverage,
   type OoxmlPackage,
 } from '@docx-editor.dev/core/store';
@@ -61,7 +60,6 @@ function gridHtmlOf(text: string): string {
 
 /** Assemble the clipboard flavours for the current selection. */
 export function buildCopyFlavours(input: CopyFlavourInput): CopyFlavours {
-  if (input.text.length === 0) return { text: '', html: null };
   if (input.cellRectangle) return { text: input.text, html: gridHtmlOf(input.text) };
   if (!input.coverage || !input.pkg) return { text: input.text, html: null };
 
@@ -76,9 +74,19 @@ export function buildCopyFlavours(input: CopyFlavourInput): CopyFlavours {
     fragmentBytes = lean.ok && lean.bytes.byteLength <= budget ? lean.bytes : null;
   }
 
-  // One read for the HTML half; the fragment travels as the bytes themselves.
-  const read = readOoxmlPackage(full.bytes);
-  const inner = read.ok ? interopHtmlFromFragmentPackage(read.package) : '';
+  // The HTML half renders from the extraction's own in-memory package — copy is
+  // synchronous in the clipboard event, so it never re-inflates its own zip (the
+  // twin is single-sourced with the zip inside extractFragmentPackage). A
+  // renderer throw degrades to an empty HTML body WITH a diagnostic: re-reading
+  // the bytes would just rethrow the same deterministic bug after paying a
+  // synchronous inflate + parse inside the copy handler.
+  let inner: string;
+  try {
+    inner = interopHtmlFromFragmentPackage(full.package);
+  } catch (error) {
+    console.error('docx-editor: copy HTML flavour failed to render', error);
+    inner = '';
+  }
   const html = wrapInteropHtml(
     inner,
     fragmentBytes ? { bytes: fragmentBytes, lastMarkCovered: full.lastMarkCovered } : null

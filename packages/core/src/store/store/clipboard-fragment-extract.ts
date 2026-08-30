@@ -11,14 +11,14 @@
 import {
   WML_NAMESPACE_URI,
   serializeOoxmlPart,
-  type OoxmlAttribute,
   type OoxmlElement,
   type OoxmlNode,
   type OoxmlPart,
 } from '../package/ooxml-tree.ts';
-import type { OoxmlPackage } from '../package/ooxml-package.ts';
+import type { OoxmlExternalTarget, OoxmlPackage } from '../package/ooxml-package.ts';
+import type { ContentTypeIndex } from '../package/content-types.ts';
 import { resolveContentTypeOf, relationshipsOf } from '../package/package-edit.ts';
-import { resolveInternalTarget } from '../package/opc-names.ts';
+import { resolveInternalTarget, validateExternalTarget } from '../package/opc-names.ts';
 import type { RelationshipRecord } from '../package/relationships.ts';
 import { escapeXmlAttribute } from '../package/sinks.ts';
 import { resolveNotesPart } from '../package/note-references.ts';
@@ -38,7 +38,7 @@ import {
   RELS_CT,
   STYLES_CT,
   STYLES_REL,
-  collectNoteIds,
+  canonicalNoteId,
   collectNumIds,
   collectRelationshipIds,
   collectStyleIds,
@@ -46,6 +46,7 @@ import {
   freshRelationshipId,
   literalizeThemeReferences,
   mediaExtensionOf,
+  noteReferenceClosure,
   numberingClosure,
   relationshipXml,
   styleClosure,
@@ -54,6 +55,7 @@ import {
   themeFontsOf,
   walkNodes,
 } from './clipboard-fragment-closure.ts';
+import { partialTableBlocks } from './clipboard-fragment-tables.ts';
 
 const CT_XMLNS = 'http://schemas.openxmlformats.org/package/2006/content-types';
 
@@ -93,6 +95,9 @@ export type FragmentExtractResult =
       readonly ok: true;
       /** The fragment package zip, readable by `readOoxmlPackage`. */
       readonly bytes: Uint8Array;
+      /** The same fragment as an already-assembled in-memory package, so the copy
+       *  path renders interop HTML without re-inflating and re-parsing `bytes`. */
+      readonly package: OoxmlPackage;
       /** Travels beside the zip (HTML attribute): whether the last paragraph mark is covered. */
       readonly lastMarkCovered: boolean;
       readonly blockCount: number;
@@ -157,78 +162,6 @@ function storyContainerOf(part: OoxmlPart): OoxmlElement | null {
 
 function touchesRange(node: OoxmlNode, inRange: ReadonlySet<string>): boolean {
   return paragraphIdsUnder(node).some((id) => inRange.has(id));
-}
-
-/**
- * A `w:vMerge` continuation in the FIRST extracted row becomes a restart, so a row-aligned
- * partial copy that starts inside a vertical merge stays a valid table (review finding 11).
- */
-function withVMergeRestarts(row: OoxmlElement): OoxmlElement {
-  const restarted = (node: OoxmlNode): OoxmlNode => {
-    if (node.kind === 'textValue') return node;
-    if (isWmlElement(node, 'vMerge')) {
-      if (attributeValueOf(node, 'val') === 'restart') return node;
-      const attributes: OoxmlAttribute[] = [
-        ...node.attributes.filter(
-          (attribute) =>
-            !(attribute.localName === 'val' && attribute.namespaceUri === WML_NAMESPACE_URI)
-        ),
-        {
-          kind: 'wmlVal',
-          namespaceUri: WML_NAMESPACE_URI,
-          localName: 'val',
-          prefix: 'w',
-          value: 'restart',
-        },
-      ];
-      return { ...node, attributes } as OoxmlNode;
-    }
-    if (isWmlElement(node, 'tc') || isWmlElement(node, 'tcPr')) {
-      const children: OoxmlNode[] = node.children.map(restarted);
-      return withChildren(node, children);
-    }
-    return node;
-  };
-  const cells: OoxmlNode[] = row.children.map(restarted);
-  return withChildren(row, cells);
-}
-
-function partialTableBlocks(table: OoxmlElement, ctx: CollectContext, out: OoxmlNode[]): void {
-  const rows = table.children.filter(
-    (child): child is OoxmlElement => child.kind !== 'textValue' && isWmlElement(child, 'tr')
-  );
-  const touched = new Set(paragraphIdsUnder(table).filter((id) => ctx.inRange.has(id)));
-  if (touched.size === 0) return;
-  const coveredRows = rows.filter((row) => {
-    const ids = paragraphIdsUnder(row);
-    return ids.length > 0 && ids.every((id) => ctx.covered.has(id));
-  });
-  const coveredRowParagraphs = new Set(coveredRows.flatMap((row) => paragraphIdsUnder(row)));
-  const rowAligned =
-    coveredRows.length > 0 &&
-    touched.size === coveredRowParagraphs.size &&
-    [...touched].every((id) => coveredRowParagraphs.has(id));
-  if (rowAligned) {
-    let first = true;
-    const kept: OoxmlNode[] = [];
-    for (const child of table.children) {
-      if (!isWmlElement(child, 'tr')) {
-        kept.push(child);
-        continue;
-      }
-      if (!coveredRows.includes(child)) continue;
-      kept.push(first ? withVMergeRestarts(child as OoxmlElement) : child);
-      first = false;
-    }
-    out.push(withChildren(table, kept));
-    return;
-  }
-  // Not a whole run of rows: the covered cell paragraphs flatten to plain paragraphs.
-  for (const id of paragraphIdsUnder(table)) {
-    if (!ctx.inRange.has(id)) continue;
-    const paragraph = findParagraph(table, id);
-    if (paragraph) out.push(paragraph);
-  }
 }
 
 function collectBlocks(
@@ -296,22 +229,6 @@ function stripExcluded(node: OoxmlNode): OoxmlNode | null {
   return changed ? withChildren(node, children) : node;
 }
 
-function fldCharTypeOf(run: OoxmlNode): 'begin' | 'separate' | 'end' | null {
-  if (run.kind !== 'run') return null;
-  for (const child of run.children) {
-    if (child.kind === 'fldChar') {
-      const type = attributeValueOf(child, 'fldCharType');
-      if (type === 'begin' || type === 'separate' || type === 'end') return type;
-      return 'begin';
-    }
-  }
-  return null;
-}
-
-function isInstrTextRun(node: OoxmlNode): boolean {
-  return node.kind === 'run' && node.children.some((child) => child.kind === 'instrText');
-}
-
 /**
  * Keep complex fields balanced ACROSS the whole fragment (review finding 4). A field's
  * `begin` and `end` legally live in different paragraphs — a TOC field spans dozens — so
@@ -328,9 +245,17 @@ function balanceFieldsAcrossBlocks(blocks: readonly OoxmlNode[]): readonly Ooxml
   const scan = (node: OoxmlNode): void => {
     if (node.kind === 'textValue') return;
     if (node.kind === 'run') {
-      const type = fldCharTypeOf(node);
-      if (type) sequence.push({ nodeId: node.id, type });
-      else if (isInstrTextRun(node)) sequence.push({ nodeId: node.id, type: 'instr' });
+      for (const child of node.children) {
+        if (child.kind === 'fldChar') {
+          const type = attributeValueOf(child, 'fldCharType');
+          sequence.push({
+            nodeId: child.id,
+            type: type === 'separate' || type === 'end' ? type : 'begin',
+          });
+        } else if (child.kind === 'instrText') {
+          sequence.push({ nodeId: child.id, type: 'instr' });
+        }
+      }
       return;
     }
     for (const child of node.children) scan(child);
@@ -573,32 +498,59 @@ export function extractFragmentPackage(
   blocks = [...balanceFieldsAcrossBlocks(blocks)];
   blocks = [...balanceBookmarks(blocks)];
 
-  // Referenced note bodies travel; their styles and rels join the closure.
-  const footnoteIds = collectNoteIds(blocks, 'footnoteReference');
-  const endnoteIds = collectNoteIds(blocks, 'endnoteReference');
-  const footnotesPart = footnoteIds.size > 0 ? resolveNotesPart(pkg, 'footnote') : null;
-  const endnotesPart = endnoteIds.size > 0 ? resolveNotesPart(pkg, 'endnote') : null;
+  // Referenced note bodies travel; their styles and rels join the closure. The set
+  // is TRANSITIVE over note bodies — the SAME closure the merge scrubs against, so
+  // the ship set and the scrub set cannot drift.
+  let footnotesPart = resolveNotesPart(pkg, 'footnote');
+  let endnotesPart = resolveNotesPart(pkg, 'endnote');
+  // A definition matches by SHAPE (w:footnote/w:endnote by name), not typed kind:
+  // an out-of-allowlist `w:type` demotes the element to generic while its typed
+  // reference stays, and skipping it here would ship the reference with no body —
+  // the paste-side fail-closed scrub then deletes the citation. Ids match through
+  // `canonicalNoteId`, so a `w:id="07"` definition satisfies a `w:id="7"` reference.
+  const isNoteShaped = (node: OoxmlNode, kind: 'footnote' | 'endnote'): node is OoxmlElement =>
+    isElementNode(node) && node.namespaceUri === WML_NAMESPACE_URI && node.localName === kind;
+  const noteBodyOf = (kind: 'footnote' | 'endnote', id: string): OoxmlNode | null => {
+    const part = kind === 'footnote' ? footnotesPart : endnotesPart;
+    if (!part || !isElementNode(part.root)) return null;
+    for (const child of part.root.children) {
+      if (!isNoteShaped(child, kind)) continue;
+      const childId = attributeValueOf(child, 'id');
+      if (childId !== undefined && canonicalNoteId(childId) === id) return child;
+    }
+    return null;
+  };
+  const referencedNotes = noteReferenceClosure(blocks, noteBodyOf);
+  const footnoteIds = referencedNotes.footnote;
+  const endnoteIds = referencedNotes.endnote;
+  // A kind with no ids ships no part (separators included).
+  if (footnoteIds.size === 0) footnotesPart = null;
+  if (endnoteIds.size === 0) endnotesPart = null;
 
-  const includedNotes = (notesPart: OoxmlPart | null, ids: ReadonlySet<string>): OoxmlElement[] => {
+  const includedNotes = (
+    notesPart: OoxmlPart | null,
+    kind: 'footnote' | 'endnote',
+    ids: ReadonlySet<string>
+  ): OoxmlElement[] => {
     if (!notesPart || !isElementNode(notesPart.root)) return [];
     const notes: OoxmlElement[] = [];
     for (const child of notesPart.root.children) {
-      if (!isElementNode(child) || child.kind !== 'note') continue;
+      if (!isNoteShaped(child, kind)) continue;
       const id = attributeValueOf(child, 'id');
       const type = attributeValueOf(child, 'type');
       if (type === 'separator' || type === 'continuationSeparator') {
         notes.push(child);
         continue;
       }
-      if (id !== undefined && ids.has(id)) {
+      if (id !== undefined && ids.has(canonicalNoteId(id))) {
         const stripped = stripExcluded(child);
         if (stripped && isElementNode(stripped)) notes.push(stripped);
       }
     }
     return notes;
   };
-  const footnotes = includedNotes(footnotesPart, footnoteIds);
-  const endnotes = includedNotes(endnotesPart, endnoteIds);
+  const footnotes = includedNotes(footnotesPart, 'footnote', footnoteIds);
+  const endnotes = includedNotes(endnotesPart, 'endnote', endnoteIds);
   const noteBodies: OoxmlNode[] = [...footnotes, ...endnotes];
 
   // Closure inputs: blocks plus note bodies.
@@ -606,35 +558,38 @@ export function extractFragmentPackage(
   const styleIds = new Set<string>();
   collectStyleIds(closureNodes, styleIds);
   const stylesIndex = stylesIndexOf(pkg, pkg.mainDocumentPart);
-  const styles = styleClosure(stylesIndex, styleIds);
-
   const numIds = new Set<string>();
   collectNumIds(closureNodes, numIds);
-  collectNumIds(styles, numIds);
-  const numbering = numberingClosure(pkg, pkg.mainDocumentPart, numIds);
-  // Numbering styles referenced from the numbering closure travel too.
-  const numberingStyleIds = new Set<string>();
-  collectStyleIds([...numbering.nums, ...numbering.abstracts], numberingStyleIds);
-  for (const node of [...numbering.nums, ...numbering.abstracts]) {
-    walkNodes(node, (current) => {
-      if (current.kind === 'textValue') return;
-      if (
-        (current.localName === 'styleLink' || current.localName === 'numStyleLink') &&
-        current.namespaceUri === WML_NAMESPACE_URI
-      ) {
-        const value = attributeValueOf(current, 'val');
-        if (value) numberingStyleIds.add(value);
-      }
-    });
+  let styles: OoxmlElement[] = [];
+  let numbering = numberingClosure(pkg, pkg.mainDocumentPart, numIds);
+  // Styles can reference numbering, while numbering can link back to styles. Close both
+  // sets to a fixed point so a numStyleLink chain never ships a dangling w:numId.
+  for (;;) {
+    const previousStyleCount = styleIds.size;
+    const previousNumCount = numIds.size;
+    styles = styleClosure(stylesIndex, styleIds);
+    collectNumIds(styles, numIds);
+    numbering = numberingClosure(pkg, pkg.mainDocumentPart, numIds);
+    const numberingNodes = [...numbering.nums, ...numbering.abstracts];
+    collectStyleIds(numberingNodes, styleIds);
+    for (const node of numberingNodes) {
+      walkNodes(node, (current) => {
+        if (current.kind === 'textValue') return;
+        if (
+          (current.localName === 'styleLink' || current.localName === 'numStyleLink') &&
+          current.namespaceUri === WML_NAMESPACE_URI
+        ) {
+          const value = attributeValueOf(current, 'val');
+          if (value) styleIds.add(value);
+        }
+      });
+    }
+    if (styleIds.size === previousStyleCount && numIds.size === previousNumCount) break;
   }
-  const extraStyles = styleClosure(stylesIndex, numberingStyleIds).filter(
-    (style) => !styles.includes(style)
-  );
-  const allStyles = [...styles, ...extraStyles];
 
   // Theme literalization for everything the fragment ships.
   const fonts = themeFontsOf(pkg, pkg.mainDocumentPart);
-  const literalStyles = allStyles.map(
+  const literalStyles = styles.map(
     (style) => literalizeThemeReferences(style, fonts) as OoxmlElement
   );
   const literalDocDefaults = stylesIndex.docDefaults
@@ -750,14 +705,42 @@ export function extractFragmentPackage(
   // ------------------------------------------------------------------
   const entries = new Map<string, Uint8Array>();
   const overrides: Array<readonly [string, string]> = [];
+  // The same parts, kept as trees: the ok result carries them as an assembled
+  // package so the copy path never re-parses its own zip.
+  const fragmentParts = new Map<string, OoxmlPart>();
 
   const addXmlPart = (name: string, contentType: string, root: OoxmlElement): void => {
-    entries.set(name.slice(1), strToU8(serializeOoxmlPart(syntheticPart(name, contentType, root))));
+    const partValue = syntheticPart(name, contentType, root);
+    entries.set(name.slice(1), strToU8(serializeOoxmlPart(partValue)));
     overrides.push([name, contentType]);
+    fragmentParts.set(name, partValue);
   };
 
+  // A kept record RE-HOMES onto the fragment part that will own its rels part: the
+  // source part may live in another folder, and a relative target would then
+  // resolve against the wrong base. Internal targets become absolute (the media
+  // ships under its ORIGINAL canonical name), so both flavours resolve alike.
+  const rehomedRecords = (
+    records: readonly RelationshipRecord[],
+    ownerPart: string
+  ): RelationshipRecord[] =>
+    records.map((record) => {
+      if (record.targetMode === 'External') return { ...record, ownerPart };
+      const resolved = resolveInternalTarget(record.ownerPart, record.rawTarget);
+      return {
+        ...record,
+        ownerPart,
+        rawTarget: resolved.ok ? resolved.partName : record.rawTarget,
+      };
+    });
+
   // Fragment document rels: the used source subset plus the parts this fragment authors.
-  const fragmentDocRels: RelationshipRecord[] = [...keptDocRecords];
+  const fragmentDocRels: RelationshipRecord[] = rehomedRecords(
+    keptDocRecords,
+    '/word/document.xml'
+  );
+  const fragmentFootnoteRels = rehomedRecords(footnoteRels, '/word/footnotes.xml');
+  const fragmentEndnoteRels = rehomedRecords(endnoteRels, '/word/endnotes.xml');
   const usedIds = new Set(fragmentDocRels.map((record) => record.id));
   let relHint = 9001;
   const addFragmentRel = (type: string, target: string): void => {
@@ -806,8 +789,8 @@ export function extractFragmentPackage(
       withChildren(footnotesPart.root as OoxmlElement, literalFootnotes)
     );
     addFragmentRel(FOOTNOTES_REL, 'footnotes.xml');
-    if (footnoteRels.length > 0) {
-      entries.set('word/_rels/footnotes.xml.rels', strToU8(relationshipXml(footnoteRels)));
+    if (fragmentFootnoteRels.length > 0) {
+      entries.set('word/_rels/footnotes.xml.rels', strToU8(relationshipXml(fragmentFootnoteRels)));
     }
   }
   if (endnotesPart && literalEndnotes.length > 0) {
@@ -817,8 +800,8 @@ export function extractFragmentPackage(
       withChildren(endnotesPart.root as OoxmlElement, literalEndnotes)
     );
     addFragmentRel(ENDNOTES_REL, 'endnotes.xml');
-    if (endnoteRels.length > 0) {
-      entries.set('word/_rels/endnotes.xml.rels', strToU8(relationshipXml(endnoteRels)));
+    if (fragmentEndnoteRels.length > 0) {
+      entries.set('word/_rels/endnotes.xml.rels', strToU8(relationshipXml(fragmentEndnoteRels)));
     }
   }
 
@@ -833,22 +816,16 @@ export function extractFragmentPackage(
   }
 
   // rels
+  const rootRelationship: RelationshipRecord = {
+    ownerPart: '/',
+    id: 'rId1',
+    type: OFFICE_DOCUMENT_REL,
+    rawTarget: 'word/document.xml',
+    targetMode: 'Internal',
+    order: 0,
+  };
   entries.set('word/_rels/document.xml.rels', strToU8(relationshipXml(fragmentDocRels)));
-  entries.set(
-    '_rels/.rels',
-    strToU8(
-      relationshipXml([
-        {
-          ownerPart: '/',
-          id: 'rId1',
-          type: OFFICE_DOCUMENT_REL,
-          rawTarget: 'word/document.xml',
-          targetMode: 'Internal',
-          order: 0,
-        },
-      ])
-    )
-  );
+  entries.set('_rels/.rels', strToU8(relationshipXml([rootRelationship])));
 
   // [Content_Types].xml
   const defaults = [
@@ -870,9 +847,60 @@ export function extractFragmentPackage(
     strToU8(`<Types xmlns="${CT_XMLNS}">${defaults}${overrideRows}</Types>`)
   );
 
+  // The in-memory twin of the zip, from the SAME parts, rels and bytes — never a
+  // second parse. Consumers that resolve media look parts up by canonical name.
+  const fragmentRelationships = new Map<string, readonly RelationshipRecord[]>();
+  fragmentRelationships.set('/', [rootRelationship]);
+  fragmentRelationships.set('/word/document.xml', fragmentDocRels);
+  if (fragmentFootnoteRels.length > 0) {
+    fragmentRelationships.set('/word/footnotes.xml', fragmentFootnoteRels);
+  }
+  if (fragmentEndnoteRels.length > 0) {
+    fragmentRelationships.set('/word/endnotes.xml', fragmentEndnoteRels);
+  }
+  const externalTargets: OoxmlExternalTarget[] = [];
+  for (const records of fragmentRelationships.values()) {
+    for (const record of records) {
+      if (record.targetMode !== 'External') continue;
+      externalTargets.push({
+        ownerPart: record.ownerPart,
+        id: record.id,
+        type: record.type,
+        rawTarget: record.rawTarget,
+        // The SAME verdict readOoxmlPackage(bytes) would compute — the twin must
+        // never disagree with a reread of its own zip.
+        sinkSafe: validateExternalTarget(record.rawTarget).ok,
+      });
+    }
+  }
+  const contentTypeDefaults = new Map<string, string>();
+  contentTypeDefaults.set('rels', RELS_CT);
+  contentTypeDefaults.set('xml', 'application/xml');
+  for (const [ext, type] of mediaExtensions) contentTypeDefaults.set(ext, type);
+  const contentTypes: ContentTypeIndex = {
+    defaults: contentTypeDefaults,
+    // Fragment part names are lowercase ASCII constants, so they are their own
+    // case-folded keys.
+    overrides: new Map(overrides),
+  };
+  const fragmentPartBytes = new Map<string, Uint8Array>();
+  for (const [name, bytes] of entries) {
+    fragmentPartBytes.set(name.startsWith('/') ? name : `/${name}`, bytes);
+  }
   return {
     ok: true,
     bytes: writeZip(entries),
+    // partBytes mirrors the reader exactly: EVERY entry uses its canonical
+    // leading-slash name, including [Content_Types].xml and relationship parts.
+    // `writeOoxmlPackage(result.package)` emits a zip the reader accepts.
+    package: Object.freeze({
+      parts: fragmentParts,
+      partBytes: fragmentPartBytes,
+      relationships: fragmentRelationships,
+      externalTargets,
+      contentTypes,
+      mainDocumentPart: '/word/document.xml',
+    }),
     lastMarkCovered: coverage.lastMarkCovered,
     blockCount: blocks.length,
     mediaBytes,

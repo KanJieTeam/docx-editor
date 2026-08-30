@@ -1,4 +1,4 @@
-/* eslint-disable react-hooks/rules-of-hooks -- Vue composables in defineComponent setup */
+ 
 // The Vue twin of `packages/react/test/font-origins.test.tsx`.
 //
 // Same two paths, same promises: an eager origin holds the document until it settles, an

@@ -1,16 +1,41 @@
-/** A CSS length in points, from `px` or `pt` values only. */
+import { clipboardLanguageTag } from './clipboard-html-language.ts';
+import {
+  WORD_CLASS_PARAGRAPH_STYLES,
+  WORD_UNDERLINE_VALUES,
+  type HtmlUnderlineVal,
+} from './clipboard-html-word-elements.ts';
+
+/** A bounded absolute CSS length in points. Word clipboard HTML commonly uses `in`.
+ *  A bare `0` (the one unitless length CSS allows) parses as 0. */
 export function parseCssLengthPt(value: string): number | null {
-  const match = /^(-?\d+(?:\.\d+)?)(px|pt)$/.exec(value.trim().toLowerCase());
+  const trimmed = value.trim().toLowerCase();
+  if (/^-?0+(\.0+)?$/.test(trimmed)) return 0;
+  const match = /^(-?(?:\d+(?:\.\d+)?|\.\d+))(px|pt|in|cm|mm|pc)$/.exec(trimmed);
   if (!match) return null;
   const magnitude = Number.parseFloat(match[1]!);
   if (!Number.isFinite(magnitude)) return null;
-  return match[2] === 'px' ? magnitude * 0.75 : magnitude;
+  switch (match[2]) {
+    case 'px':
+      return magnitude * 0.75;
+    case 'in':
+      return magnitude * 72;
+    case 'cm':
+      return (magnitude * 72) / 2.54;
+    case 'mm':
+      return (magnitude * 72) / 25.4;
+    case 'pc':
+      return magnitude * 12;
+    default:
+      return magnitude;
+  }
 }
 
 /** Whether bare image extents use Word's point-based clipboard convention. */
 export function isWordClipboardHtml(html: string): boolean {
   return (
     html.includes('urn:schemas-microsoft-com:office') ||
+    html.includes('mso-') ||
+    html.includes('<o:p') ||
     html.includes('class=Mso') ||
     html.includes('class="Mso') ||
     html.includes("class='Mso")
@@ -24,30 +49,37 @@ export function wordParagraphStyleId(element: Element, wordHtml: boolean): strin
     if (heading) return `Heading${heading[1]}`;
     const onlineHeading = /^Heading([1-9])$/.exec(className);
     if (onlineHeading) return `Heading${onlineHeading[1]}`;
-    if (className === 'MsoCaption') return 'Caption';
-    if (className === 'MsoTitle') return 'Title';
-    if (className === 'MsoSubtitle') return 'Subtitle';
-    if (className === 'MsoQuote') return 'Quote';
+    // One canonical pair table with the write lane, so the two cannot drift.
+    const paired = WORD_CLASS_PARAGRAPH_STYLES.get(className);
+    if (paired !== undefined) return paired;
   }
+  // Heading TAGS map to styles only in word-processor HTML, where the target
+  // document defines the Heading styles. A plain web <h1> keeps the direct
+  // bold+size fallback instead of referencing a style the host may not carry;
+  // the engine's own writer marks headings with a `Heading<N>` CLASS, which the
+  // loop above maps in every dialect — and marks a DIRECT `w:outlineLvl` heading
+  // `docx-outline`, which must NOT gain a Heading style on the round trip.
+  if (element.classList.contains('docx-outline')) return undefined;
   const headingTag = wordHtml ? /^h([1-6])$/.exec(tagOf(element)) : null;
   return headingTag ? `Heading${headingTag[1]}` : undefined;
 }
 
 export type HtmlParagraphAlign = 'left' | 'center' | 'right' | 'both';
 
-/** Cap on concatenated `<style>` text scanned for Word class `text-align`. */
-export const WORD_STYLE_TEXT_MAX = 32_768;
-const WORD_STYLE_ELEMENT_MAX = 8;
-const WORD_STYLE_RULE_MAX = 256;
+/** Cap on `<style>` text scanned for Word class `text-align`. Generous — a
+ *  corporate template routinely passes 32 KiB, and skipping only part of a
+ *  stylesheet could apply a stale alignment a skipped block overrides. */
+export const WORD_STYLE_TEXT_MAX = 262_144;
+const WORD_STYLE_RULE_MAX = 4_096;
 const WORD_STYLE_SELECTOR_MAX = 256;
 const WORD_STYLE_BLOCK_MAX = 2_048;
 const WORD_STYLE_SELECTOR_LIST_MAX = 8;
 
+// Derived from the shared pair table so the alignment scan covers exactly the
+// classes the style mapping understands (plus MsoNormal, alignment-only).
 const WORD_PARAGRAPH_CLASSES: ReadonlySet<string> = new Set([
-  'MsoTitle',
-  'MsoSubtitle',
-  'MsoCaption',
-  'MsoQuote',
+  'MsoNormal',
+  ...WORD_CLASS_PARAGRAPH_STYLES.keys(),
   ...Array.from({ length: 9 }, (_, index) => `MsoHeading${index + 1}`),
   ...Array.from({ length: 9 }, (_, index) => `Heading${index + 1}`),
 ]);
@@ -190,19 +222,19 @@ export function wordClassAlignmentsFromStyleText(
   return scanWordClassAlignments(css).alignments;
 }
 
-/** `textContent` of inert `<style>` elements, capped, never `innerHTML`. */
+/** `textContent` of inert `<style>` elements, capped, never `innerHTML`.
+ *  FAIL-CLOSED: if any style element is oversized or malformed, the whole scan
+ *  yields nothing — applying half a stylesheet could keep a stale alignment a
+ *  skipped later block overrides. The generous cap keeps that case rare. */
 export function wordClassAlignmentsFromDocument(
   doc: Document
 ): ReadonlyMap<string, HtmlParagraphAlign> {
   const out = new Map<string, HtmlParagraphAlign>();
   const styles = doc.getElementsByTagName('style');
-  if (styles.length > WORD_STYLE_ELEMENT_MAX) return out;
-  let total = 0;
+  if (styles.length > 16) return new Map();
   for (let index = 0; index < styles.length; index += 1) {
     const raw = styles[index]?.textContent ?? '';
     if (raw.length > WORD_STYLE_TEXT_MAX) return new Map();
-    if (total + raw.length > WORD_STYLE_TEXT_MAX) return new Map();
-    total += raw.length;
     const scan = scanWordClassAlignments(raw);
     if (!scan.ok) return new Map();
     for (const [className, jc] of scan.alignments) {
@@ -210,6 +242,28 @@ export function wordClassAlignmentsFromDocument(
     }
   }
   return out;
+}
+
+/** Word head CSS budget for the structured `@list` scan. Style-heavy corporate
+ *  templates routinely pass 32 KiB, and losing the scan there silently degrades
+ *  list fidelity — so this cap is generous and oversized ELEMENTS are skipped,
+ *  never the whole scan. */
+export const WORD_LIST_STYLE_TEXT_MAX = 262_144;
+
+/** Concatenated `textContent` of inert `<style>` elements. An element past the
+ *  budget is SKIPPED (the rest still contribute); the total stays under the cap. */
+export function wordStyleTextFromDocument(
+  doc: Document,
+  maxTotal = WORD_LIST_STYLE_TEXT_MAX
+): string {
+  const styles = doc.getElementsByTagName('style');
+  let total = '';
+  for (let index = 0; index < styles.length && index < 16; index += 1) {
+    const raw = styles[index]?.textContent ?? '';
+    if (raw.length > maxTotal || total.length + raw.length > maxTotal) continue;
+    total += `\n${raw}`;
+  }
+  return total;
 }
 
 /**
@@ -257,10 +311,17 @@ export function tagOf(element: Element): string {
 }
 
 export interface HtmlRunProps {
+  /** Character style id (`w:rStyle`), e.g. `Hyperlink` on pasted links. */
+  rStyle?: string;
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
+  underlineVal?: HtmlUnderlineVal;
+  underlineColor?: string;
   strike?: boolean;
+  doubleStrike?: boolean;
+  caps?: boolean;
+  smallCaps?: boolean;
   vertAlign?: 'subscript' | 'superscript';
   /** RRGGBB uppercase. */
   color?: string;
@@ -270,24 +331,62 @@ export interface HtmlRunProps {
   shdFill?: string;
   szHalfPoints?: number;
   font?: string;
+  charSpacingTwentieths?: number;
+  /** Generic HTML language. The XML emitter selects its script slot. */
+  lang?: string;
+  /** Explicit Word ANSI, East Asian, and bidirectional language slots. */
+  langVal?: string;
+  langEastAsia?: string;
+  langBidi?: string;
+  rtl?: boolean;
+}
+
+export type HtmlTabAlignment = 'left' | 'center' | 'right' | 'decimal' | 'bar';
+export type HtmlTabLeader = 'dot' | 'hyphen' | 'underscore' | 'middleDot' | 'heavy';
+
+export interface HtmlTabStop {
+  readonly val: HtmlTabAlignment;
+  readonly posTwips: number;
+  readonly leader?: HtmlTabLeader;
+}
+
+export type HtmlParagraphBorderEdge = 'top' | 'left' | 'bottom' | 'right';
+
+export interface HtmlParagraphBorder {
+  readonly val: 'single' | 'double' | 'dotted' | 'dashed';
+  readonly szEighthPoints: number;
+  readonly color: string;
 }
 
 export interface HtmlParaProps {
   styleId?: string;
   jc?: HtmlParagraphAlign;
   indLeftTwips?: number;
+  indRightTwips?: number;
   /** Positive → `w:firstLine`, negative → `w:hanging`. */
   firstLineTwips?: number;
-  /** `w:spacing w:line` in 240ths, `w:lineRule="auto"`. */
+  spacingBeforeTwips?: number;
+  spacingAfterTwips?: number;
+  /** `w:spacing w:line`; 240ths for auto, twips for exact and at-least. */
   lineTwentieths?: number;
+  lineRule?: 'auto' | 'exact' | 'atLeast';
+  keepNext?: boolean;
+  keepLines?: boolean;
+  pageBreakBefore?: boolean;
+  widowControl?: boolean;
+  shdFill?: string;
+  tabs?: readonly HtmlTabStop[];
+  borders?: Readonly<Partial<Record<HtmlParagraphBorderEdge, HtmlParagraphBorder>>>;
   numPr?: { readonly numId: string; readonly ilvl: number };
+  bidi?: boolean;
 }
 
 const NAMED_COLORS = new Map(
   (
     'black:000000 white:FFFFFF red:FF0000 green:008000 blue:0000FF yellow:FFFF00 gray:808080 ' +
     'grey:808080 silver:C0C0C0 maroon:800000 navy:000080 purple:800080 orange:FFA500 ' +
-    'aqua:00FFFF cyan:00FFFF fuchsia:FF00FF magenta:FF00FF lime:00FF00 olive:808000'
+    'aqua:00FFFF cyan:00FFFF fuchsia:FF00FF magenta:FF00FF lime:00FF00 olive:808000 ' +
+    'windowtext:000000'
   )
     .split(' ')
     .map((pair) => pair.split(':') as [string, string])
@@ -304,6 +403,7 @@ const HIGHLIGHT_ALIASES: ReadonlyMap<string, string> = new Map([
   ['fuchsia', 'magenta'],
   ['magenta', 'magenta'],
   ['lime', 'green'],
+  ['green', 'green'],
   ['olive', 'darkYellow'],
   ['red', 'red'],
   ['blue', 'blue'],
@@ -322,10 +422,22 @@ const HIGHLIGHT_ALIASES: ReadonlyMap<string, string> = new Map([
 ]);
 
 const UNSAFE_BACKGROUND = /url\s*\(|image\s*\(|image-set\s*\(|element\s*\(|cross-fade\s*\(/i;
+/** Lowercase `text-underline` token → canonical ST_Underline emission value. */
+const UNDERLINE_VALUES = new Map<string, HtmlUnderlineVal>(
+  WORD_UNDERLINE_VALUES.map((value) => [value.toLowerCase(), value])
+);
+
+// The paste walk parses many elements' styles several times (flow gate, paragraph
+// context, table properties); the per-element memo makes that one parse. Keyed
+// weakly on the detached parse's elements, so nothing outlives the document.
+const inlineStyleCache = new WeakMap<Element, ReadonlyMap<string, string>>();
 
 /** Inline style declarations as a Map, so hostile property names never become object keys. */
 export function parseInlineStyle(element: Element): ReadonlyMap<string, string> {
+  const cached = inlineStyleCache.get(element);
+  if (cached !== undefined) return cached;
   const out = new Map<string, string>();
+  inlineStyleCache.set(element, out);
   const raw = element.getAttribute('style');
   if (!raw || raw.length > 8192) return out;
   for (const declaration of raw.split(';')) {
@@ -333,7 +445,13 @@ export function parseInlineStyle(element: Element): ReadonlyMap<string, string> 
     if (colon <= 0) continue;
     const name = declaration.slice(0, colon).trim().toLowerCase();
     const value = declaration.slice(colon + 1).trim();
-    if (name.length > 0 && value.length > 0 && !out.has(name)) out.set(name, value);
+    // CSS is last-declaration-wins; delete-then-set keeps the MAP's iteration
+    // order equal to final declaration order, which cross-property resolution
+    // (`background` vs `background-color`) relies on.
+    if (name.length > 0 && value.length > 0) {
+      out.delete(name);
+      out.set(name, value);
+    }
   }
   return out;
 }
@@ -386,6 +504,173 @@ function clamp(value: number, low: number, high: number): number {
   return Math.min(high, Math.max(low, value));
 }
 
+/**
+ * The winning solid fill of `background`/`background-color` in DECLARATION order:
+ * a later `background` shorthand resets the color (even when it is not a solid
+ * fill, per CSS), while a later `background-color` overrides an earlier shorthand.
+ */
+export function cssBackgroundFill(style: ReadonlyMap<string, string>): string | null {
+  let fill: string | null = null;
+  for (const [name, value] of style) {
+    if (name === 'background') {
+      fill = solidBackground(value);
+    } else if (name === 'background-color') {
+      const lower = value.trim().toLowerCase();
+      // An explicit transparent/none RESETS an earlier shorthand fill.
+      if (lower === 'transparent' || lower === 'none' || lower === 'initial') {
+        fill = null;
+        continue;
+      }
+      const parsed = solidBackground(value);
+      if (parsed !== null) fill = parsed;
+    }
+  }
+  return fill;
+}
+
+const TAB_ALIGNMENTS: ReadonlySet<HtmlTabAlignment> = new Set([
+  'left',
+  'center',
+  'right',
+  'decimal',
+  'bar',
+]);
+
+const TAB_LEADERS: ReadonlyMap<string, HtmlTabLeader> = new Map([
+  ['dotted', 'dot'],
+  ['dot', 'dot'],
+  ['dashed', 'hyphen'],
+  ['hyphen', 'hyphen'],
+  ['lined', 'underscore'],
+  ['underscore', 'underscore'],
+  ['middledot', 'middleDot'],
+  ['heavy', 'heavy'],
+]);
+
+function tabStopsOf(value: string | undefined): readonly HtmlTabStop[] | undefined {
+  if (value === undefined || value.length === 0 || value.length > 512) return undefined;
+  let val: HtmlTabAlignment = 'left';
+  let leader: HtmlTabLeader | undefined;
+  const stops: HtmlTabStop[] = [];
+  for (const raw of value.trim().toLowerCase().split(/\s+/)) {
+    if (TAB_ALIGNMENTS.has(raw as HtmlTabAlignment)) {
+      val = raw as HtmlTabAlignment;
+      continue;
+    }
+    // Word writes `list` on list paragraphs; it behaves as a left tab.
+    if (raw === 'list') {
+      val = 'left';
+      continue;
+    }
+    const mappedLeader = TAB_LEADERS.get(raw);
+    if (mappedLeader !== undefined) {
+      leader = mappedLeader;
+      continue;
+    }
+    const points = parseCssLengthPt(raw);
+    // Tolerate unknown tokens: keep the stops that do parse.
+    if (points === null || points < 0) continue;
+    stops.push({
+      val,
+      posTwips: clamp(Math.round(points * 20), 0, 31_680),
+      ...(leader === undefined ? {} : { leader }),
+    });
+    if (stops.length >= 32) break;
+    val = 'left';
+    leader = undefined;
+  }
+  return stops.length > 0 ? stops : undefined;
+}
+
+const BORDER_STYLES: ReadonlyMap<string, HtmlParagraphBorder['val']> = new Map([
+  ['solid', 'single'],
+  ['single', 'single'],
+  ['double', 'double'],
+  ['dotted', 'dotted'],
+  ['dashed', 'dashed'],
+]);
+
+/** Whitespace-split a border shorthand without shattering `rgb(0, 0, 0)` tokens. */
+export function splitBorderTokens(value: string): readonly string[] {
+  return value
+    .trim()
+    .replace(/\([^)]*\)/g, (group) => group.replace(/\s+/g, ''))
+    .split(/\s+/);
+}
+
+const BORDER_WIDTH_KEYWORD_PT: ReadonlyMap<string, number> = new Map([
+  ['thin', 0.75],
+  ['medium', 2.25],
+  ['thick', 3.75],
+]);
+
+/** Parsed border, `'suppressed'` for an explicit none/hidden (stops fallback), or
+ *  undefined when absent or unparseable. */
+function paragraphBorderOf(
+  value: string | undefined
+): HtmlParagraphBorder | 'suppressed' | undefined {
+  if (value === undefined || value.length === 0 || value.length > 128) return undefined;
+  let val: HtmlParagraphBorder['val'] | undefined;
+  let suppressed = false;
+  let points: number | undefined;
+  let color: string | undefined;
+  for (const token of splitBorderTokens(value)) {
+    const lower = token.toLowerCase();
+    if (lower === 'none' || lower === 'hidden') {
+      suppressed = true;
+      continue;
+    }
+    const borderStyle = BORDER_STYLES.get(lower);
+    if (borderStyle !== undefined) {
+      val = borderStyle;
+      continue;
+    }
+    const length = BORDER_WIDTH_KEYWORD_PT.get(token.toLowerCase()) ?? parseCssLengthPt(token);
+    if (length !== null) {
+      points = length;
+      continue;
+    }
+    const parsedColor = parseCssColor(token);
+    if (parsedColor !== null) {
+      color = parsedColor;
+      continue;
+    }
+    return undefined;
+  }
+  if (suppressed) return 'suppressed';
+  if (val === undefined) return undefined;
+  // A visible style with no width takes Word's default hairline.
+  if (points === undefined) return { val, szEighthPoints: 4, color: color ?? '000000' };
+  if (points <= 0) return 'suppressed';
+  return {
+    val,
+    szEighthPoints: clamp(Math.round(points * 8), 2, 96),
+    color: color ?? '000000',
+  };
+}
+
+/** True for the literal marker span Word emits beside `mso-list` paragraphs.
+ *  Scans the RAW attribute: a crafted duplicate `mso-list` declaration must not
+ *  hide the Ignore token behind last-declaration-wins parsing. */
+export function isMsoListIgnoreMarker(element: Element): boolean {
+  const raw = element.getAttribute('style');
+  if (!raw) return false;
+  return /mso-list\s*:[^;]{0,128}ignore/i.test(raw.slice(0, 8192));
+}
+
+export function applyInlineTag(base: HtmlRunProps, tag: string): HtmlRunProps {
+  if (tag === 'b' || tag === 'strong') return { ...base, bold: true };
+  if (tag === 'i' || tag === 'em') return { ...base, italic: true };
+  if (tag === 'u' || tag === 'ins') return { ...base, underline: true };
+  if (tag === 's' || tag === 'strike' || tag === 'del') return { ...base, strike: true };
+  if (tag === 'sub') return { ...base, vertAlign: 'subscript' };
+  if (tag === 'sup') return { ...base, vertAlign: 'superscript' };
+  if (tag === 'code' || tag === 'tt' || tag === 'kbd' || tag === 'samp') {
+    return { ...base, font: 'Courier New' };
+  }
+  return base;
+}
+
 export function applyRunCss(base: HtmlRunProps, style: ReadonlyMap<string, string>): HtmlRunProps {
   if (style.size === 0) return base;
   const next: HtmlRunProps = { ...base };
@@ -405,19 +690,49 @@ export function applyRunCss(base: HtmlRunProps, style: ReadonlyMap<string, strin
     if (decoration.includes('line-through')) next.strike = true;
     if (decoration.includes('none')) next.underline = next.strike = false;
   }
+  const fontVariant = style.get('font-variant')?.toLowerCase();
+  if (fontVariant !== undefined) {
+    if (fontVariant.includes('small-caps')) next.smallCaps = true;
+    else if (fontVariant.includes('normal') || fontVariant.includes('none')) {
+      next.smallCaps = false;
+    }
+  }
+  const transform = style.get('text-transform')?.trim().toLowerCase();
+  if (transform === 'uppercase') next.caps = true;
+  else if (transform === 'none') next.caps = false;
+  const textUnderline = style.get('text-underline');
+  if (textUnderline !== undefined && textUnderline.length <= 128) {
+    for (const token of textUnderline.trim().split(/\s+/)) {
+      const lower = token.toLowerCase();
+      const canonical = UNDERLINE_VALUES.get(lower);
+      if (canonical !== undefined) {
+        next.underline = true;
+        next.underlineVal = canonical;
+      } else {
+        const parsed = parseCssColor(token);
+        if (parsed !== null) next.underlineColor = parsed;
+      }
+    }
+  }
+  const decorationStyle = style.get('text-decoration-style')?.trim().toLowerCase();
+  // With an underline present, a double decoration style describes the underline.
+  if (decorationStyle === 'double' && next.strike && !next.underline) next.doubleStrike = true;
+  if (next.underline) {
+    if (decorationStyle === 'double') next.underlineVal = 'double';
+    else if (decorationStyle === 'dotted') next.underlineVal = 'dotted';
+    else if (decorationStyle === 'dashed') next.underlineVal = 'dash';
+    else if (decorationStyle === 'wavy') next.underlineVal = 'wave';
+    const decorationColor = parseCssColor(style.get('text-decoration-color') ?? '');
+    if (decorationColor !== null) next.underlineColor = decorationColor;
+  }
   const color = parseCssColor(style.get('color') ?? '');
   if (color) next.color = color;
   const msoHighlight = highlightNameOf(style.get('mso-highlight'));
-  const backgroundRaw = style.get('background');
-  const backgroundColorRaw = style.get('background-color');
   if (msoHighlight) {
     next.highlight = msoHighlight;
     delete next.shdFill;
-  } else if (backgroundRaw !== undefined) {
-    const parsed = solidBackground(backgroundRaw);
-    if (parsed) next.shdFill = parsed;
-  } else if (backgroundColorRaw !== undefined) {
-    const parsed = solidBackground(backgroundColorRaw);
+  } else {
+    const parsed = cssBackgroundFill(style);
     if (parsed) next.shdFill = parsed;
   }
   const pt = parseCssLengthPt(style.get('font-size') ?? '');
@@ -430,9 +745,30 @@ export function applyRunCss(base: HtmlRunProps, style: ReadonlyMap<string, strin
       .replace(/^['"]|['"]$/g, '');
     if (first.length > 0 && first.length <= 64) next.font = first;
   }
-  const vertical = style.get('vertical-align');
+  const letterSpacing = parseCssLengthPt(style.get('letter-spacing') ?? '');
+  if (letterSpacing !== null) {
+    next.charSpacingTwentieths = clamp(Math.round(letterSpacing * 20), -31_680, 31_680);
+  }
+  const vertical = style.get('vertical-align')?.trim().toLowerCase();
   if (vertical === 'sub') next.vertAlign = 'subscript';
   else if (vertical === 'super') next.vertAlign = 'superscript';
+  const ansiLanguage = clipboardLanguageTag(style.get('mso-ansi-language'));
+  const eastAsiaLanguage = clipboardLanguageTag(style.get('mso-fareast-language'));
+  const bidiLanguage = clipboardLanguageTag(style.get('mso-bidi-language'));
+  if (ansiLanguage !== null) next.langVal = ansiLanguage;
+  if (eastAsiaLanguage !== null) next.langEastAsia = eastAsiaLanguage;
+  if (bidiLanguage !== null) next.langBidi = bidiLanguage;
+  if (style.get('direction')?.trim().toLowerCase() === 'rtl') next.rtl = true;
+  return next;
+}
+
+export function applyElementRunProps(base: HtmlRunProps, element: Element): HtmlRunProps {
+  let next = applyRunCss(base, parseInlineStyle(element));
+  const language = clipboardLanguageTag(element.getAttribute('lang'));
+  if (language !== null) next = { ...next, lang: language };
+  if (element.getAttribute('dir')?.trim().toLowerCase() === 'rtl') {
+    next = { ...next, rtl: true };
+  }
   return next;
 }
 
@@ -442,17 +778,108 @@ export function applyParaCss(para: HtmlParaProps, style: ReadonlyMap<string, str
   else if (align === 'center') para.jc = 'center';
   else if (align === 'right' || align === 'end') para.jc = 'right';
   else if (align === 'justify') para.jc = 'both';
-  const marginPt = parseCssLengthPt(style.get('margin-left') ?? '');
-  if (marginPt !== null && marginPt > 0) {
-    para.indLeftTwips = clamp(Math.round(marginPt * 20), 0, 31_680);
+  if (style.get('direction')?.trim().toLowerCase() === 'rtl') para.bidi = true;
+  // Classic Word paragraphs carry the `margin` SHORTHAND ('margin:0in;
+  // margin-bottom:.0001pt'); expand it, then let the longhands override.
+  const shorthand: Record<'top' | 'right' | 'bottom' | 'left', number | null> = {
+    top: null,
+    right: null,
+    bottom: null,
+    left: null,
+  };
+  const marginValue = style.get('margin');
+  if (marginValue !== undefined && marginValue.length <= 128) {
+    const parsed = marginValue
+      .trim()
+      .split(/\s+/)
+      .map((token) => parseCssLengthPt(token));
+    if (parsed.length >= 1 && parsed.length <= 4 && !parsed.some((item) => item === null)) {
+      const [top, right = top, bottom = top, left = right] =
+        parsed.length === 2
+          ? [parsed[0], parsed[1], parsed[0], parsed[1]]
+          : parsed.length === 3
+            ? [parsed[0], parsed[1], parsed[2], parsed[1]]
+            : parsed;
+      shorthand.top = top ?? null;
+      shorthand.right = right ?? null;
+      shorthand.bottom = bottom ?? null;
+      shorthand.left = left ?? null;
+    }
+  }
+  // A zero LEFT margin stays unset only on numbered paragraphs: there,
+  // `margin-left:0` is Word's reset that must not override the numbering
+  // level's indent. Everywhere else an explicit zero is real — it cancels a
+  // style indent, and dropping it would let the style indent reappear on paste.
+  const marginLeftPt = parseCssLengthPt(style.get('margin-left') ?? '') ?? shorthand.left;
+  if (marginLeftPt !== null && (marginLeftPt > 0 || (marginLeftPt === 0 && !para.numPr))) {
+    para.indLeftTwips = clamp(Math.round(marginLeftPt * 20), 0, 31_680);
+  }
+  const marginRightPt = parseCssLengthPt(style.get('margin-right') ?? '') ?? shorthand.right;
+  if (marginRightPt !== null && marginRightPt >= 0) {
+    para.indRightTwips = clamp(Math.round(marginRightPt * 20), 0, 31_680);
   }
   const indentPt = parseCssLengthPt(style.get('text-indent') ?? '');
   if (indentPt !== null && indentPt !== 0) {
     const twips = clamp(Math.round(indentPt * 20), -31_680, 31_680);
     if (twips !== 0) para.firstLineTwips = twips;
   }
-  const lineHeight = style.get('line-height')?.trim() ?? '';
-  if (/^\d+(\.\d+)?$/.test(lineHeight) && Number.parseFloat(lineHeight) > 0) {
-    para.lineTwentieths = clamp(Math.round(240 * Number.parseFloat(lineHeight)), 24, 9600);
+  const beforePt = parseCssLengthPt(style.get('margin-top') ?? '') ?? shorthand.top;
+  if (beforePt !== null && beforePt >= 0) {
+    para.spacingBeforeTwips = clamp(Math.round(beforePt * 20), 0, 31_680);
   }
+  const afterPt = parseCssLengthPt(style.get('margin-bottom') ?? '') ?? shorthand.bottom;
+  if (afterPt !== null && afterPt >= 0) {
+    para.spacingAfterTwips = clamp(Math.round(afterPt * 20), 0, 31_680);
+  }
+  const lineHeight = style.get('line-height')?.trim() ?? '';
+  const lineRule = style.get('mso-line-height-rule')?.trim().toLowerCase();
+  const lineHeightPt = parseCssLengthPt(lineHeight);
+  if (lineHeightPt !== null && lineHeightPt > 0) {
+    para.lineTwentieths = clamp(Math.round(lineHeightPt * 20), 24, 31_680);
+    // Word only writes the rule for `exactly`; a bare absolute line-height is at-least.
+    para.lineRule = lineRule === 'exactly' ? 'exact' : 'atLeast';
+  } else if (/^\d+(\.\d+)?$/.test(lineHeight) && Number.parseFloat(lineHeight) > 0) {
+    para.lineTwentieths = clamp(Math.round(240 * Number.parseFloat(lineHeight)), 24, 9600);
+    para.lineRule = 'auto';
+  } else if (/^\d+(\.\d+)?%$/.test(lineHeight)) {
+    const percentage = Number.parseFloat(lineHeight);
+    if (percentage > 0) {
+      para.lineTwentieths = clamp(Math.round(2.4 * percentage), 24, 9600);
+      para.lineRule = 'auto';
+    }
+  }
+  if (
+    style.get('page-break-before')?.trim().toLowerCase() === 'always' ||
+    style.get('break-before')?.trim().toLowerCase() === 'page'
+  ) {
+    para.pageBreakBefore = true;
+  }
+  if (style.get('page-break-after')?.trim().toLowerCase() === 'avoid') para.keepNext = true;
+  if (style.get('page-break-inside')?.trim().toLowerCase() === 'avoid') para.keepLines = true;
+  if (
+    /^[2-9]\d?$/.test(style.get('widows')?.trim() ?? '') ||
+    /^[2-9]\d?$/.test(style.get('orphans')?.trim() ?? '')
+  ) {
+    para.widowControl = true;
+  }
+  const shading = cssBackgroundFill(style);
+  if (shading) para.shdFill = shading;
+  const tabs = tabStopsOf(style.get('tab-stops'));
+  if (tabs !== undefined) para.tabs = tabs;
+  // Word writes only the shorthand when all four edges match. An explicit
+  // `border-<edge>:none` SUPPRESSES the edge instead of falling back to it.
+  // The fallback collapses per PARSE, not per string: Word's mso-border-alt
+  // vocabulary (thick-thin-*, wave, triple) is mostly outside the parser, and an
+  // unparseable alt must not shadow the parseable CSS shorthand beside it.
+  const commonBorder =
+    paragraphBorderOf(style.get('mso-border-alt')) ?? paragraphBorderOf(style.get('border'));
+  const borders: Partial<Record<HtmlParagraphBorderEdge, HtmlParagraphBorder>> = {};
+  for (const edge of ['top', 'left', 'bottom', 'right'] as const) {
+    const border =
+      paragraphBorderOf(style.get(`mso-border-${edge}-alt`)) ??
+      paragraphBorderOf(style.get(`border-${edge}`)) ??
+      commonBorder;
+    if (border !== undefined && border !== 'suppressed') borders[edge] = border;
+  }
+  if (Object.keys(borders).length > 0) para.borders = borders;
 }

@@ -1,5 +1,3 @@
-// Outbound interop HTML for the rich clipboard (rich-clipboard-fidelity task 3.2, design D6).
-//
 // Serializes a clipboard fragment package — the miniature WordprocessingML OPC zip the copy
 // lane produces — into the visible half of the `text/html` flavour. Structure comes from the
 // canonical tree (headings, real lists, tables, anchors); formatting comes from a small
@@ -11,6 +9,7 @@
 // Every file-derived value is escaped or allowlist-validated before it reaches the output.
 
 import { readOoxmlPackage, type OoxmlPackage } from '../store/package/ooxml-package.ts';
+import { resolveContentType } from '../store/package/content-types.ts';
 import {
   WML_NAMESPACE_URI,
   WP_NAMESPACE_URI,
@@ -22,18 +21,75 @@ import {
 import { relationshipsOf } from '../store/package/package-edit.ts';
 import { resolveInternalTarget } from '../store/package/opc-names.ts';
 import type { RelationshipRecord } from '../store/package/relationships.ts';
-import { sanitizeHref } from '../store/package/sinks.ts';
 import { attributeValueOf } from '../store/store/tree-op-nodes.ts';
+import { clipboardBase64Of } from './clipboard-html-base64.ts';
+import {
+  foldAttribute,
+  lastProperty,
+  paragraphPropertySources,
+  relatedPart,
+  runPropertyLayers,
+  runBooleanOn,
+  runToggleOn,
+  styleChain,
+  styleIndexOf,
+  toggleOn,
+  type RunPropertyLayers,
+  type StyleIndex,
+} from './clipboard-html-write-cascade.ts';
+import {
+  attrOf,
+  cssHexColor,
+  escapeAttr,
+  escapeHtml,
+  findDescendant,
+  isElement,
+  parseIntValue,
+  ptFromTwips,
+  textUnder,
+  wmlChild,
+  wmlVal,
+} from './clipboard-html-write-tree.ts';
+import { clipboardBookmarkName, clipboardHyperlinkTarget } from './clipboard-html-links.ts';
+import { clipboardLanguageTag } from './clipboard-html-language.ts';
+import { htmlNumberingIndexOf, type HtmlNumberingIndex } from './clipboard-html-write-numbering.ts';
+import { noteIdsOf, renderNoteList, shippedNoteIds } from './clipboard-html-write-notes.ts';
+import { renderHtmlTable } from './clipboard-html-write-table.ts';
+import {
+  WORD_HIGHLIGHT_COLORS,
+  WORD_JC_TO_TEXT_ALIGN,
+  wordBorderCss,
+  wordCssFontFamily,
+  wordLineSpacingCss,
+  wordNoteReferenceHtml,
+  wordParagraphClassOf,
+  wordPositionalTabHtml,
+  wordUnderlineCss,
+  type WordNoteBodyContext,
+} from './clipboard-html-word-elements.ts';
 
 const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
-const STYLES_REL = `${R_NS}/styles`;
 const NUMBERING_REL = `${R_NS}/numbering`;
+const FOOTNOTES_REL = `${R_NS}/footnotes`;
+const ENDNOTES_REL = `${R_NS}/endnotes`;
 
-/** `basedOn` chains are file-supplied; a cycle must not become a loop bound. */
-const MAX_STYLE_CHAIN = 16;
 const DEFAULT_MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_IMAGE_BYTES = 8 * 1024 * 1024;
 const EMU_PER_PX = 9525;
+const CLIPBOARD_IMAGE_MIMES: ReadonlyMap<string, string> = new Map([
+  ['image/png', 'image/png'],
+  ['image/jpeg', 'image/jpeg'],
+  ['image/jpg', 'image/jpeg'],
+  ['image/gif', 'image/gif'],
+  ['image/bmp', 'image/bmp'],
+  ['image/x-ms-bmp', 'image/bmp'],
+  ['image/x-bmp', 'image/bmp'],
+  ['image/webp', 'image/webp'],
+  ['image/svg+xml', 'image/svg+xml'],
+  ['image/tiff', 'image/tiff'],
+  ['image/x-emf', 'image/x-emf'],
+  ['image/x-wmf', 'image/x-wmf'],
+]);
 
 export interface InteropHtmlOptions {
   /** Per-image data: URI budget, bytes of source media. Default 2 MiB. */
@@ -42,354 +98,135 @@ export interface InteropHtmlOptions {
   readonly maxTotalImageBytes?: number;
 }
 
-// ---------------------------------------------------------------------------
-// String-builder primitives — the only way file data reaches the output.
-// ---------------------------------------------------------------------------
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-const escapeAttr = escapeHtml;
-
-/** A CSS font-family value from a file-supplied name: allowlist characters, quote if needed. */
-function cssFontFamily(raw: string): string | null {
-  const cleaned = raw.replace(/[^A-Za-z0-9 _.,-]/g, '').trim();
-  if (cleaned.length === 0) return null;
-  return /^[A-Za-z][A-Za-z0-9-]*$/.test(cleaned) ? cleaned : `'${cleaned}'`;
-}
-
-function cssHexColor(raw: string | undefined): string | null {
-  if (raw === undefined || raw.toLowerCase() === 'auto') return null;
-  return /^[0-9A-Fa-f]{6}$/.test(raw) ? `#${raw.toLowerCase()}` : null;
-}
-
-/** Twips → pt, trimmed to two decimals. */
-function ptFromTwips(twips: number): string {
-  return `${Math.round((twips / 20) * 100) / 100}pt`;
-}
-
-function parseIntValue(raw: string | undefined): number | null {
-  if (raw === undefined || !/^-?\d+$/.test(raw)) return null;
-  const parsed = Number(raw);
-  return Number.isSafeInteger(parsed) ? parsed : null;
-}
-
-const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-
-/** Chunked base64 over raw bytes — no `btoa`, works identically in browser and test hosts. */
-function base64Of(bytes: Uint8Array): string {
-  const chunks: string[] = [];
-  let piece = '';
-  for (let i = 0; i < bytes.length; i += 3) {
-    const a = bytes[i]!;
-    const b = i + 1 < bytes.length ? bytes[i + 1]! : 0;
-    const c = i + 2 < bytes.length ? bytes[i + 2]! : 0;
-    piece += BASE64_ALPHABET[a >> 2]! + BASE64_ALPHABET[((a & 3) << 4) | (b >> 4)]!;
-    piece += i + 1 < bytes.length ? BASE64_ALPHABET[((b & 15) << 2) | (c >> 6)]! : '=';
-    piece += i + 2 < bytes.length ? BASE64_ALPHABET[c & 63]! : '=';
-    if (piece.length >= 0x8000) {
-      chunks.push(piece);
-      piece = '';
-    }
-  }
-  chunks.push(piece);
-  return chunks.join('');
-}
-
-// ---------------------------------------------------------------------------
-// Tree helpers
-// ---------------------------------------------------------------------------
-
-function isElement(node: OoxmlNode): node is OoxmlElement {
-  return node.kind !== 'textValue';
-}
-
-function wmlChild(parent: OoxmlNode | null | undefined, localName: string): OoxmlElement | null {
-  if (!parent || parent.kind === 'textValue') return null;
-  for (const child of parent.children) {
-    if (
-      isElement(child) &&
-      child.localName === localName &&
-      child.namespaceUri === WML_NAMESPACE_URI
-    ) {
-      return child;
-    }
-  }
-  return null;
-}
-
-function wmlVal(node: OoxmlElement | null, localName = 'val'): string | undefined {
-  return node ? attributeValueOf(node, localName, WML_NAMESPACE_URI) : undefined;
-}
-
-function attrOf(
-  node: OoxmlElement | null,
-  localName: string,
-  namespaceUri: string
-): string | undefined {
-  return node ? attributeValueOf(node, localName, namespaceUri) : undefined;
-}
-
-function textUnder(node: OoxmlNode): string {
-  if (node.kind === 'textValue') return node.value;
-  let out = '';
-  for (const child of node.children) out += textUnder(child);
-  return out;
-}
-
-/** First descendant element with the expanded name, depth-first. */
-function findDescendant(
-  node: OoxmlNode,
-  localName: string,
-  namespaceUri: string
-): OoxmlElement | null {
-  if (node.kind === 'textValue') return null;
-  if (node.localName === localName && node.namespaceUri === namespaceUri) return node;
-  for (const child of node.children) {
-    const found = findDescendant(child, localName, namespaceUri);
-    if (found) return found;
-  }
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Styles cascade over the fragment's own styles part
-// ---------------------------------------------------------------------------
-
-interface StyleIndex {
-  readonly byId: ReadonlyMap<string, OoxmlElement>;
-  readonly docDefaultsRPr: OoxmlElement | null;
-  readonly docDefaultsPPr: OoxmlElement | null;
-  readonly defaultParagraphStyleId: string | null;
-}
-
-function relatedPart(pkg: OoxmlPackage, relType: string, fallback: string): OoxmlElement | null {
-  for (const record of relationshipsOf(pkg, pkg.mainDocumentPart)) {
-    if (record.type !== relType || record.targetMode === 'External') continue;
-    const resolved = resolveInternalTarget(record.ownerPart, record.rawTarget);
-    if (resolved.ok) {
-      const part = pkg.parts.get(resolved.partName);
-      if (part && isElement(part.root)) return part.root;
-    }
-  }
-  const part = pkg.parts.get(fallback);
-  return part && isElement(part.root) ? part.root : null;
-}
-
-function styleIndexOf(pkg: OoxmlPackage): StyleIndex {
-  const root = relatedPart(pkg, STYLES_REL, '/word/styles.xml');
-  const byId = new Map<string, OoxmlElement>();
-  let docDefaultsRPr: OoxmlElement | null = null;
-  let docDefaultsPPr: OoxmlElement | null = null;
-  let defaultParagraphStyleId: string | null = null;
-  if (!root) return { byId, docDefaultsRPr, docDefaultsPPr, defaultParagraphStyleId };
-  for (const child of root.children) {
-    if (!isElement(child) || child.namespaceUri !== WML_NAMESPACE_URI) continue;
-    if (child.localName === 'docDefaults') {
-      docDefaultsRPr = wmlChild(wmlChild(child, 'rPrDefault'), 'rPr');
-      docDefaultsPPr = wmlChild(wmlChild(child, 'pPrDefault'), 'pPr');
-      continue;
-    }
-    if (child.localName !== 'style') continue;
-    const id = attributeValueOf(child, 'styleId', WML_NAMESPACE_URI);
-    if (!id) continue;
-    byId.set(id, child);
-    const isDefault = attributeValueOf(child, 'default', WML_NAMESPACE_URI);
-    const type = attributeValueOf(child, 'type', WML_NAMESPACE_URI);
-    if ((isDefault === '1' || isDefault === 'true') && type === 'paragraph') {
-      defaultParagraphStyleId = id;
-    }
-  }
-  return { byId, docDefaultsRPr, docDefaultsPPr, defaultParagraphStyleId };
-}
-
-/** The `basedOn` chain, base style FIRST, cycle-capped. */
-function styleChain(index: StyleIndex, styleId: string | undefined): OoxmlElement[] {
-  const chain: OoxmlElement[] = [];
-  const seen = new Set<string>();
-  let current = styleId;
-  while (current && !seen.has(current) && chain.length < MAX_STYLE_CHAIN) {
-    seen.add(current);
-    const style = index.byId.get(current);
-    if (!style) break;
-    chain.unshift(style);
-    current = wmlVal(wmlChild(style, 'basedOn'));
-  }
-  return chain;
-}
-
-/**
- * Ordered property sources, lowest precedence first: docDefaults, the default paragraph
- * style chain, the paragraph style chain, the run style chain, then direct formatting.
- */
-function paragraphPropertySources(index: StyleIndex, ownPPr: OoxmlElement | null): OoxmlElement[] {
-  const sources: OoxmlElement[] = [];
-  if (index.docDefaultsPPr) sources.push(index.docDefaultsPPr);
-  for (const style of styleChain(index, index.defaultParagraphStyleId ?? undefined)) {
-    const pPr = wmlChild(style, 'pPr');
-    if (pPr) sources.push(pPr);
-  }
-  for (const style of styleChain(index, wmlVal(wmlChild(ownPPr, 'pStyle')))) {
-    const pPr = wmlChild(style, 'pPr');
-    if (pPr) sources.push(pPr);
-  }
-  if (ownPPr) sources.push(ownPPr);
-  return sources;
-}
-
-function runPropertySources(
-  index: StyleIndex,
-  paragraphPPr: OoxmlElement | null,
-  ownRPr: OoxmlElement | null
-): OoxmlElement[] {
-  const sources: OoxmlElement[] = [];
-  if (index.docDefaultsRPr) sources.push(index.docDefaultsRPr);
-  for (const style of styleChain(index, index.defaultParagraphStyleId ?? undefined)) {
-    const rPr = wmlChild(style, 'rPr');
-    if (rPr) sources.push(rPr);
-  }
-  for (const style of styleChain(index, wmlVal(wmlChild(paragraphPPr, 'pStyle')))) {
-    const rPr = wmlChild(style, 'rPr');
-    if (rPr) sources.push(rPr);
-  }
-  for (const style of styleChain(index, wmlVal(wmlChild(ownRPr, 'rStyle')))) {
-    const rPr = wmlChild(style, 'rPr');
-    if (rPr) sources.push(rPr);
-  }
-  if (ownRPr) sources.push(ownRPr);
-  return sources;
-}
-
-/** The last source carrying the named property child wins. */
-function lastProperty(sources: readonly OoxmlElement[], localName: string): OoxmlElement | null {
-  let found: OoxmlElement | null = null;
-  for (const source of sources) {
-    const child = wmlChild(source, localName);
-    if (child) found = child;
-  }
-  return found;
-}
-
-/** Fold one attribute across every source carrying the property (per-attribute later-wins). */
-function foldAttribute(
-  sources: readonly OoxmlElement[],
-  propertyName: string,
-  attributeName: string
-): string | undefined {
-  let value: string | undefined;
-  for (const source of sources) {
-    const child = wmlChild(source, propertyName);
-    if (!child) continue;
-    const attr = attributeValueOf(child, attributeName, WML_NAMESPACE_URI);
-    if (attr !== undefined) value = attr;
-  }
-  return value;
-}
-
-/** Toggle semantics: presence with `w:val` absent is on; "0"/"false"/"none" is off. */
-function toggleOn(sources: readonly OoxmlElement[], localName: string): boolean {
-  let state = false;
-  for (const source of sources) {
-    const child = wmlChild(source, localName);
-    if (!child) continue;
-    const val = wmlVal(child);
-    state = !(val === '0' || val === 'false' || val === 'none');
-  }
-  return state;
-}
-
-// ---------------------------------------------------------------------------
-// CSS mapping
-// ---------------------------------------------------------------------------
-
-const HIGHLIGHT_COLORS: Readonly<Record<string, string>> = {
-  yellow: 'yellow',
-  green: 'green',
-  cyan: 'cyan',
-  magenta: 'magenta',
-  blue: 'blue',
-  red: 'red',
-  darkBlue: 'darkblue',
-  darkCyan: 'darkcyan',
-  darkGreen: 'darkgreen',
-  darkMagenta: 'darkmagenta',
-  darkRed: 'darkred',
-  darkYellow: '#808000',
-  darkGray: '#a9a9a9',
-  lightGray: '#d3d3d3',
-  black: 'black',
-  white: 'white',
-};
-
-const JC_TO_TEXT_ALIGN: Readonly<Record<string, string>> = {
-  left: 'left',
-  start: 'left',
-  center: 'center',
-  right: 'right',
-  end: 'right',
-  both: 'justify',
-  distribute: 'justify',
-};
-
 interface RunCss {
   readonly css: string;
   readonly vanish: boolean;
   readonly vertAlign: 'superscript' | 'subscript' | null;
+  readonly lang: string | null;
+  readonly rtl: boolean;
 }
 
-function runCssOf(sources: readonly OoxmlElement[]): RunCss {
-  if (toggleOn(sources, 'vanish')) return { css: '', vanish: true, vertAlign: null };
+function scriptToggleOn(
+  layers: RunPropertyLayers,
+  rtl: boolean,
+  latinName: string,
+  complexName: string
+): boolean {
+  const hasComplex =
+    (layers.direct !== null && wmlChild(layers.direct, complexName) !== null) ||
+    lastProperty(layers.defaults, complexName) !== null ||
+    lastProperty(layers.tableLevel, complexName) !== null ||
+    lastProperty(layers.paragraphLevel, complexName) !== null ||
+    lastProperty(layers.characterLevel, complexName) !== null;
+  const name = rtl && hasComplex ? complexName : latinName;
+  return runToggleOn(layers, name);
+}
+
+function runCssOf(layers: RunPropertyLayers): RunCss {
+  const sources = layers.all;
+  if (runToggleOn(layers, 'vanish')) {
+    return { css: '', vanish: true, vertAlign: null, lang: null, rtl: false };
+  }
   const rules: string[] = [];
 
-  const ascii = foldAttribute(sources, 'rFonts', 'ascii');
-  if (ascii !== undefined) {
-    const family = cssFontFamily(ascii);
+  const rtl = toggleOn(sources, 'rtl');
+  const font =
+    (rtl ? foldAttribute(sources, 'rFonts', 'cs') : undefined) ??
+    foldAttribute(sources, 'rFonts', 'ascii') ??
+    foldAttribute(sources, 'rFonts', 'hAnsi') ??
+    foldAttribute(sources, 'rFonts', 'eastAsia') ??
+    (!rtl ? foldAttribute(sources, 'rFonts', 'cs') : undefined);
+  if (font !== undefined) {
+    const family = wordCssFontFamily(font);
     if (family) rules.push(`font-family:${family}`);
   }
-  const sz = parseIntValue(foldAttribute(sources, 'sz', 'val'));
+  const sz = parseIntValue(
+    (rtl ? foldAttribute(sources, 'szCs', 'val') : undefined) ??
+      foldAttribute(sources, 'sz', 'val') ??
+      (!rtl ? foldAttribute(sources, 'szCs', 'val') : undefined)
+  );
   if (sz !== null && sz > 0) rules.push(`font-size:${Math.round((sz / 2) * 100) / 100}pt`);
-  if (toggleOn(sources, 'b')) rules.push('font-weight:bold');
-  if (toggleOn(sources, 'i')) rules.push('font-style:italic');
+  // An OFF that overrides a style must be EXPLICIT in the CSS: the emitted
+  // paragraph class maps back to w:pStyle on paste, and a silent off would let
+  // the style re-bold what the author deliberately un-bolded.
+  const styleLayers: RunPropertyLayers = { ...layers, direct: null };
+  const styleSources = layers.direct ? sources.slice(0, -1) : sources;
+  if (scriptToggleOn(layers, rtl, 'b', 'bCs')) rules.push('font-weight:bold');
+  else if (scriptToggleOn(styleLayers, rtl, 'b', 'bCs')) rules.push('font-weight:normal');
+  if (scriptToggleOn(layers, rtl, 'i', 'iCs')) rules.push('font-style:italic');
+  else if (scriptToggleOn(styleLayers, rtl, 'i', 'iCs')) rules.push('font-style:normal');
 
   const decorations: string[] = [];
   const underline = lastProperty(sources, 'u');
-  if (underline && wmlVal(underline) !== 'none') decorations.push('underline');
-  if (toggleOn(sources, 'strike')) decorations.push('line-through');
-  if (decorations.length > 0) rules.push(`text-decoration:${decorations.join(' ')}`);
+  const underlineOn = underline !== null && wmlVal(underline) !== 'none';
+  if (underlineOn) decorations.push('underline');
+  // `w:dstrike` is NOT a §17.7.3 toggle: two style levels both set must never XOR off.
+  const doubleStrike = runBooleanOn(layers, 'dstrike');
+  if (runToggleOn(layers, 'strike') || doubleStrike) decorations.push('line-through');
+  if (decorations.length > 0) {
+    rules.push(`text-decoration:${decorations.join(' ')}`);
+  } else {
+    const styleU = lastProperty(styleSources, 'u');
+    if (
+      (styleU !== null && wmlVal(styleU) !== 'none') ||
+      runToggleOn(styleLayers, 'strike') ||
+      runBooleanOn(styleLayers, 'dstrike')
+    ) {
+      rules.push('text-decoration:none');
+    }
+  }
+  // A `w:u w:val="none"` must not emit decoration styling, and the double-strike
+  // marker only travels when no underline claims text-decoration-style.
+  if (underlineOn) rules.push(...wordUnderlineCss(underline));
+  if (doubleStrike && !underlineOn) rules.push('text-decoration-style:double');
 
   const color = cssHexColor(foldAttribute(sources, 'color', 'val'));
   if (color) rules.push(`color:${color}`);
+  const spacing = parseIntValue(foldAttribute(sources, 'spacing', 'val'));
+  if (spacing !== null) rules.push(`letter-spacing:${Math.round((spacing / 20) * 100) / 100}pt`);
 
   // Highlight wins over shading when both are present.
   const highlightVal = wmlVal(lastProperty(sources, 'highlight'));
   const highlight =
-    highlightVal !== undefined && Object.hasOwn(HIGHLIGHT_COLORS, highlightVal)
-      ? HIGHLIGHT_COLORS[highlightVal]
+    highlightVal !== undefined && Object.hasOwn(WORD_HIGHLIGHT_COLORS, highlightVal)
+      ? WORD_HIGHLIGHT_COLORS[highlightVal]
       : undefined;
   const shdFill = cssHexColor(foldAttribute(sources, 'shd', 'fill'));
-  if (highlight) rules.push(`background-color:${highlight}`);
-  else if (shdFill) rules.push(`background-color:${shdFill}`);
+  if (highlight) {
+    // The mso declaration lets a reader reconstruct w:highlight instead of shading.
+    rules.push(`background-color:${highlight}`, `mso-highlight:${highlightVal}`);
+  } else if (shdFill) {
+    rules.push(`background-color:${shdFill}`);
+  }
 
-  if (toggleOn(sources, 'caps')) rules.push('text-transform:uppercase');
-  if (toggleOn(sources, 'smallCaps')) rules.push('font-variant:small-caps');
+  if (runToggleOn(layers, 'caps')) rules.push('text-transform:uppercase');
+  else if (runToggleOn(styleLayers, 'caps')) rules.push('text-transform:none');
+  if (runToggleOn(layers, 'smallCaps')) rules.push('font-variant:small-caps');
+  else if (runToggleOn(styleLayers, 'smallCaps')) rules.push('font-variant:normal');
 
   const vertAlignVal = wmlVal(lastProperty(sources, 'vertAlign'));
   const vertAlign =
     vertAlignVal === 'superscript' || vertAlignVal === 'subscript' ? vertAlignVal : null;
+  // An RTL run's language is the BIDI one; `w:val` names the Latin language. The
+  // read lane routes the tag back into the right w:lang SLOT (bidi for rtl runs,
+  // eastAsia for CJK tags), so the round trip never overwrites w:val with it.
+  const lang = clipboardLanguageTag(
+    (rtl ? foldAttribute(sources, 'lang', 'bidi') : undefined) ??
+      foldAttribute(sources, 'lang', 'val') ??
+      foldAttribute(sources, 'lang', 'bidi') ??
+      foldAttribute(sources, 'lang', 'eastAsia')
+  );
 
-  return { css: rules.join(';'), vanish: false, vertAlign };
+  return { css: rules.join(';'), vanish: false, vertAlign, lang, rtl };
 }
 
 function paragraphCssOf(sources: readonly OoxmlElement[], omitLeftMargin: boolean): string {
   const rules: string[] = [];
   const jc = wmlVal(lastProperty(sources, 'jc'));
   const align =
-    jc !== undefined && Object.hasOwn(JC_TO_TEXT_ALIGN, jc) ? JC_TO_TEXT_ALIGN[jc] : undefined;
+    jc !== undefined && Object.hasOwn(WORD_JC_TO_TEXT_ALIGN, jc)
+      ? WORD_JC_TO_TEXT_ALIGN[jc]
+      : undefined;
   if (align) rules.push(`text-align:${align}`);
 
   const before = parseIntValue(foldAttribute(sources, 'spacing', 'before'));
@@ -398,97 +235,179 @@ function paragraphCssOf(sources: readonly OoxmlElement[], omitLeftMargin: boolea
   if (after !== null && after >= 0) rules.push(`margin-bottom:${ptFromTwips(after)}`);
   const line = parseIntValue(foldAttribute(sources, 'spacing', 'line'));
   const lineRule = foldAttribute(sources, 'spacing', 'lineRule');
-  if (line !== null && line > 0 && (lineRule === undefined || lineRule === 'auto')) {
-    rules.push(`line-height:${Math.round((line / 240) * 100) / 100}`);
-  }
+  rules.push(...wordLineSpacingCss(line, lineRule));
 
-  const left = parseIntValue(
-    foldAttribute(sources, 'ind', 'left') ?? foldAttribute(sources, 'ind', 'start')
-  );
+  // Fold w:ind per SOURCE, like layout/style-cascade.ts: hanging/firstLine are one
+  // mutually exclusive pair per statement, so a direct `w:firstLine="0"` cancels a
+  // style's hanging instead of coexisting with it.
+  let left: number | null = null;
+  let right: number | null = null;
+  let hanging: number | null = null;
+  let firstLine: number | null = null;
+  for (const source of sources) {
+    const ind = wmlChild(source, 'ind');
+    if (!ind) continue;
+    const leftValue = parseIntValue(
+      attrOf(ind, 'left', WML_NAMESPACE_URI) ?? attrOf(ind, 'start', WML_NAMESPACE_URI)
+    );
+    if (leftValue !== null) left = leftValue;
+    const rightValue = parseIntValue(
+      attrOf(ind, 'right', WML_NAMESPACE_URI) ?? attrOf(ind, 'end', WML_NAMESPACE_URI)
+    );
+    if (rightValue !== null) right = rightValue;
+    const hangingValue = parseIntValue(attrOf(ind, 'hanging', WML_NAMESPACE_URI));
+    const firstLineValue = parseIntValue(attrOf(ind, 'firstLine', WML_NAMESPACE_URI));
+    if (hangingValue !== null) {
+      hanging = hangingValue;
+      firstLine = null;
+    } else if (firstLineValue !== null) {
+      firstLine = firstLineValue;
+      hanging = null;
+    }
+  }
   if (!omitLeftMargin && left !== null) rules.push(`margin-left:${ptFromTwips(left)}`);
-  const right = parseIntValue(
-    foldAttribute(sources, 'ind', 'right') ?? foldAttribute(sources, 'ind', 'end')
-  );
   if (right !== null) rules.push(`margin-right:${ptFromTwips(right)}`);
-  const hanging = parseIntValue(foldAttribute(sources, 'ind', 'hanging'));
-  const firstLine = parseIntValue(foldAttribute(sources, 'ind', 'firstLine'));
   if (hanging !== null && hanging !== 0) rules.push(`text-indent:${ptFromTwips(-hanging)}`);
   else if (firstLine !== null && firstLine !== 0)
     rules.push(`text-indent:${ptFromTwips(firstLine)}`);
 
+  const tabs = lastProperty(sources, 'tabs');
+  if (tabs) {
+    const values: string[] = [];
+    for (const child of tabs.children) {
+      if (!isElement(child) || child.localName !== 'tab') continue;
+      const val = wmlVal(child);
+      const pos = parseIntValue(attributeValueOf(child, 'pos', WML_NAMESPACE_URI));
+      if (
+        pos === null ||
+        pos < 0 ||
+        (val !== 'left' &&
+          val !== 'center' &&
+          val !== 'right' &&
+          val !== 'decimal' &&
+          val !== 'bar')
+      ) {
+        continue;
+      }
+      const leader = wmlVal(child, 'leader');
+      // The read side accepts every token here, so the engine's own round trip
+      // keeps middleDot and heavy leaders too.
+      const cssLeader =
+        leader === 'dot'
+          ? 'dotted'
+          : leader === 'hyphen'
+            ? 'dashed'
+            : leader === 'underscore'
+              ? 'lined'
+              : leader === 'middleDot'
+                ? 'middledot'
+                : leader === 'heavy'
+                  ? 'heavy'
+                  : '';
+      values.push(`${val}${cssLeader ? ` ${cssLeader}` : ''} ${ptFromTwips(pos)}`);
+    }
+    if (values.length > 0) rules.push(`tab-stops:${values.join(' ')}`);
+  }
+
+  if (toggleOn(sources, 'pageBreakBefore')) rules.push('page-break-before:always');
+  if (toggleOn(sources, 'keepNext')) rules.push('page-break-after:avoid');
+  if (toggleOn(sources, 'keepLines')) rules.push('page-break-inside:avoid');
+  if (toggleOn(sources, 'widowControl')) rules.push('widows:2', 'orphans:2');
+
+  const shading = cssHexColor(foldAttribute(sources, 'shd', 'fill'));
+  if (shading) rules.push(`background-color:${shading}`);
+  const paragraphBorders = lastProperty(sources, 'pBdr');
+  if (paragraphBorders) {
+    for (const edge of ['top', 'left', 'bottom', 'right'] as const) {
+      const css = wordBorderCss(wmlChild(paragraphBorders, edge));
+      if (css) rules.push(`border-${edge}:${css}`, `mso-border-${edge}-alt:${css}`);
+    }
+  }
+
   return rules.join(';');
 }
 
-// ---------------------------------------------------------------------------
-// Rendering context
-// ---------------------------------------------------------------------------
-
-interface NumberingIndex {
-  /** numId → abstractNumId. */
-  readonly numToAbstract: ReadonlyMap<string, string>;
-  /** abstractNumId → (ilvl → numFmt). */
-  readonly levelFormats: ReadonlyMap<string, ReadonlyMap<string, string>>;
-}
-
-function numberingIndexOf(pkg: OoxmlPackage): NumberingIndex {
-  const numToAbstract = new Map<string, string>();
-  const levelFormats = new Map<string, Map<string, string>>();
-  const root = relatedPart(pkg, NUMBERING_REL, '/word/numbering.xml');
-  if (!root) return { numToAbstract, levelFormats };
-  for (const child of root.children) {
-    if (!isElement(child) || child.namespaceUri !== WML_NAMESPACE_URI) continue;
-    if (child.localName === 'num') {
-      const numId = attributeValueOf(child, 'numId', WML_NAMESPACE_URI);
-      const abstractId = wmlVal(wmlChild(child, 'abstractNumId'));
-      if (numId && abstractId) numToAbstract.set(numId, abstractId);
-      continue;
-    }
-    if (child.localName !== 'abstractNum') continue;
-    const abstractId = attributeValueOf(child, 'abstractNumId', WML_NAMESPACE_URI);
-    if (!abstractId) continue;
-    const levels = new Map<string, string>();
-    for (const lvl of child.children) {
-      if (!isElement(lvl) || lvl.localName !== 'lvl' || lvl.namespaceUri !== WML_NAMESPACE_URI) {
-        continue;
-      }
-      const ilvl = attributeValueOf(lvl, 'ilvl', WML_NAMESPACE_URI);
-      const fmt = wmlVal(wmlChild(lvl, 'numFmt'));
-      if (ilvl !== undefined && fmt !== undefined) levels.set(ilvl, fmt);
-    }
-    levelFormats.set(abstractId, levels);
-  }
-  return { numToAbstract, levelFormats };
-}
-
-interface RenderContext {
+export interface RenderContext {
   readonly pkg: OoxmlPackage;
   readonly styles: StyleIndex;
-  readonly numbering: NumberingIndex;
+  readonly numbering: HtmlNumberingIndex;
   readonly docRels: readonly RelationshipRecord[];
   readonly maxImageBytes: number;
   readonly maxTotalImageBytes: number;
-  /** Running total of media bytes already inlined, shared across the whole document. */
-  imageBytesUsed: number;
+  /** Running total of inlined media bytes — one shared object, so per-note context
+   *  forks (`{ ...ctx }`) keep charging the same whole-document budget. */
+  readonly imageBudget: { used: number };
+  /** `data:` URI per media part — the budget charges each part ONCE, and repeated
+   *  references reuse the encoding. */
+  readonly imageDataUris: Map<string, string | null>;
+  /** Display ordinal per note id, assigned in body reference order. */
+  readonly noteOrdinals: Record<'footnote' | 'endnote', Map<number, number>>;
+  /** Ids with a definition in the package's notes parts; a reference to any other
+   *  id is dangling and renders nothing instead of a dead anchor. */
+  readonly availableNotes: Record<'footnote' | 'endnote', ReadonlySet<number>>;
+  readonly noteBody: WordNoteBodyContext | null;
+  /** Conditional table-style layers for the CURRENT cell (wholeTable first, then
+   *  the cell's condition) — set by the table renderer's per-cell context fork. */
+  readonly tableRPr?: readonly OoxmlElement[];
+  readonly tablePPr?: readonly OoxmlElement[];
 }
 
-/** Complex-field state, one per paragraph. Runs render only when every open field is past
- *  its separator (the cached result); instruction and fldChar runs emit nothing. */
-interface FieldState {
+function noteOrdinalOf(ctx: RenderContext, kind: 'footnote' | 'endnote', id: number): number {
+  const map = ctx.noteOrdinals[kind];
+  const existing = map.get(id);
+  if (existing !== undefined) return existing;
+  const ordinal = map.size + 1;
+  map.set(id, ordinal);
+  return ordinal;
+}
+
+/** Complex-field state, one per block sequence — a field's instruction region can
+ *  cross paragraph marks and tables. Runs render only when every open field is past
+ *  its separator (the cached result); instruction and fldChar runs emit nothing.
+ *  `inert` disarms the machinery when the sequence's fldChars are UNBALANCED (note
+ *  bodies bypass extraction's balance pass): field results then render as plain
+ *  content rather than an open `instr` blanking everything after it. */
+export interface FieldState {
   readonly stack: Array<'instr' | 'result'>;
+  readonly inert: boolean;
 }
 
 const LIST_FMT_TO_CSS: Readonly<Record<string, string>> = {
   decimal: 'decimal',
+  decimalZero: 'decimal-leading-zero',
   lowerLetter: 'lower-alpha',
   upperLetter: 'upper-alpha',
   lowerRoman: 'lower-roman',
   upperRoman: 'upper-roman',
+  // Marker-suppressed levels must NOT fall back to decimal: the receiver would
+  // show numbers the source never displays.
+  none: 'none',
 };
 
 interface ListPlacement {
   readonly numId: string;
+  readonly abstractId: string;
   readonly level: number;
   readonly fmt: string;
+  readonly start: number;
+}
+
+/** The declared format and start of one level of a numbering definition. */
+function listLevelInfo(
+  ctx: RenderContext,
+  numId: string,
+  abstractId: string,
+  level: number
+): { readonly fmt: string; readonly start: number } {
+  const fmt =
+    ctx.numbering.formatOverrides.get(`${numId}:${level}`) ??
+    ctx.numbering.levelFormats.get(abstractId)?.get(String(level)) ??
+    'decimal';
+  const start =
+    ctx.numbering.startOverrides.get(`${numId}:${level}`) ??
+    ctx.numbering.levelStarts.get(abstractId)?.get(String(level)) ??
+    1;
+  return { fmt, start };
 }
 
 function listPlacementOf(
@@ -506,19 +425,46 @@ function listPlacementOf(
     if (level !== undefined) ilvl = level;
   }
   if (numId === undefined || numId === '0') return null;
-  const abstractId = ctx.numbering.numToAbstract.get(numId);
+  let abstractId = ctx.numbering.numToAbstract.get(numId);
   if (abstractId === undefined) return null;
+  // A level-less abstractNum can delegate through w:numStyleLink: the linked
+  // numbering STYLE names the numId whose abstract holds the real levels. Links
+  // can chain; the hop cap matches the layout resolver's.
+  for (let hop = 0; hop < 8; hop += 1) {
+    if ((ctx.numbering.levelFormats.get(abstractId)?.size ?? 0) > 0) break;
+    const linkedStyle = ctx.numbering.styleLinks.get(abstractId);
+    const style = linkedStyle === undefined ? undefined : ctx.styles.byId.get(linkedStyle);
+    const linkedNumId = wmlVal(
+      wmlChild(wmlChild(wmlChild(style ?? null, 'pPr'), 'numPr'), 'numId')
+    );
+    const resolved =
+      linkedNumId === undefined ? undefined : ctx.numbering.numToAbstract.get(linkedNumId);
+    if (resolved === undefined || resolved === abstractId) break;
+    abstractId = resolved;
+  }
   const level = Math.min(Math.max(parseIntValue(ilvl) ?? 0, 0), 8);
-  const fmt = ctx.numbering.levelFormats.get(abstractId)?.get(String(level)) ?? 'decimal';
-  return { numId, level, fmt };
+  const info = listLevelInfo(ctx, numId, abstractId, level);
+  return { numId, abstractId, level, fmt: info.fmt, start: info.start };
 }
 
-// ---------------------------------------------------------------------------
-// Inline content
-// ---------------------------------------------------------------------------
-
-function hasChildOfKind(run: OoxmlElement, kind: string): boolean {
-  return run.children.some((child) => child.kind === kind);
+function clipboardImageMime(ctx: RenderContext, partName: string): string | null {
+  const claimed = resolveContentType(ctx.pkg.contentTypes, partName);
+  if (claimed.ok) {
+    const mime = CLIPBOARD_IMAGE_MIMES.get(claimed.contentType.toLowerCase());
+    if (mime !== undefined) return mime;
+  }
+  const dot = partName.lastIndexOf('.');
+  const extension = dot === -1 ? '' : partName.slice(dot + 1).toLowerCase();
+  if (extension === 'png') return 'image/png';
+  if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg';
+  if (extension === 'gif') return 'image/gif';
+  if (extension === 'bmp') return 'image/bmp';
+  if (extension === 'webp') return 'image/webp';
+  if (extension === 'svg') return 'image/svg+xml';
+  if (extension === 'tif' || extension === 'tiff') return 'image/tiff';
+  if (extension === 'emf') return 'image/x-emf';
+  if (extension === 'wmf') return 'image/x-wmf';
+  return null;
 }
 
 function renderDrawing(ctx: RenderContext, drawing: OoxmlElement): string {
@@ -537,32 +483,68 @@ function renderDrawing(ctx: RenderContext, drawing: OoxmlElement): string {
   if (!record) return '';
   const resolved = resolveInternalTarget(record.ownerPart, record.rawTarget);
   if (!resolved.ok) return '';
-  const bytes = ctx.pkg.partBytes.get(resolved.partName);
+  // The reader keys partBytes by ZIP entry name (no leading slash); tolerate the
+  // canonical spelling too, like the extract lane's own media resolution.
+  const bytes =
+    ctx.pkg.partBytes.get(resolved.partName.replace(/^\//, '')) ??
+    ctx.pkg.partBytes.get(resolved.partName);
   if (!bytes) return '';
 
-  const dot = resolved.partName.lastIndexOf('.');
-  const extension = dot === -1 ? '' : resolved.partName.slice(dot + 1).toLowerCase();
-  const mime =
-    extension === 'png'
-      ? 'image/png'
-      : extension === 'jpg' || extension === 'jpeg'
-        ? 'image/jpeg'
-        : extension === 'gif'
-          ? 'image/gif'
-          : null;
+  const mime = clipboardImageMime(ctx, resolved.partName);
   if (!mime) return '';
+  // The budget charges PER EMITTED REFERENCE — every `<img>` duplicates the data URI
+  // in the output, so a hostile file cannot amplify one part into unbounded output.
+  // The encoding itself is cached and computed once per part.
   if (bytes.byteLength > ctx.maxImageBytes) return '';
-  if (ctx.imageBytesUsed + bytes.byteLength > ctx.maxTotalImageBytes) return '';
-  ctx.imageBytesUsed += bytes.byteLength;
+  if (ctx.imageBudget.used + bytes.byteLength > ctx.maxTotalImageBytes) return '';
+  ctx.imageBudget.used += bytes.byteLength;
+  let dataUri = ctx.imageDataUris.get(resolved.partName);
+  if (dataUri === undefined || dataUri === null) {
+    dataUri = `data:${mime};base64,${clipboardBase64Of(bytes)}`;
+    ctx.imageDataUris.set(resolved.partName, dataUri);
+  }
 
   const extent = findDescendant(inline, 'extent', WP_NAMESPACE_URI);
   const cx = extent ? parseIntValue(attributeValueOf(extent, 'cx', '')) : null;
   const cy = extent ? parseIntValue(attributeValueOf(extent, 'cy', '')) : null;
+  // The pt CSS extents are unit-explicit, so a reader parses them the same way in
+  // both its Word and plain conventions; the px attributes serve plain receivers.
+  const ptOf = (emu: number): number => Math.round((emu / 12_700) * 100) / 100;
   const size =
     cx !== null && cy !== null && cx > 0 && cy > 0
-      ? ` width="${Math.round(cx / EMU_PER_PX)}" height="${Math.round(cy / EMU_PER_PX)}"`
+      ? ` width="${Math.round(cx / EMU_PER_PX)}" height="${Math.round(cy / EMU_PER_PX)}"` +
+        ` style="width:${ptOf(cx)}pt;height:${ptOf(cy)}pt"`
       : '';
-  return `<img src="data:${mime};base64,${base64Of(bytes)}"${size}>`;
+  return `<img src="${dataUri}"${size}>`;
+}
+
+/** Advance the field stack over content that renders nothing (deleted regions).
+ *  Walks EXACTLY what the renderer walks: a fldChar inside a drawing's textbox or
+ *  an SDT's properties never reaches renderRun, so counting it would desync the
+ *  balance probe from the render pass and blank everything after it. */
+function advanceFieldState(node: OoxmlElement, fields: FieldState): void {
+  for (const child of node.children) {
+    if (!isElement(child)) continue;
+    if (child.kind === 'drawing') continue;
+    if (child.kind === 'contentControl') {
+      const content = child.children.find((inner) => inner.kind === 'contentControlContent');
+      if (content && isElement(content)) advanceFieldState(content, fields);
+      continue;
+    }
+    if (child.kind === 'fldChar') {
+      advanceFieldCharacter(child, fields);
+      continue;
+    }
+    advanceFieldState(child, fields);
+  }
+}
+
+function advanceFieldCharacter(node: OoxmlElement, fields: FieldState): void {
+  const type = attributeValueOf(node, 'fldCharType', WML_NAMESPACE_URI);
+  if (type === 'begin') fields.stack.push('instr');
+  else if (type === 'separate' && fields.stack.length > 0) {
+    fields.stack[fields.stack.length - 1] = 'result';
+  } else if (type === 'end') fields.stack.pop();
 }
 
 function renderRun(
@@ -571,39 +553,56 @@ function renderRun(
   paragraphPPr: OoxmlElement | null,
   fields: FieldState
 ): string {
-  // Field machinery first: fldChar runs drive the state and never render themselves.
-  if (hasChildOfKind(run, 'fldChar')) {
-    for (const child of run.children) {
-      if (child.kind !== 'fldChar') continue;
-      const type = attributeValueOf(child, 'fldCharType', WML_NAMESPACE_URI);
-      if (type === 'begin') fields.stack.push('instr');
-      else if (type === 'separate' && fields.stack.length > 0) {
-        fields.stack[fields.stack.length - 1] = 'result';
-      } else if (type === 'end') fields.stack.pop();
-    }
-    return '';
-  }
-  if (hasChildOfKind(run, 'instrText')) return '';
-  if (fields.stack.some((mode) => mode === 'instr')) return '';
-
   const rPr = run.children.find((child) => child.kind === 'runProperties');
-  const sources = runPropertySources(ctx.styles, paragraphPPr, rPr && isElement(rPr) ? rPr : null);
-  const style = runCssOf(sources);
-  if (style.vanish) return '';
+  const layers = runPropertyLayers(
+    ctx.styles,
+    paragraphPPr,
+    rPr && isElement(rPr) ? rPr : null,
+    ctx.tableRPr
+  );
+  const style = runCssOf(layers);
 
   let inner = '';
   for (const child of run.children) {
     if (!isElement(child)) continue;
+    if (child.kind === 'fldChar') {
+      if (!fields.inert) advanceFieldCharacter(child, fields);
+      continue;
+    }
+    if (child.kind === 'instrText') continue;
+    if ((!fields.inert && fields.stack.some((mode) => mode === 'instr')) || style.vanish) continue;
+    const positionalTab = wordPositionalTabHtml(child);
+    if (positionalTab !== '') {
+      inner += positionalTab;
+      continue;
+    }
+    const noteReference = wordNoteReferenceHtml(
+      child,
+      ctx.noteBody,
+      (kind, id) => noteOrdinalOf(ctx, kind, id),
+      (kind, id) => ctx.availableNotes[kind].has(id)
+    );
+    if (noteReference !== '') {
+      inner += noteReference;
+      continue;
+    }
     switch (child.kind) {
       case 'text':
         inner += escapeHtml(textUnder(child));
         break;
       case 'tab':
-        inner += '<span style="white-space:pre">\t</span>';
+        inner += '<span style="white-space:pre;mso-tab-count:1">\t</span>';
         break;
-      case 'hardBreak':
-        inner += '<br>';
+      case 'hardBreak': {
+        const type = attributeValueOf(child, 'type', WML_NAMESPACE_URI);
+        inner += type === 'page' ? '<br style="page-break-before:always">' : '<br>';
         break;
+      }
+      case 'bookmarkStart': {
+        const name = clipboardBookmarkName(attributeValueOf(child, 'name', WML_NAMESPACE_URI));
+        if (name !== null) inner += `<a id="${escapeAttr(name)}"></a>`;
+        break;
+      }
       case 'drawing':
         inner += renderDrawing(ctx, child);
         break;
@@ -615,7 +614,11 @@ function renderRun(
   if (inner === '') return '';
   if (style.vertAlign === 'superscript') inner = `<sup>${inner}</sup>`;
   else if (style.vertAlign === 'subscript') inner = `<sub>${inner}</sub>`;
-  return style.css === '' ? inner : `<span style="${escapeAttr(style.css)}">${inner}</span>`;
+  const attributes =
+    `${style.lang === null ? '' : ` lang="${style.lang}"`}` +
+    `${style.rtl ? ' dir="rtl"' : ''}` +
+    `${style.css === '' ? '' : ` style="${escapeAttr(style.css)}"`}`;
+  return attributes === '' ? inner : `<span${attributes}>${inner}</span>`;
 }
 
 function renderInline(
@@ -635,13 +638,27 @@ function renderInline(
         const inner = renderInline(ctx, child.children, paragraphPPr, fields);
         if (inner === '') break;
         const relId = attributeValueOf(child, 'id', RELATIONSHIPS_NAMESPACE_URI);
-        const record = relId
-          ? ctx.docRels.find((r) => r.id === relId && r.targetMode === 'External')
-          : undefined;
-        const href = record ? sanitizeHref(record.rawTarget) : null;
-        // Internal `w:anchor` links have no target in a clipboard context; a refused
-        // external target emits its content without the anchor.
-        out += href?.ok ? `<a href="${escapeAttr(href.href)}">${inner}</a>` : inner;
+        // Match by id alone: producers vary the relationship Type string, and the
+        // external/fragment gate below is what actually protects the output.
+        const record = relId ? ctx.docRels.find((r) => r.id === relId) : undefined;
+        // An internal-mode rel target is a part path, not a URL — only its fragment
+        // form (a same-document anchor) survives into the interop flavour.
+        const rawTarget =
+          record === undefined
+            ? undefined
+            : record.targetMode === 'External' || record.rawTarget.startsWith('#')
+              ? record.rawTarget
+              : undefined;
+        const target = clipboardHyperlinkTarget(
+          rawTarget,
+          attributeValueOf(child, 'anchor', WML_NAMESPACE_URI)
+        );
+        out += target !== null ? `<a href="${escapeAttr(target)}">${inner}</a>` : inner;
+        break;
+      }
+      case 'bookmarkStart': {
+        const name = clipboardBookmarkName(attributeValueOf(child, 'name', WML_NAMESPACE_URI));
+        if (name !== null) out += `<a id="${escapeAttr(name)}"></a>`;
         break;
       }
       case 'fldSimple':
@@ -659,9 +676,12 @@ function renderInline(
       case 'revisionMoveTo':
         out += renderInline(ctx, child.children, paragraphPPr, fields);
         break;
-      // Deleted and moved-away content never travels to external apps.
+      // Deleted and moved-away content never travels to external apps — but its
+      // fldChars still terminate fields, or an unbalanced 'instr' state would blank
+      // every later paragraph.
       case 'revisionDelete':
       case 'revisionMoveFrom':
+        advanceFieldState(child, fields);
         break;
       case 'generic':
         out += renderInline(ctx, child.children, paragraphPPr, fields);
@@ -673,15 +693,37 @@ function renderInline(
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Blocks
-// ---------------------------------------------------------------------------
-
-function headingLevelOf(ctx: RenderContext, ownPPr: OoxmlElement | null): number | null {
-  for (const style of styleChain(ctx.styles, wmlVal(wmlChild(ownPPr, 'pStyle')))) {
-    const id = attributeValueOf(style, 'styleId', WML_NAMESPACE_URI);
+/** Heading level plus WHY: only a real Heading style earns the mappable class. */
+function headingLevelOf(
+  ctx: RenderContext,
+  ownPPr: OoxmlElement | null
+): { readonly level: number; readonly fromStyle: boolean } | null {
+  const styleId = wmlVal(wmlChild(ownPPr, 'pStyle'));
+  const chain = styleChain(ctx.styles, styleId, 'paragraph');
+  for (let index = chain.length - 1; index >= 0; index -= 1) {
+    const id = attributeValueOf(chain[index]!, 'styleId', WML_NAMESPACE_URI);
     const match = id ? /^Heading([1-6])$/.exec(id) : null;
-    if (match) return Number(match[1]);
+    if (match) return { level: Number(match[1]), fromStyle: true };
+  }
+  // An outline level promotes to <h1>-<h6> only as DIRECT formatting on an unstyled
+  // paragraph: a custom style, Normal, or docDefaults setting w:outlineLvl for the
+  // TOC must not turn body text into HeadingN on a round trip.
+  if (styleId === undefined) {
+    const outline = parseIntValue(wmlVal(wmlChild(ownPPr, 'outlineLvl')));
+    if (outline !== null && outline >= 0 && outline <= 5) {
+      return { level: outline + 1, fromStyle: false };
+    }
+  }
+  return null;
+}
+
+function paragraphClassOf(ctx: RenderContext, ownPPr: OoxmlElement | null): string | null {
+  const chain = styleChain(ctx.styles, wmlVal(wmlChild(ownPPr, 'pStyle')), 'paragraph');
+  for (let index = chain.length - 1; index >= 0; index -= 1) {
+    const found = wordParagraphClassOf(
+      attributeValueOf(chain[index]!, 'styleId', WML_NAMESPACE_URI)
+    );
+    if (found !== null) return found;
   }
   return null;
 }
@@ -689,139 +731,77 @@ function headingLevelOf(ctx: RenderContext, ownPPr: OoxmlElement | null): number
 function renderParagraph(
   ctx: RenderContext,
   paragraph: OoxmlElement,
-  options: { readonly asListItem: boolean }
+  options: { readonly asListItem: boolean },
+  // The field state spans paragraphs: a complex field's instruction region can
+  // cross a paragraph mark, and its content must stay out of the flavour.
+  fields: FieldState
 ): string {
   const pPrNode = paragraph.children.find((child) => child.kind === 'paragraphProperties');
   const pPr = pPrNode && isElement(pPrNode) ? pPrNode : null;
-  const sources = paragraphPropertySources(ctx.styles, pPr);
+  const sources = paragraphPropertySources(ctx.styles, pPr, ctx.tablePPr);
   const css = paragraphCssOf(sources, options.asListItem);
-  const fields: FieldState = { stack: [] };
   const inner = renderInline(ctx, paragraph.children, pPr, fields);
   const styleAttr = css === '' ? '' : ` style="${escapeAttr(css)}"`;
-
-  if (options.asListItem) return `<li${styleAttr}>${inner}</li>`;
+  const dirAttr = toggleOn(sources, 'bidi') ? ' dir="rtl"' : '';
+  const wordClass = paragraphClassOf(ctx, pPr);
+  const classAttr = wordClass === null ? '' : ` class="${wordClass}"`;
   const heading = headingLevelOf(ctx, pPr);
-  const tag = heading === null ? 'p' : `h${heading}`;
-  return `<${tag}${styleAttr}>${inner}</${tag}>`;
-}
 
-// --- tables ---
-
-interface CellPlacement {
-  readonly cell: OoxmlElement;
-  readonly startColumn: number;
-  readonly span: number;
-  readonly vMerge: 'restart' | 'continue' | null;
-}
-
-function cellPlacementsOf(rows: readonly OoxmlElement[]): CellPlacement[][] {
-  return rows.map((row) => {
-    const placements: CellPlacement[] = [];
-    let column = 0;
-    for (const child of row.children) {
-      if (!isElement(child) || child.kind !== 'tableCell') continue;
-      const tcPr = wmlChild(child, 'tcPr');
-      const span = Math.max(parseIntValue(wmlVal(wmlChild(tcPr, 'gridSpan'))) ?? 1, 1);
-      const vMergeNode = wmlChild(tcPr, 'vMerge');
-      const vMerge =
-        vMergeNode === null ? null : wmlVal(vMergeNode) === 'restart' ? 'restart' : 'continue';
-      placements.push({ cell: child, startColumn: column, span, vMerge });
-      column += span;
-    }
-    return placements;
-  });
-}
-
-function borderCss(edge: OoxmlElement | null): string | null {
-  if (!edge) return null;
-  const val = wmlVal(edge);
-  if (val === undefined || val === 'nil' || val === 'none') return null;
-  const color = cssHexColor(attributeValueOf(edge, 'color', WML_NAMESPACE_URI)) ?? '#000000';
-  return `1pt solid ${color}`;
-}
-
-function cellCss(tcPr: OoxmlElement | null, tblBorders: OoxmlElement | null): string {
-  const rules: string[] = [];
-  const tcBorders = wmlChild(tcPr, 'tcBorders');
-  for (const edge of ['top', 'left', 'bottom', 'right'] as const) {
-    const border = borderCss(wmlChild(tcBorders, edge)) ?? borderCss(wmlChild(tblBorders, edge));
-    if (border) rules.push(`border-${edge}:${border}`);
+  if (options.asListItem) {
+    const listClass = heading?.fromStyle === true ? ` class="Heading${heading.level}"` : classAttr;
+    return `<li${listClass}${dirAttr}${styleAttr}>${inner}</li>`;
   }
-  const fill = cssHexColor(attrOf(wmlChild(tcPr, 'shd'), 'fill', WML_NAMESPACE_URI));
-  if (fill) rules.push(`background-color:${fill}`);
-  const vAlign = wmlVal(wmlChild(tcPr, 'vAlign'));
-  if (vAlign === 'center') rules.push('vertical-align:middle');
-  else if (vAlign === 'bottom') rules.push('vertical-align:bottom');
-  else if (vAlign === 'top') rules.push('vertical-align:top');
-  const tcW = wmlChild(tcPr, 'tcW');
-  const widthType = attrOf(tcW, 'type', WML_NAMESPACE_URI);
-  const width = parseIntValue(attrOf(tcW, 'w', WML_NAMESPACE_URI));
-  if (width !== null && width > 0 && (widthType === undefined || widthType === 'dxa')) {
-    rules.push(`width:${ptFromTwips(width)}`);
-  }
-  return rules.join(';');
+  const tag = heading === null ? 'p' : `h${heading.level}`;
+  // The `Heading<N>` class is the marker the read lane maps back to the STYLE in
+  // every dialect — earned only by a real Heading style. A direct outline level
+  // gets the explicit `docx-outline` class instead, which the read lane's
+  // heading-TAG fallback recognizes and skips, so plain body text does not
+  // acquire a Heading style on the round trip.
+  const headingAttr =
+    heading === null
+      ? classAttr
+      : heading.fromStyle
+        ? ` class="Heading${heading.level}"`
+        : ' class="docx-outline"';
+  return `<${tag}${headingAttr}${dirAttr}${styleAttr}>${inner}</${tag}>`;
 }
 
-function renderTable(ctx: RenderContext, table: OoxmlElement): string {
-  const tblPr = table.children.find((child) => child.kind === 'tableProperties');
-  // Table-level borders: the style chain's tblBorders, overridden by the table's own.
-  let tblBorders: OoxmlElement | null = null;
-  for (const style of styleChain(
-    ctx.styles,
-    wmlVal(wmlChild(tblPr && isElement(tblPr) ? tblPr : null, 'tblStyle'))
-  )) {
-    const styleBorders = wmlChild(wmlChild(style, 'tblPr'), 'tblBorders');
-    if (styleBorders) tblBorders = styleBorders;
-  }
-  const ownBorders = wmlChild(tblPr && isElement(tblPr) ? tblPr : null, 'tblBorders');
-  if (ownBorders) tblBorders = ownBorders;
-
-  const rows: OoxmlElement[] = [];
-  for (const child of table.children) {
-    if (isElement(child) && child.kind === 'tableRow') rows.push(child);
-  }
-  const placements = cellPlacementsOf(rows);
-
-  let out = '<table style="border-collapse:collapse">';
-  placements.forEach((rowCells, rowIndex) => {
-    out += '<tr>';
-    for (const placement of rowCells) {
-      // A vMerge continuation emits nothing; the restart above spans it.
-      if (placement.vMerge === 'continue') continue;
-      let rowSpan = 1;
-      if (placement.vMerge === 'restart') {
-        for (let below = rowIndex + 1; below < placements.length; below += 1) {
-          const continuation = placements[below]!.find(
-            (candidate) =>
-              candidate.startColumn === placement.startColumn && candidate.vMerge === 'continue'
-          );
-          if (!continuation) break;
-          rowSpan += 1;
-        }
-      }
-      const tcPr = wmlChild(placement.cell, 'tcPr');
-      const css = cellCss(tcPr, tblBorders);
-      const attrs =
-        (placement.span > 1 ? ` colspan="${placement.span}"` : '') +
-        (rowSpan > 1 ? ` rowspan="${rowSpan}"` : '') +
-        (css === '' ? '' : ` style="${escapeAttr(css)}"`);
-      out += `<td${attrs}>${renderBlocks(ctx, placement.cell.children)}</td>`;
-    }
-    out += '</tr>';
-  });
-  return `${out}</table>`;
-}
-
-// --- block sequence with list grouping ---
+/** Injected into the extracted table renderer, so the runtime dependency stays one-way. */
+const tableRenderDeps = {
+  renderBlocks: (ctx: RenderContext, children: readonly OoxmlNode[], shared?: FieldState) =>
+    renderBlocks(ctx, children, shared),
+  advanceFieldState,
+};
 
 interface OpenList {
   readonly tag: 'ol' | 'ul';
   readonly numId: string;
+  readonly abstractId: string;
 }
 
-function renderBlocks(ctx: RenderContext, children: readonly OoxmlNode[]): string {
+function renderBlocks(
+  ctx: RenderContext,
+  children: readonly OoxmlNode[],
+  // A field can span from a body paragraph into a table cell; the table's cells
+  // continue the CALLER's field state instead of resetting it.
+  sharedFields?: FieldState
+): string {
   let out = '';
   const openLists: OpenList[] = [];
+  let listBaseLevel: number | null = null;
+  /** Items already emitted per `numId:level`, so a reopened list resumes numbering. */
+  const listProgress = new Map<string, number>();
+  let fields = sharedFields;
+  if (fields === undefined) {
+    // Probe balance first: a sequence with unbalanced fldChars (note bodies bypass
+    // extraction's balance pass) renders with the field machinery disarmed, so an
+    // open `instr` cannot blank everything after it.
+    const probe: FieldState = { stack: [], inert: false };
+    for (const child of children) {
+      if (isElement(child)) advanceFieldState(child, probe);
+    }
+    fields = { stack: [], inert: probe.stack.length > 0 };
+  }
 
   const closeTopList = (): void => {
     const top = openLists.pop();
@@ -829,28 +809,70 @@ function renderBlocks(ctx: RenderContext, children: readonly OoxmlNode[]): strin
   };
   const closeAllLists = (): void => {
     while (openLists.length > 0) closeTopList();
+    listBaseLevel = null;
   };
 
   // A deeper level opens its nested list as a direct child of the enclosing list — the
   // shape every word-processor receiver accepts — and each `<li>` closes immediately.
   const emitListItem = (paragraph: OoxmlElement, placement: ListPlacement): void => {
-    const depth = placement.level + 1;
+    if (listBaseLevel !== null && placement.level < listBaseLevel) closeAllLists();
+    // A DIFFERENT list closes every open level, not just the top: a new list
+    // starting at ilvl >= 1 must not nest inside the previous list's outer
+    // wrapper, or the read lane hands its items the old list's identity. "Same
+    // list" compares the ABSTRACT id — Word's per-level style pattern (List
+    // Number / List Number 2) uses one numId per level over one shared abstract,
+    // and those levels must stay nested. A same-abstract numId switch at equal
+    // depth is a restarted sibling list and closes only its own level.
+    while (
+      openLists.length > 0 &&
+      openLists[openLists.length - 1]!.abstractId !== placement.abstractId
+    ) {
+      closeTopList();
+    }
+    if (openLists.length === 0) listBaseLevel = placement.level;
+    const baseLevel = listBaseLevel ?? placement.level;
+    const depth = placement.level - baseLevel + 1;
     while (openLists.length > depth) closeTopList();
     if (openLists.length === depth && openLists[depth - 1]!.numId !== placement.numId) {
       closeTopList();
     }
     while (openLists.length < depth) {
-      const tag: 'ol' | 'ul' = placement.fmt === 'bullet' ? 'ul' : 'ol';
+      // Each opened level uses ITS OWN declared format, and a reopened list resumes
+      // from the running counter so an interrupting paragraph does not renumber it.
+      const levelIndex = baseLevel + openLists.length;
+      const info = listLevelInfo(ctx, placement.numId, placement.abstractId, levelIndex);
+      const consumed =
+        listProgress.get(`${placement.abstractId}:${placement.numId}:${levelIndex}`) ?? 0;
+      const startValue = info.start + consumed;
+      const tag: 'ol' | 'ul' = info.fmt === 'bullet' ? 'ul' : 'ol';
       const listType =
         tag === 'ol'
-          ? Object.hasOwn(LIST_FMT_TO_CSS, placement.fmt)
-            ? LIST_FMT_TO_CSS[placement.fmt]!
+          ? Object.hasOwn(LIST_FMT_TO_CSS, info.fmt)
+            ? LIST_FMT_TO_CSS[info.fmt]!
             : 'decimal'
           : null;
-      out += listType ? `<${tag} style="list-style-type:${escapeAttr(listType)}">` : `<${tag}>`;
-      openLists.push({ tag, numId: placement.numId });
+      const start = tag === 'ol' && startValue !== 1 ? ` start="${startValue}"` : '';
+      out += listType
+        ? `<${tag}${start} style="list-style-type:${escapeAttr(listType)}">`
+        : `<${tag}>`;
+      openLists.push({ tag, numId: placement.numId, abstractId: placement.abstractId });
     }
-    out += renderParagraph(ctx, paragraph, { asListItem: true });
+    const progressKey = `${placement.abstractId}:${placement.numId}:${placement.level}`;
+    listProgress.set(progressKey, (listProgress.get(progressKey) ?? 0) + 1);
+    // Word restarts sub-levels after each parent item — across the whole ABSTRACT,
+    // so the per-level-numId pattern (List Number / List Number 2) restarts its
+    // sublists too, not only keys under the current item's numId. The level is
+    // the digits after the LAST separator, so a file-supplied id containing ':'
+    // cannot confuse the match.
+    const prefix = `${placement.abstractId}:`;
+    for (const key of listProgress.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      const levelPart = key.slice(key.lastIndexOf(':') + 1);
+      if (/^\d+$/.test(levelPart) && Number(levelPart) > placement.level) {
+        listProgress.delete(key);
+      }
+    }
+    out += renderParagraph(ctx, paragraph, { asListItem: true }, fields);
   };
 
   const visit = (nodes: readonly OoxmlNode[]): void => {
@@ -865,13 +887,13 @@ function renderBlocks(ctx: RenderContext, children: readonly OoxmlNode[]): strin
             emitListItem(child, placement);
           } else {
             closeAllLists();
-            out += renderParagraph(ctx, child, { asListItem: false });
+            out += renderParagraph(ctx, child, { asListItem: false }, fields);
           }
           break;
         }
         case 'table':
           closeAllLists();
-          out += renderTable(ctx, child);
+          out += renderHtmlTable(ctx, child, fields, tableRenderDeps);
           break;
         case 'contentControl': {
           const content = child.children.find((inner) => inner.kind === 'contentControlContent');
@@ -882,7 +904,17 @@ function renderBlocks(ctx: RenderContext, children: readonly OoxmlNode[]): strin
           // Unknown wrappers may hide block content; raw markup itself never travels.
           visit(child.children);
           break;
+        case 'bookmarkStart': {
+          // Without its anchor, `w:anchor` hyperlinks in the same copy dangle.
+          const name = clipboardBookmarkName(attributeValueOf(child, 'name', WML_NAMESPACE_URI));
+          if (name !== null) out += `<a id="${escapeAttr(name)}"></a>`;
+          break;
+        }
         default:
+          // A skipped block-level child (a bare run under a generic wrapper) still
+          // advances the field state the balance probe counted, or an open 'instr'
+          // the probe saw closed blanks every later paragraph.
+          if (!fields.inert) advanceFieldState(child, fields);
           break;
       }
     }
@@ -891,10 +923,6 @@ function renderBlocks(ctx: RenderContext, children: readonly OoxmlNode[]): strin
   closeAllLists();
   return out;
 }
-
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
 
 /**
  * Interop HTML for the fragment package's document body. Returns '' when the package
@@ -913,10 +941,8 @@ export function interopHtmlFromFragment(
   return interopHtmlFromFragmentPackage(read.package, options);
 }
 
-/**
- * The same writer over an ALREADY-READ fragment package, so a caller that just built or
- * read the package (the copy path) does not pay a second inflate + parse.
- */
+/** The same writer over an ALREADY-ASSEMBLED fragment package (the copy path),
+ *  so building the flavour never pays a second inflate + parse. */
 export function interopHtmlFromFragmentPackage(
   pkg: OoxmlPackage,
   options?: InteropHtmlOptions
@@ -926,14 +952,35 @@ export function interopHtmlFromFragmentPackage(
   const body = documentPart.root.children.find((child) => child.kind === 'body');
   if (!body || !isElement(body)) return '';
 
+  const footnotesRoot = relatedPart(pkg, FOOTNOTES_REL, '/word/footnotes.xml');
+  const endnotesRoot = relatedPart(pkg, ENDNOTES_REL, '/word/endnotes.xml');
   const ctx: RenderContext = {
     pkg,
     styles: styleIndexOf(pkg),
-    numbering: numberingIndexOf(pkg),
+    numbering: htmlNumberingIndexOf(relatedPart(pkg, NUMBERING_REL, '/word/numbering.xml')),
     docRels: relationshipsOf(pkg, pkg.mainDocumentPart),
     maxImageBytes: options?.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES,
     maxTotalImageBytes: options?.maxTotalImageBytes ?? DEFAULT_MAX_TOTAL_IMAGE_BYTES,
-    imageBytesUsed: 0,
+    imageBudget: { used: 0 },
+    imageDataUris: new Map(),
+    noteOrdinals: { footnote: new Map(), endnote: new Map() },
+    availableNotes: {
+      footnote: noteIdsOf(footnotesRoot, 'footnote'),
+      endnote: noteIdsOf(endnotesRoot, 'endnote'),
+    },
+    noteBody: null,
   };
-  return renderBlocks(ctx, body.children);
+  // The body renders FIRST (assigning reference ordinals), then the shipped set
+  // closes over cross-note references before the note lists render.
+  const bodyHtml = renderBlocks(ctx, body.children);
+  const shipped = shippedNoteIds(
+    ctx,
+    { footnote: footnotesRoot, endnote: endnotesRoot },
+    advanceFieldState
+  );
+  return (
+    bodyHtml +
+    renderNoteList(ctx, 'footnote', footnotesRoot, shipped.footnote, renderBlocks) +
+    renderNoteList(ctx, 'endnote', endnotesRoot, shipped.endnote, renderBlocks)
+  );
 }

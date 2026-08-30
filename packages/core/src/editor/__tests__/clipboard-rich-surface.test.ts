@@ -21,6 +21,8 @@ const WML = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const CT = 'http://schemas.openxmlformats.org/package/2006/content-types';
 const REL = 'http://schemas.openxmlformats.org/package/2006/relationships';
 const OD = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument';
+const IMAGE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image';
+const PIC = 'http://schemas.openxmlformats.org/drawingml/2006/picture';
 
 afterEach(() => {
   document.getSelection()?.removeAllRanges();
@@ -36,6 +38,37 @@ function copyRichFlavours(): { text: string; html: string | null } {
   putCaret(source.surface, 0);
   source.surface.selectAll();
   return source.surface.copyFlavours();
+}
+
+function imageOnlyDocx(): Uint8Array {
+  return zipSync({
+    '[Content_Types].xml': strToU8(
+      `<Types xmlns="${CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+        '<Default Extension="png" ContentType="image/png"/>' +
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'
+    ),
+    '_rels/.rels': strToU8(
+      `<Relationships xmlns="${REL}"><Relationship Id="rId1" Type="${OD}" Target="word/document.xml"/></Relationships>`
+    ),
+    'word/_rels/document.xml.rels': strToU8(
+      `<Relationships xmlns="${REL}"><Relationship Id="rIdImage" Type="${IMAGE}" Target="media/image1.png"/></Relationships>`
+    ),
+    'word/document.xml': strToU8(
+      `<w:document xmlns:w="${WML}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ` +
+        `xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" ` +
+        `xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="${PIC}"><w:body>` +
+        '<w:p><w:r><w:drawing><wp:inline><wp:extent cx="9525" cy="9525"/>' +
+        `<a:graphic><a:graphicData uri="${PIC}"><pic:pic><pic:blipFill>` +
+        '<a:blip r:embed="rIdImage"/></pic:blipFill></pic:pic></a:graphicData></a:graphic>' +
+        '</wp:inline></w:drawing></w:r></w:p></w:body></w:document>'
+    ),
+    'word/media/image1.png': Uint8Array.from(
+      atob(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+      ),
+      (character) => character.charCodeAt(0)
+    ),
+  });
 }
 
 describe('rich copy', () => {
@@ -54,6 +87,31 @@ describe('rich copy', () => {
     const { surface } = mount(paragraph('hello'));
     putCaret(surface, 2);
     expect(surface.copyFlavours()).toEqual({ text: '', html: null });
+  });
+
+  test('an image-only range copies and pastes its rich flavours', () => {
+    const container = document.createElement('div');
+    const mounted = mountPaginatedSurface(container, imageOnlyDocx(), { scale: 1 });
+    if (!mounted.ok) throw new Error(mounted.reason);
+    const source = mounted.surface;
+    const paragraphId = source.session.paragraphIds()[0]!;
+    source.setSelection({
+      anchor: { paragraphId, offset: 0 },
+      head: { paragraphId, offset: 1 },
+    });
+
+    const flavours = source.copyFlavours();
+    expect(flavours.text).toBe('\uFFFC');
+    expect(flavours.html).toContain('<img');
+    expect(flavours.html).toContain('data-docx-fragment="');
+
+    const target = mount('<w:p/>');
+    putCaret(target.surface, 0);
+    target.surface.pasteRich(flavours.text, flavours.html);
+    expect(serializeOoxmlPart(target.surface.session.part())).toContain('<w:drawing>');
+
+    source.destroy();
+    target.surface.destroy();
   });
 });
 
@@ -300,6 +358,45 @@ describe('rich paste', () => {
     expect(target.surface.session.bodyText()).toContain('ext');
     expect(markup).toContain('w:jc');
     expect(markup).toContain('<w:b/>');
+  });
+
+  test('Word list markers resolve after a blank document has already laid out', () => {
+    const target = mount(paragraph(''));
+    target.surface.layout();
+    putCaret(target.surface, 0);
+    const item = (level: number, marker: string, text: string): string =>
+      `<p class="MsoListParagraph" style="margin-left:${level * 0.5}in;` +
+      `text-indent:-.25in;mso-list:l0 level${level} lfo2">` +
+      `<span style="mso-list:Ignore">${marker} </span>${text}</p>`;
+    target.surface.pasteRich('First\nNested', item(1, '•', 'First') + item(2, '○', 'Nested'));
+
+    const paragraphs = target.surface
+      .layout()
+      .pages.flatMap((page) => page.fragments)
+      .filter((fragment) => fragment.kind === 'paragraph' && fragment.marker !== undefined);
+    expect(paragraphs.map((fragment) => fragment.marker?.text)).toEqual(['•', 'o']);
+    expect(paragraphs.map((fragment) => fragment.indent.left)).toEqual([36, 72]);
+    const markup = serializeOoxmlPart(target.surface.session.part());
+    expect(markup.match(/<w:numPr>/g)).toHaveLength(2);
+  });
+
+  test('external Word footnotes land as referenced note parts', () => {
+    const target = mount(paragraph(''));
+    putCaret(target.surface, 0);
+    target.surface.pasteRich(
+      'See[1].\nSource note.',
+      '<p>See<a style="mso-footnote-id:ftn1" href="#_ftn1">[1]</a>.</p>' +
+        '<div style="mso-element:footnote-list">' +
+        '<div style="mso-element:footnote" id="ftn1"><p>' +
+        '<a style="mso-footnote-id:ftn1" href="#_ftnref1">[1]</a>Source note.</p>' +
+        '</div></div>'
+    );
+    const documentXml = serializeOoxmlPart(target.surface.session.part());
+    expect(documentXml).toContain('<w:footnoteReference ');
+    expect(documentXml).not.toContain('Source note.');
+    const notes = target.surface.session.currentPackage().parts.get('/word/footnotes.xml');
+    expect(notes).toBeDefined();
+    expect(serializeOoxmlPart(notes!)).toContain('Source note.');
   });
 
   test('a Word caption keeps its paragraph alignment at a paragraph end', () => {

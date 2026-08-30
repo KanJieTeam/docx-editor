@@ -9,7 +9,11 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { zipSync, strToU8 } from 'fflate';
-import { readOoxmlPackage, type OoxmlPackage } from '../package/ooxml-package.ts';
+import {
+  readOoxmlPackage,
+  writeOoxmlPackage,
+  type OoxmlPackage,
+} from '../package/ooxml-package.ts';
 import {
   serializeOoxmlPart,
   type OoxmlElement,
@@ -229,6 +233,15 @@ describe('clipboard fragment extract', () => {
     expect(mediaCount).toBeGreaterThan(0);
   });
 
+  test('the in-memory fragment package writes without duplicate OPC names', () => {
+    const pkg = samplePackage();
+    const result = extractFragmentPackage(pkg, fullBodyCoverage(pkg));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const reopened = loadPackage(writeOoxmlPackage(result.package));
+    expect(reopened.parts.has('/word/document.xml')).toBe(true);
+  });
+
   test('partial edge paragraphs trim to the range and the mark bit stays honest', () => {
     const pkg = buildPackage(
       '<w:p><w:r><w:t>Hello world</w:t></w:r></w:p><w:p><w:r><w:t>Second here</w:t></w:r></w:p>'
@@ -262,8 +275,7 @@ describe('clipboard fragment extract', () => {
         '<w:r><w:t>A</w:t></w:r>' +
         '<w:r><w:fldChar w:fldCharType="begin"/></w:r>' +
         '<w:r><w:instrText>PAGE</w:instrText></w:r>' +
-        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>' +
-        '<w:r><w:t>7</w:t></w:r>' +
+        '<w:r><w:fldChar w:fldCharType="separate"/><w:t>7</w:t></w:r>' +
         '</w:p>' +
         '<w:p><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t>B</w:t></w:r></w:p>'
     );
