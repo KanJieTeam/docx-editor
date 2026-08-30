@@ -33,7 +33,6 @@ import {
   type NoteReferenceSite,
 } from './note-numbering.ts';
 import {
-  layoutNoteById,
   layoutNoteCached,
   layoutNoteSeparator,
   noteSeparatorAreaBox,
@@ -227,7 +226,8 @@ export interface NotesLayoutInput {
 // ---------------------------------------------------------------------------------------
 
 interface NotesPageAttachEntry {
-  readonly allHits: readonly PageRefHit[];
+  /** The page's own footnote refs at compute time (content-compared on reuse). */
+  readonly pageRefs: readonly PageRefHit[];
   readonly marks: NoteMarkContext;
   readonly attached: PageRecord;
   readonly reserve: number;
@@ -236,15 +236,20 @@ interface NotesPageAttachEntry {
 
 /**
  * Incremental state for the notes pass, carried on the layout session's opaque `notes`
- * slot. Validity is layered: the memo object itself is replaced whenever the reference
- * fingerprint or the notes-input fingerprint moves, so anything read THROUGH a live memo
- * (the hit array, the mark contexts, per-page results keyed by identical hit/mark
- * identities) is current by construction.
+ * slot. Validity is layered: the memo object is replaced whenever the reference IDENTITY
+ * fingerprint (which notes exist, where, in what order — but not their character offsets)
+ * or the notes-input fingerprint moves, so the mark contexts read through a live memo are
+ * current by construction. Offsets shift on every keystroke in a referencing paragraph
+ * without changing any note, mark or story; per-page entries therefore revalidate against
+ * the page's OWN reference list (offsets included) rather than the whole hit array — a
+ * page whose refs moved re-laid its paragraph anyway, so its page identity is new too.
  */
 interface NotesPassMemo {
-  readonly hitsFingerprint: string;
+  hitsFingerprint: string;
+  /** {@link fingerprintHitsIdentity} of {@link allHits} — offsets excluded. */
+  readonly identityFingerprint: string;
   readonly inputFingerprint: string;
-  readonly allHits: readonly PageRefHit[];
+  allHits: readonly PageRefHit[];
   readonly provisionalMarks: NoteMarkContext;
   finalMarks: { readonly sitesFingerprint: string; readonly marks: NoteMarkContext } | null;
   /**
@@ -274,7 +279,8 @@ interface NotesPassMemo {
   readonly pageReserve: WeakMap<
     PageRecord,
     {
-      readonly allHits: readonly PageRefHit[];
+      /** The page's own footnote refs at compute time (content-compared on reuse). */
+      readonly pageRefs: readonly PageRefHit[];
       readonly marks: NoteMarkContext;
       readonly reserve: number;
       /** The raw note-area height (hold-out's `existingAreaHeight` input). */
@@ -284,14 +290,40 @@ interface NotesPassMemo {
   >;
 }
 
+/** ONE per-hit key: every fingerprint and equality below derives from it, so a new
+ * {@link PageRefHit} field joins the caches' validity in exactly one place. */
+function hitIdentityKey(hit: PageRefHit): string {
+  return `${hit.noteKind}|${hit.noteId}|${hit.paragraphId}|${hit.customMarkFollows ? 1 : 0}|${hit.sectionIndex}`;
+}
+
 function fingerprintHits(hits: readonly PageRefHit[]): string {
   const parts: string[] = [];
   for (const hit of hits) {
-    parts.push(
-      `${hit.noteKind}|${hit.noteId}|${hit.paragraphId}|${hit.atomOffset}|${hit.customMarkFollows ? 1 : 0}|${hit.sectionIndex}`
-    );
+    parts.push(`${hitIdentityKey(hit)}|${hit.atomOffset}`);
   }
   return parts.join(';');
+}
+
+/**
+ * {@link fingerprintHits} without the character offsets. This is the fingerprint that
+ * decides the MEMO's lifetime: marks, numbering and note stories depend on which notes
+ * exist, their order, sections and custom-mark flags — never on where in the paragraph
+ * the citation sits. A keystroke that only shifts offsets keeps the memo.
+ */
+function fingerprintHitsIdentity(hits: readonly PageRefHit[]): string {
+  return hits.map(hitIdentityKey).join(';');
+}
+
+/** Content equality of two per-page ref lists (order, ids, owners, offsets, flags). */
+function pageRefsEqual(a: readonly PageRefHit[], b: readonly PageRefHit[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (x.atomOffset !== y.atomOffset || hitIdentityKey(x) !== hitIdentityKey(y)) return false;
+  }
+  return true;
 }
 
 function fingerprintNoteProps(props: {
@@ -317,6 +349,11 @@ function fingerprintNotesInput(input: NotesLayoutInput): string | null {
     // By CONTENT, not identity: a keystroke rebuilds the context object while every
     // resolved value stands still, and only a value move should invalidate the memo.
     input.refFields?.valuesToken ?? '',
+    // By CONTENT for the same reason as the REF values above: the properties object is
+    // re-read per package revision, and only a value move should repaint a DOCPROPERTY
+    // field inside a note. The link projectors are deliberately absent: they are rebuilt
+    // per pass but are pure over parts this memo already pins.
+    input.documentProperties ? JSON.stringify(input.documentProperties) : '',
     fingerprintNoteProps(input.documentFootnoteProps),
     fingerprintNoteProps(input.documentEndnoteProps),
     input.footnotePropsBySection.map(fingerprintNoteProps).join(';'),
@@ -349,12 +386,13 @@ function notesMemoFor(
     return { memo: null, allHits, reused: false };
   }
   const hitsFingerprint = fingerprintHits(allHits);
+  let identityFingerprint: string | null = null;
   const existing = session.notes as NotesPassMemo | null;
-  if (existing && existing.hitsFingerprint === hitsFingerprint) {
+  if (existing) {
     const identity = notesInputIdentities.get(existing);
-    if (
+    const inputUnchanged =
       existing.inputFingerprint === inputFingerprint &&
-      identity &&
+      identity !== undefined &&
       identity.footnotesPart === input.footnotesPart &&
       identity.endnotesPart === input.endnotesPart &&
       identity.measurer === input.measurer &&
@@ -362,13 +400,25 @@ function notesMemoFor(
       identity.styleCascade === input.styleCascade &&
       // By identity, like the cascade beside it. `numbering.xml` is a different part from the
       // notes part, so an edit to it moves nothing else this fingerprint compares.
-      identity.numberingIndex === input.numberingIndex
-    ) {
+      identity.numberingIndex === input.numberingIndex;
+    if (inputUnchanged && existing.hitsFingerprint === hitsFingerprint) {
       return { memo: existing, allHits: existing.allHits, reused: true };
+    }
+    identityFingerprint = inputUnchanged ? fingerprintHitsIdentity(allHits) : null;
+    if (identityFingerprint !== null && existing.identityFingerprint === identityFingerprint) {
+      // Only offsets moved (typing in a referencing paragraph): the reference set, marks
+      // and note stories are unchanged, so the memo — and every cache hanging off its
+      // mark contexts — survives. The fresh hit array replaces the stale one; per-page
+      // entries revalidate against each page's own refs, and any page whose refs moved
+      // re-laid its paragraph and carries a new page identity anyway.
+      existing.hitsFingerprint = hitsFingerprint;
+      existing.allHits = allHits;
+      return { memo: existing, allHits, reused: true };
     }
   }
   const fresh: NotesPassMemo = {
     hitsFingerprint,
+    identityFingerprint: identityFingerprint ?? fingerprintHitsIdentity(allHits),
     inputFingerprint,
     allHits,
     provisionalMarks: provisionalNoteMarks(allHits, input),
@@ -585,6 +635,15 @@ function collectsAtEnd(pos: FootnotePosition): boolean {
  * marks and the old cache is released with them.
  */
 const noteStoryCachesByMarks = new WeakMap<NoteMarkContext, NoteStoryLayoutCache>();
+
+function noteStoryCacheFor(marks: NoteMarkContext): NoteStoryLayoutCache {
+  let cache = noteStoryCachesByMarks.get(marks);
+  if (!cache) {
+    cache = new Map();
+    noteStoryCachesByMarks.set(marks, cache);
+  }
+  return cache;
+}
 
 /** ONE cache-or-layout separator fetch, so the fallback-reason handling has one shape. */
 function separatorLayoutOf(
@@ -1571,6 +1630,8 @@ function buildEndnoteArea(
   options?: {
     readonly separatorKind?: 'separator' | 'continuationSeparator';
     readonly separatorCache?: NoteSeparatorCache;
+    /** Pass-local note story layouts (see the footnote twin). */
+    readonly noteLayoutCache?: NoteStoryLayoutCache;
   }
 ): { area: NoteAreaRecord | undefined; nextCarry: NoteCarryMap; remainingRefs: PageRefHit[] } {
   const nextCarry: NoteCarryMap = new Map(continuationCarry);
@@ -1680,7 +1741,7 @@ function buildEndnoteArea(
       break;
     }
     const part = notesPartFor(ref.noteKind);
-    const laid = layoutNoteById(part, ref.noteId, contentWidth, opts);
+    const laid = layoutNoteCached(part, ref.noteId, contentWidth, opts, options?.noteLayoutCache);
     if (!laid) {
       reasons.push('missing-note-body');
       continue;
@@ -1792,6 +1853,7 @@ function drainFootnoteCarryPages(
   reasons: NotePaginationFallbackReason[],
   overflowBudget: NoteOverflowBudget,
   separatorCache: NoteSeparatorCache,
+  noteLayoutCache: NoteStoryLayoutCache,
   mint: OverflowSheetMinter
 ): { pages: PageRecord[]; carry: NoteCarryMap } {
   let nextPages = pages;
@@ -1809,6 +1871,7 @@ function drainFootnoteCarryPages(
     });
     const built = buildFootnoteArea(page, [], input, noteMarks, 'pageBottom', nextCarry, reasons, {
       separatorCache,
+      noteLayoutCache,
     });
     const notesPlaced = built.area?.notes.length ?? 0;
     nextCarry = built.nextCarry;
@@ -1894,6 +1957,8 @@ function placeEndnotesFromPage(
     /** First page index of the owning section (for SECTIONPAGES patching). */
     readonly sectionStartIndex?: number;
     readonly separatorCache?: NoteSeparatorCache;
+    /** Pass-local note story layouts (see the footnote twin). */
+    readonly noteLayoutCache?: NoteStoryLayoutCache;
     /** Mints an overflow sheet with the shell its own index resolves to. */
     readonly mint: OverflowSheetMinter;
   }
@@ -1950,6 +2015,7 @@ function placeEndnotesFromPage(
     const built = buildEndnoteArea(page, pending, input, noteMarks, placement, carry, reasons, {
       separatorKind,
       ...(separatorCache ? { separatorCache } : {}),
+      ...(options.noteLayoutCache ? { noteLayoutCache: options.noteLayoutCache } : {}),
     });
     carry = built.nextCarry;
     pending = built.remainingRefs;
@@ -2047,14 +2113,10 @@ export function computeFootnoteReserves(
   let carry: NoteCarryMap = new Map();
   const refIndex = buildPageRefIndex(allRefs);
   const separatorCache = createNoteSeparatorCache();
-  // Keyed on the mark-context object: the reflow loop's rounds all share one marks
-  // object, so every round of a search lays each note once; a new pass mints new marks
-  // and with them a fresh cache (see {@link NoteStoryLayoutCache} for what the key omits).
-  let noteLayoutCache = noteStoryCachesByMarks.get(noteMarks);
-  if (!noteLayoutCache) {
-    noteLayoutCache = new Map();
-    noteStoryCachesByMarks.set(noteMarks, noteLayoutCache);
-  }
+  // Keyed on the mark-context object, which the memo keeps across keystrokes: unchanged
+  // notes reuse their story layouts until the memo (which pins the parts and inputs the
+  // key omits) is replaced. See {@link NoteStoryLayoutCache}.
+  const noteLayoutCache = noteStoryCacheFor(noteMarks);
   const holdOutOpts = layoutOpts(input, noteMarks);
   const isPageBottomFootnoteRef = (ref: PageRefHit): boolean =>
     ref.noteKind === 'footnote' && !collectsAtEnd(footnotePropsFor(input, ref.sectionIndex).pos);
@@ -2116,12 +2178,12 @@ export function computeFootnoteReserves(
       continue;
     }
 
-    // An unchanged page whose refs and marks are the previous pass's exact objects sized
-    // to the same PAGE-LOCAL reserve; carry chains are the exception and rebuild. The
+    // An unchanged page whose own refs and marks match the previous pass, sized to the
+    // same PAGE-LOCAL reserve; carry chains are the exception and rebuild. The
     // neighbour-reading hold-out is recomputed below either way.
     if (memo && carry.size === 0) {
       const cached = memo.pageReserve.get(page);
-      if (cached && cached.allHits === allRefs && cached.marks === noteMarks) {
+      if (cached && cached.marks === noteMarks && pageRefsEqual(fnRefs, cached.pageRefs)) {
         for (const reason of cached.reasons) reasons.push(reason);
         recordReserve(page.index, Math.max(cached.reserve, holdOutFor(cached.areaHeight)), maxArea);
         continue;
@@ -2172,7 +2234,7 @@ export function computeFootnoteReserves(
     const localNeeded = Math.min(Math.max(areaHeight, evictionNeed), maxArea);
     if (memo && carryWasEmpty && carry.size === 0) {
       memo.pageReserve.set(page, {
-        allHits: allRefs,
+        pageRefs: fnRefs,
         marks: noteMarks,
         reserve: localNeeded,
         areaHeight,
@@ -2258,6 +2320,9 @@ export function attachNotesToLayout(
     noteMarks = buildMarkContext(footnoteSites, endnoteSites, input);
     if (memo) memo.finalMarks = { sitesFingerprint, marks: noteMarks };
   }
+  // Keyed on the FINAL mark context, whose identity the memo keeps while the sites
+  // fingerprint stands, so unchanged notes reuse their story layouts across passes.
+  const noteLayoutCache = noteStoryCacheFor(noteMarks);
 
   let carry: NoteCarryMap = new Map();
   const endnotesBySection = new Map<number, PageRefHit[]>();
@@ -2291,13 +2356,13 @@ export function attachNotesToLayout(
       }
     }
 
-    // An unchanged page attaches to the same result as last pass when the hit array and
-    // mark context are the previous pass's exact objects and no continuation chains in or
-    // out of it. The endnote collectors above already ran, so skipping the build here
-    // loses nothing.
+    // An unchanged page attaches to the same result as last pass when its OWN refs match
+    // by content, the mark context is the previous pass's exact object, and no
+    // continuation chains in or out of it. The endnote collectors above already ran, so
+    // skipping the build here loses nothing.
     if (memo && carry.size === 0) {
       const cached = memo.pageAttach.get(page);
-      if (cached && cached.allHits === allRefs && cached.marks === noteMarks) {
+      if (cached && cached.marks === noteMarks && pageRefsEqual(fnRefs, cached.pageRefs)) {
         for (const reason of cached.reasons) reasons.push(reason);
         return cached.attached;
       }
@@ -2322,7 +2387,7 @@ export function attachNotesToLayout(
         props.pos,
         carry,
         reasons,
-        { separatorCache }
+        { separatorCache, noteLayoutCache }
       );
       footnotes = built.area;
       carry = built.nextCarry;
@@ -2332,13 +2397,24 @@ export function attachNotesToLayout(
     // it came in as, and saying so is what lets the painter keep its DOM.
     const attached = footnotes ? { ...bodyPage, footnotes } : bodyPage;
     if (memo && carryWasEmpty && carry.size === 0) {
-      memo.pageAttach.set(page, {
-        allHits: allRefs,
+      const entry: NotesPageAttachEntry = {
+        pageRefs: fnRefs,
         marks: noteMarks,
         attached,
         reserve: 0,
         reasons: reasons.slice(reasonsBefore),
-      });
+      };
+      // Keyed under the OUTPUT page: the next pass's body layout hands back the ATTACHED
+      // page by identity (it is what the session publishes), so an entry keyed on this
+      // pass's input would be one generation behind and never hit — every pass then
+      // republished a fresh page object for every footnote-bearing page, and the painter
+      // rebuilt their DOM on every keystroke. The reserve entry forwards for the same
+      // reason: the next reserve pass reads the published page too.
+      memo.pageAttach.set(attached, entry);
+      if (attached !== page) {
+        const reserveEntry = memo.pageReserve.get(page);
+        if (reserveEntry) memo.pageReserve.set(attached, reserveEntry);
+      }
     }
     return attached;
   });
@@ -2363,6 +2439,7 @@ export function attachNotesToLayout(
       reasons,
       overflowBudget,
       separatorCache,
+      noteLayoutCache,
       mint
     );
     pages = drained.pages;
@@ -2398,6 +2475,7 @@ export function attachNotesToLayout(
           stopBeforeIndex: stopBefore,
           sectionStartIndex: sectionStart,
           separatorCache,
+          noteLayoutCache,
           mint,
         }
       );
@@ -2416,7 +2494,7 @@ export function attachNotesToLayout(
       'docEnd',
       reasons,
       overflowBudget,
-      { separatorCache, mint }
+      { separatorCache, noteLayoutCache, mint }
     );
   }
 
@@ -2628,9 +2706,11 @@ export function layoutSemanticDocumentWithNotes<
     optionsWithLists.session
   );
   const builtHits = buildPageRefHits(packageRefs, paragraphSectionIndex);
-  // The session memo hands back the PREVIOUS pass's hit array and provisional marks by
-  // identity when their content is unchanged, which is what lets every per-page result
-  // below validate with two identity compares.
+  // The session memo hands back the previous pass's hit array by identity when nothing
+  // moved, and KEEPS its mark contexts when only offsets moved (a keystroke in a
+  // referencing paragraph). Per-page results below validate on the marks identity plus a
+  // content compare of the page's own refs — never on the hit array's identity, which is
+  // fresh whenever any offset moved.
   const notesMemoState = notesMemoFor(optionsWithLists.session, builtHits, notesInput);
   const notesMemo = notesMemoState.memo;
   const allHits = notesMemoState.allHits;
