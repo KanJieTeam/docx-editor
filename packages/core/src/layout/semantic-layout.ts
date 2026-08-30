@@ -25,6 +25,7 @@ import {
   type HyperlinkProjector,
 } from './field-projection.ts';
 import {
+  framedTokenJoin,
   listTokenForTableBlock,
   paragraphLayoutKey,
   registerTableCellBreakKeys,
@@ -189,7 +190,7 @@ import {
 } from './semantic-fragment-signature.ts';
 import { type FlowCheckpoint, type LayoutSession } from './layout-session.ts';
 import { furnitureForSection, layoutMultiSectionDocument } from './multi-section-layout.ts';
-import { hostedTextboxListToken, layoutTextboxStory } from './textbox-story-layout.ts';
+import { hostedListTokenDeps, layoutTextboxStory } from './textbox-story-layout.ts';
 
 /** Extra full-document layouts after the reflow pass budget to detect a stable 2-cycle. */
 const MAX_DRAWING_EXCLUSION_STABILIZATION_PASSES = 2;
@@ -1102,6 +1103,9 @@ function layoutBlocksPass(
   // disagree about which context minted a key — including a caller that supplies tokens
   // while toggling the context, which a fallback-only namespace could not separate.
   const hasInlineDrawingContext = options.inlineDrawingLayout !== undefined;
+  // ONE provider for every fold of this flow — the prepass block fold and the cell-lane
+  // deps below hand `hostedTextboxListToken` the same (index, cascade, mode) tuple.
+  const hostedListDeps = hostedListTokenDeps(options.numberingIndex, styleCascade, displayMode);
   const prepareBlock = (block: OoxmlElement, availableWidth: number): PreparedBlock => {
     // The RAW token, compared by the memo below so a table's kilobyte aggregate keeps its
     // identity fast path; the context joins only when a key is actually built. `||`, not
@@ -1127,21 +1131,17 @@ function layoutBlocksPass(
     // The list state of any text-box story this block hosts, for the same reason the drawing
     // token aggregates hosted-story atoms: a box's markers come from `numbering.xml`, and a
     // numbering edit moves nothing else in this block's key.
-    const hostedListToken = hostedTextboxListToken(
-      block,
-      options.numberingIndex,
-      styleCascade,
-      displayMode
-    );
-    // NUL between the block's own token and the hosted one: both embed file-influenced
-    // marker text, so a printable join would let two different (own, hosted) pairs
-    // concatenate to one string.
+    const hostedListToken = hostedListDeps.hostedListTokenForParagraph?.(block) ?? '';
+    // Length-framed pair: both sides embed file-influenced marker text (and the table
+    // aggregate itself contains NULs), so no separator join stays injective.
     const ownListToken =
       block.kind === 'table'
         ? listTokenForTableBlock(block, listItems)
         : (listItems?.get(block.id)?.cacheToken ?? '');
     const listToken =
-      ownListToken === '' && hostedListToken === '' ? '' : `${ownListToken}\0${hostedListToken}`;
+      ownListToken === '' && hostedListToken === ''
+        ? ''
+        : framedTokenJoin([ownListToken, hostedListToken]);
     // The RESOLVED VALUES this block's REF fields paint. The block's own subtree is identical
     // after a renumbering edit elsewhere, so only this token can invalidate its memo and key.
     const refToken =
@@ -1765,6 +1765,10 @@ function layoutBlocksPass(
           anchorFrameBase,
           pageContentClip,
           layoutTextboxStoryFor: layoutTextboxStoryForBody,
+          // The CELL lane folds only where stories can render (`layoutTextboxStoryFor`
+          // above). The body block fold in `prepareBlock` stays ungated on purpose: it
+          // predates this gate and fails open — extra invalidation, never a stale reuse.
+          ...hostedListDeps,
           publishAnchoredDrawings: collectAnchoredDrawings,
           collectAnchoredDrawings,
           columnBoxForParagraph: anchorColumnBox,

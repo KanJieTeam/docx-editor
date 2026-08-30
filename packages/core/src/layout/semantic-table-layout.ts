@@ -210,6 +210,13 @@ export interface TableFlowDeps {
    */
   readonly listItems?: ReadonlyMap<string, ResolvedListItem>;
   /**
+   * The hosted text-box list state a cell paragraph's break key folds — the cell twin of
+   * the `hostedTextboxListToken` fold in `prepareBlock`, built with `hostedListTokenDeps`
+   * and provided only by lanes that lay hosted stories out
+   * ({@link layoutTextboxStoryFor}): where no story renders, the fold would be key churn.
+   */
+  readonly hostedListTokenForParagraph?: (paragraph: OoxmlNode) => string;
+  /**
    * `w:settings/w:defaultTabStop` in points; absent keeps the 0.5" schema default. A cell
    * paragraph tabs on the same document-wide grid as a body paragraph.
    */
@@ -489,6 +496,10 @@ function placeCellParagraph(
   // The cell paragraph's resolved REF values, keyed exactly as the body flow keys them: a
   // renumbering edit moves the painted reference while the cell's subtree stays identical.
   const refToken = deps.refFields?.tokenForParagraph(paragraphId) ?? '';
+  // The list state of any hosted text-box story, keyed as the body flow keys it: its own
+  // `txbxList` property. A numbering edit moves only this property while the host's
+  // subtree stays byte-identical; box-free paragraphs keep their pre-existing key shape.
+  const hostedListToken = deps.hostedListTokenForParagraph?.(paragraph) ?? '';
   const key = paragraphLayoutKey({
     paragraph,
     properties: [
@@ -497,6 +508,9 @@ function placeCellParagraph(
       ...markRunProperties,
       { localName: 'tabStops', attributes: { token: tabStopsCacheToken } },
       ...(listItem ? [{ localName: 'list', attributes: { token: listItem.cacheToken } }] : []),
+      ...(hostedListToken
+        ? [{ localName: 'txbxList', attributes: { token: hostedListToken } }]
+        : []),
       ...(refToken ? [{ localName: 'refFields', attributes: { token: refToken } }] : []),
     ],
     width: available,
