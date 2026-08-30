@@ -64,6 +64,15 @@ import {
   MAX_REF_TEXT_CHARS,
   wmlAttribute,
 } from './field-ref-text.ts';
+import {
+  MAX_REF_BOOKMARK_NAME_CHARS,
+  parseRefInstruction,
+  refSpecModifiersOf,
+  type RefFieldSpec,
+} from './field-ref-parse.ts';
+
+// Re-exported so every existing importer keeps its one `field-ref.ts` import site.
+export { parseRefInstruction, type RefFieldSpec } from './field-ref-parse.ts';
 import { isNormalNote, notesOf, MAX_NOTES_PER_PART } from '../store/package/note-nodes.ts';
 import { noteStoryBlocks } from './story-roots.ts';
 import {
@@ -74,7 +83,6 @@ import {
   ingestInstrTextBounded,
   isFldChar,
   isInstrText,
-  MAX_FIELD_INSTRUCTION_CHARS,
   MAX_STORY_FIELD_SCAN_DEPTH,
   onFldCharBegin,
   onFldCharEnd,
@@ -108,151 +116,12 @@ import {
   type ResolvedListItem,
 } from './list-resolve.ts';
 
-/** Word's own bookmark-name limit is 40; this is the fail-closed bound, not a fidelity claim. */
-const MAX_REF_BOOKMARK_NAME_CHARS = 256;
 /** Ceiling on live-resolved REF fields per story; fields past it keep their cached results. */
 const MAX_REF_FIELDS_PER_STORY = 512;
 /** Ceiling on bookmark names remembered per top-level block (hostile declaration spam). */
 const MAX_REF_BOOKMARKS_PER_BLOCK = 2048;
 /** Ceiling on sticky calibration verdicts carried for one story across a session. */
 const MAX_REF_VERDICTS = 4096;
-
-/** One recognized REF instruction: the target name and the supported switches, nothing else. */
-export interface RefFieldSpec {
-  readonly bookmark: string;
-  /** `r` / `w` paint the target's number; `n` the same without context; null the range text. */
-  readonly numberSwitch: 'r' | 'w' | 'n' | null;
-  /** `\h` parsed and inert — the reference paints; navigation is a follow-up. */
-  readonly hyperlink: boolean;
-}
-
-/**
- * The modifiers a parse attaches beyond the public members: `\t` (suppress the number's
- * literal text) and the NOTEREF field kind. A side channel rather than members — the same
- * idiom `ListCounterAdvance` uses, for the same reason: `RefFieldSpec` is public API, and a
- * hand-built spec without an entry must mean "no modifiers", which the default below encodes.
- * Values are the frozen singletons, so agreement between two independent parses of the same
- * instruction is an identity comparison.
- */
-interface RefSpecModifiers {
-  /** `\t`: drop non-delimiter literal text from the referenced number. */
-  readonly suppressNonDelimiterText: boolean;
-  /** The instruction was `NOTEREF`: paint the bookmarked note reference's display number. */
-  readonly noteRef: boolean;
-}
-const REF_MODS_NONE: RefSpecModifiers = Object.freeze({
-  suppressNonDelimiterText: false,
-  noteRef: false,
-});
-const REF_MODS_SUPPRESS: RefSpecModifiers = Object.freeze({
-  suppressNonDelimiterText: true,
-  noteRef: false,
-});
-const REF_MODS_NOTEREF: RefSpecModifiers = Object.freeze({
-  suppressNonDelimiterText: false,
-  noteRef: true,
-});
-const refSpecModifiers = new WeakMap<RefFieldSpec, RefSpecModifiers>();
-
-function refSpecModifiersOf(spec: RefFieldSpec): RefSpecModifiers {
-  return refSpecModifiers.get(spec) ?? REF_MODS_NONE;
-}
-
-/**
- * Split a whitespace-collapsed instruction into space- or quote-delimited tokens.
- *
- * One linear pass, no regex over file-derived text. An unterminated quote fails the whole
- * parse (null) rather than guessing where the argument ends.
- */
-function tokenizeInstruction(collapsed: string): string[] | null {
-  const tokens: string[] = [];
-  let index = 0;
-  while (index < collapsed.length) {
-    const char = collapsed[index]!;
-    if (char === ' ') {
-      index += 1;
-      continue;
-    }
-    if (char === '"') {
-      const close = collapsed.indexOf('"', index + 1);
-      if (close === -1) return null;
-      tokens.push(collapsed.slice(index + 1, close));
-      index = close + 1;
-      continue;
-    }
-    let end = index;
-    while (end < collapsed.length && collapsed[end] !== ' ') end += 1;
-    tokens.push(collapsed.slice(index, end));
-    index = end;
-  }
-  return tokens;
-}
-
-/**
- * Recognize `REF <bookmark> [\r|\w|\n] [\t] [\h] [\* MERGEFORMAT]` or
- * `NOTEREF <bookmark> [\h] [\* MERGEFORMAT]`, or null for anything else.
- *
- * The keyword matches case-insensitively; the bookmark name keeps its authored case (it is a
- * lookup key into a Map, never an object property, so hostile names like `__proto__` are just
- * names that resolve to nothing). Any unrecognized switch fails the parse so the field falls
- * back to its cached result — never the raw instruction, never a guess. NOTEREF's `\p`
- * (above/below position text) and `\f` (note-style formatting) are unrecognized on purpose.
- */
-export function parseRefInstruction(raw: string): RefFieldSpec | null {
-  if (raw.length > MAX_FIELD_INSTRUCTION_CHARS) return null;
-  const collapsed = raw.replace(/\s+/g, ' ').trim();
-  if (collapsed.length > MAX_FIELD_INSTRUCTION_CHARS) return null;
-  const tokens = tokenizeInstruction(collapsed);
-  if (tokens === null || tokens.length < 2) return null;
-  const keyword = tokens[0]!.toUpperCase();
-  if (keyword !== 'REF' && keyword !== 'NOTEREF') return null;
-  const bookmark = tokens[1]!;
-  if (
-    bookmark.length === 0 ||
-    bookmark.length > MAX_REF_BOOKMARK_NAME_CHARS ||
-    bookmark.startsWith('\\')
-  ) {
-    return null;
-  }
-  if (keyword === 'NOTEREF') return parseNoteRefSwitches(tokens, bookmark);
-  let sawN = false;
-  let sawR = false;
-  let sawW = false;
-  let sawT = false;
-  let hyperlink = false;
-  for (let index = 2; index < tokens.length; index += 1) {
-    const token = tokens[index]!.toUpperCase();
-    if (token === '\\R') sawR = true;
-    else if (token === '\\W') sawW = true;
-    else if (token === '\\N') sawN = true;
-    else if (token === '\\T') sawT = true;
-    else if (token === '\\H') hyperlink = true;
-    else if (token === '\\*' && tokens[index + 1]?.toUpperCase() === 'MERGEFORMAT') index += 1;
-    else if (token === '\\*MERGEFORMAT') continue;
-    else return null;
-  }
-  // Several number switches in one instruction: `\n` outranks `\r` outranks `\w`. Real
-  // documents write `\w \n \h` and cache the `\n`-shaped value; calibration guards the rest.
-  const numberSwitch: RefFieldSpec['numberSwitch'] = sawN ? 'n' : sawR ? 'r' : sawW ? 'w' : null;
-  const spec: RefFieldSpec = { bookmark, numberSwitch, hyperlink };
-  if (sawT) refSpecModifiers.set(spec, REF_MODS_SUPPRESS);
-  return spec;
-}
-
-/** The NOTEREF switch arm: `\h` inert, `\* MERGEFORMAT` inert, anything else fails closed. */
-function parseNoteRefSwitches(tokens: readonly string[], bookmark: string): RefFieldSpec | null {
-  let hyperlink = false;
-  for (let index = 2; index < tokens.length; index += 1) {
-    const token = tokens[index]!.toUpperCase();
-    if (token === '\\H') hyperlink = true;
-    else if (token === '\\*' && tokens[index + 1]?.toUpperCase() === 'MERGEFORMAT') index += 1;
-    else if (token === '\\*MERGEFORMAT') continue;
-    else return null;
-  }
-  const spec: RefFieldSpec = { bookmark, numberSwitch: null, hyperlink };
-  refSpecModifiers.set(spec, REF_MODS_NOTEREF);
-  return spec;
-}
 
 /**
  * The story's resolved REF inputs for one layout pass.
@@ -289,6 +158,39 @@ export interface RefFieldContext {
    * Optional so hand-built contexts predating it stay valid.
    */
   autonumValueOf?(anchorId: string): string | null;
+  /**
+   * The deferred projection of ONE `PAGEREF` field, or null to keep the cached result
+   * (missing bookmark, unsupported switches, or an anchor this scan never saw).
+   *
+   * A `PAGEREF` value is a property of pagination, so the scan cannot compute it — it hands
+   * the projection the resolved TARGET and the calibration inputs instead, and document
+   * finalize (`finalizePageFieldProjection`) substitutes the page number the target's first
+   * fragment lands on. Optional so hand-built contexts predating it stay valid.
+   */
+  pageRefProjectionOf?(anchorId: string, spec: RefFieldSpec): PageRefFieldProjection | null;
+}
+
+/**
+ * Sticky calibration identity for one `PAGEREF` field.
+ *
+ * An opaque frozen object rather than a mutable verdict holder because span markers are
+ * serialized into fragment signatures — a verdict written into the marker would move a
+ * signature that no painted output moved. The verdict itself lives beside the finalize pass
+ * (`field-page-furniture.ts`), keyed weakly on this object; the registry below carries the
+ * object across passes the same way REF verdicts are carried.
+ */
+export type PageRefCalibrationCell = Readonly<Record<never, never>>;
+
+/**
+ * What a `PAGEREF` span carries to document finalize: the resolved target, the normalized
+ * authored cache (the calibration oracle), and the sticky calibration identity.
+ */
+export interface PageRefFieldProjection {
+  /** Canonical id of the paragraph the bookmark names — first declaration wins. */
+  readonly targetParagraphId: string;
+  /** The authored cached result, whitespace-collapsed — what the computed number must reproduce. */
+  readonly cached: string;
+  readonly calibration: PageRefCalibrationCell;
 }
 
 /** One scanned REF or AUTONUM-family field: instruction, anchor node id, NORMALIZED cache. */
@@ -569,6 +471,27 @@ function carriedVerdicts(blocks: readonly OoxmlElement[]): Map<string, boolean> 
   return carried;
 }
 
+/**
+ * PAGEREF calibration cells for one story, keyed by field anchor id — the same carry idiom
+ * as {@link refVerdictsByAnchorBlock}, and bounded the same way. The cell must survive the
+ * pass, not the verdict: finalize compares the computed page number against the cache the
+ * first time it meets a cell, and keying that verdict on a per-pass object would re-calibrate
+ * after every keystroke — flipping every live TOC number back to its stale cache.
+ */
+const pageRefCellsByAnchorBlock = new WeakMap<OoxmlElement, Map<string, PageRefCalibrationCell>>();
+
+function carriedPageRefCells(blocks: readonly OoxmlElement[]): Map<string, PageRefCalibrationCell> {
+  const first = blocks[0];
+  const last = blocks[blocks.length - 1];
+  const carried =
+    (first ? pageRefCellsByAnchorBlock.get(first) : undefined) ??
+    (last ? pageRefCellsByAnchorBlock.get(last) : undefined) ??
+    new Map<string, PageRefCalibrationCell>();
+  if (first) pageRefCellsByAnchorBlock.set(first, carried);
+  if (last) pageRefCellsByAnchorBlock.set(last, carried);
+  return carried;
+}
+
 /** Word trims one trailing period off a referenced number: `1.` → `1`, `1.2` stays `1.2`. */
 function trimTrailingPeriod(marker: string): string {
   return marker.length > 1 && marker.endsWith('.') ? marker.slice(0, -1) : marker;
@@ -695,6 +618,8 @@ function buildRefFieldContext(
 
   const resolve = (spec: RefFieldSpec): string | null => {
     const mods = refSpecModifiersOf(spec);
+    // A PAGEREF value is pagination's to compute — it must never resolve as bookmark text.
+    if (mods.pageRef) return null;
     const target = targets.get(spec.bookmark);
     if (!target) return null;
     if (mods.noteRef) {
@@ -755,7 +680,7 @@ function buildRefFieldContext(
     // The modifier singletons join the key, so `REF x \w`, `REF x \w \t` and `NOTEREF x`
     // never share a computed value.
     const mods = refSpecModifiersOf(spec);
-    const modKey = mods === REF_MODS_SUPPRESS ? 't' : mods === REF_MODS_NOTEREF ? 'x' : '';
+    const modKey = `${mods.suppressNonDelimiterText ? 't' : ''}${mods.noteRef ? 'x' : ''}`;
     const key = `${spec.numberSwitch ?? '-'}${modKey}\u0000${spec.bookmark}`;
     if (computedValues.has(key)) return computedValues.get(key) ?? null;
     const value = resolve(spec);
@@ -769,9 +694,14 @@ function buildRefFieldContext(
   // would flip it back to stale. The token folds the PAINTED output — the live value when
   // calibrated, the session-constant cache otherwise — so it moves exactly when paint moves.
   const verdicts = carriedVerdicts(blocks);
+  const pageRefCells = carriedPageRefCells(blocks);
   const liveByAnchor = new Map<
     string,
     { readonly spec: RefFieldSpec; readonly live: string | null }
+  >();
+  const pageRefByAnchor = new Map<
+    string,
+    { readonly spec: RefFieldSpec; readonly projection: PageRefFieldProjection }
   >();
   const tokens = new Map<string, string>();
   const storyParts: string[] = [];
@@ -784,6 +714,32 @@ function buildRefFieldContext(
       if (field.spec === null) {
         const value = field.autonum ? (autonumByAnchor.get(field.anchorId) ?? null) : null;
         pieces.push(value !== null ? `a\u0001${value}` : `c\u0002${field.cached}`);
+        continue;
+      }
+      // A PAGEREF defers: the scan resolves the TARGET and finalize computes the number, so
+      // its verdict is finalize's to take (against the pagination, not against this walk).
+      // The token folds the cache — what this pass paints; the substituted number rides the
+      // finalize memo keys, not the block keys, exactly like a body PAGE field — AND the
+      // resolved target id. The target is what the marker carries, and a bookmark edit can
+      // re-resolve the name while the field's own paragraph stays byte-identical: without
+      // the id in the token, the cached fragment keeps its old marker and finalize
+      // substitutes the OLD target's page forever.
+      if (refSpecModifiersOf(field.spec).pageRef) {
+        const target = targets.get(field.spec.bookmark);
+        if (target) {
+          let cell = pageRefCells.get(field.anchorId);
+          if (cell === undefined && pageRefCells.size < MAX_REF_VERDICTS) {
+            cell = Object.freeze({});
+            pageRefCells.set(field.anchorId, cell);
+          }
+          if (cell !== undefined) {
+            pageRefByAnchor.set(field.anchorId, {
+              spec: field.spec,
+              projection: { targetParagraphId: target.id, cached: field.cached, calibration: cell },
+            });
+          }
+        }
+        pieces.push(`c\u0002${field.cached}\u0002${target?.id ?? ''}`);
         continue;
       }
       const computed = computedOf(field.spec);
@@ -826,6 +782,18 @@ function buildRefFieldContext(
       return entry.live;
     },
     autonumValueOf: (anchorId) => autonumByAnchor.get(anchorId) ?? null,
+    pageRefProjectionOf: (anchorId, spec) => {
+      const entry = pageRefByAnchor.get(anchorId);
+      if (!entry) return null;
+      // Same agreement rule as liveValueOf: the anchor must still name this instruction.
+      if (
+        entry.spec.bookmark !== spec.bookmark ||
+        refSpecModifiersOf(entry.spec) !== refSpecModifiersOf(spec)
+      ) {
+        return null;
+      }
+      return entry.projection;
+    },
   };
 }
 
