@@ -140,32 +140,6 @@ Examples: [Vite](examples/vite) | [Next.js](examples/nextjs) | [Remix](examples/
 
 Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, and the one-time CLA signature.
 
-### Issue conventions
-
-Every issue gets one native issue type, one `area:*` label, and one
-`priority:*` label. Use `Bug`, `Feature`, or `Task` for the issue type.
-Maintainers assign labels during triage.
-
-The labels drive the [public roadmap board](https://github.com/orgs/eigenpal/projects/2).
-The workflow mirrors them into the board's **Area** and **Priority** fields.
-
-| Area                        | What belongs in it                                                |
-| --------------------------- | ----------------------------------------------------------------- |
-| `area:word-fidelity`        | Rendering, layout, and round-trip fidelity against Microsoft Word |
-| `area:performance`          | Typing latency, incremental layout, load, save, and memory        |
-| `area:collaboration`        | Real-time collaboration, tracked changes, and comments            |
-| `area:agent-ready`          | Headless automation and the `editor-api` object model             |
-| `area:ux`                   | Toolbar, caret, selection, IME, printing, and editor chrome       |
-| `area:developer-experience` | Packaging, adapters, public API, docs, and CI                     |
-
-| Priority          | Meaning                                                  |
-| ----------------- | -------------------------------------------------------- |
-| `priority:high`   | Data loss, corruption, crashes, or a broken core promise |
-| `priority:medium` | A real defect or gap with a workaround; the default      |
-| `priority:low`    | Polish, internal cleanup, or a narrow edge case          |
-
-Optional `component:*` labels (`component:core`, `component:react`, `component:vue`, `component:pro`, `component:editor-api`) name the affected package.
-
 ## Translations
 
 | Locale  | Language             |
