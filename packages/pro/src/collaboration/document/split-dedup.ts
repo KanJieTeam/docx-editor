@@ -15,14 +15,25 @@ Production use requires a commercial agreement: licensing@eigenpal.com
  * the same tree with the text intact.
  */
 
-import type * as Y from 'yjs';
+import * as Y from 'yjs';
 import { replicaOfLogicalId, type LogicalId } from './identity.ts';
+import type { DocumentLimits } from './limits.ts';
 import {
+  NODE_SPLIT_BASE_TEXT_FIELD,
   NODE_SPLIT_FROM_FIELD,
+  NODE_SPLIT_START_FIELD,
+  NODE_SHELL_FIELD,
+  NODE_TEXT_FIELD,
+  childArrayOf,
   isNodeMap,
+  isTextNodeMap,
+  nodeRecordSplitBaseText,
   nodeRecordSplitFrom,
+  nodeRecordSplitStart,
   nodeRecordTombstoned,
+  unpackNodeShell,
 } from './schema.ts';
+import { nodeKindOf } from './registry-node-reads.ts';
 
 /**
  * What the dedup reads about the tree it is projecting, injected so the index stays free of the
@@ -32,6 +43,23 @@ import {
  */
 export interface SplitDedupContext {
   readonly isPresent: (id: LogicalId) => boolean;
+}
+
+export interface SplitTextOverlays {
+  readonly values: ReadonlyMap<LogicalId, string>;
+  readonly changedIds: ReadonlySet<LogicalId>;
+}
+
+interface RunText {
+  readonly parts: readonly { readonly id: LogicalId; readonly value: string }[];
+  readonly witnessIds: readonly LogicalId[];
+  readonly value: string;
+}
+
+interface SplitProduct {
+  readonly id: LogicalId;
+  readonly start: number | null;
+  readonly text: RunText | null;
 }
 
 /** Cap on the `splitFrom` walk that classifies a re-split; stops a peer-crafted chain or cycle. */
@@ -44,6 +72,14 @@ export class SplitDedupIndex {
   private replicasByOrigin = new Map<LogicalId, Set<string>>();
   /** Origins that more than one replica split — the only ones a dedup pass has to examine. */
   private contestedOrigins = new Set<LogicalId>();
+  /** Text witness id → split origins whose derived text can change when that record changes. */
+  private originsByTextWitness = new Map<LogicalId, Set<LogicalId>>();
+  /** Split origins whose source text changed since the last repair pass. */
+  private pendingTextRepairOrigins = new Set<LogicalId>();
+  /** Product text id → derived value that rebases a concurrent edit without shared writes. */
+  private textOverlays = new Map<LogicalId, string>();
+  /** Split origin → product text ids carrying its current derived overlay. */
+  private overlayIdsByOrigin = new Map<LogicalId, Set<LogicalId>>();
   /**
    * Origins that are live again while products still point at them — an undo restored the origin.
    * A cold rebuild reads this straight from current state, so a peer joining after the undo drops
@@ -59,13 +95,20 @@ export class SplitDedupIndex {
    */
   private declinedTangleCount = 0;
 
-  constructor(private readonly nodes: Y.Map<Y.Map<unknown>>) {}
+  constructor(
+    private readonly nodes: Y.Map<Y.Map<unknown>>,
+    private readonly limits: Pick<DocumentLimits, 'maxTextLength' | 'maxTreeDepth'>
+  ) {}
 
   reset(): void {
     this.runsBySplitOrigin = new Map();
     this.replicasByOrigin = new Map();
     this.contestedOrigins = new Set();
     this.liveRootedOrigins = new Set();
+    this.originsByTextWitness = new Map();
+    this.pendingTextRepairOrigins = new Set();
+    this.textOverlays = new Map();
+    this.overlayIdsByOrigin = new Map();
   }
 
   /**
@@ -76,21 +119,149 @@ export class SplitDedupIndex {
    * Both concurrent splits of one run must reach the SAME root, or their products land in
    * separate groups and both survive.
    */
-  record(root: LogicalId, runId: LogicalId): void {
-    const rec = this.nodes.get(runId);
-    if (!isNodeMap(rec)) return;
-    // A run is not split from itself. Wrapping a run (a TOC bookmark, a hyperlink) removes and
-    // reinserts the SAME node, which looks like a replacement but partitions nothing; stamping it
-    // would let the dedup drop the run as a copy of itself.
-    if (root === runId) return;
-    rec.set(NODE_SPLIT_FROM_FIELD, root);
-    this.index(root, runId);
+  record(root: LogicalId, replacedRunId: LogicalId, runIds: readonly LogicalId[]): void {
+    const rootRecord = this.nodes.get(root);
+    const replacedRecord = this.nodes.get(replacedRunId);
+    if (!isNodeMap(rootRecord) || !isNodeMap(replacedRecord)) return;
+    const baseline =
+      nodeRecordSplitBaseText(rootRecord, this.limits.maxTextLength) ?? this.runText(root)?.value;
+    const start = nodeRecordSplitStart(replacedRecord) ?? 0;
+    const products = runIds.map((id) => ({ id, text: this.runText(id) }));
+    const canRepair =
+      baseline !== undefined &&
+      baseline.length <= this.limits.maxTextLength &&
+      products.every((product) => product.text !== null);
+    if (canRepair) {
+      rootRecord.set(NODE_SPLIT_BASE_TEXT_FIELD, baseline);
+      this.indexTextWitnesses(root, this.runText(root));
+    }
+    let cursor = start;
+    for (const product of products) {
+      const rec = this.nodes.get(product.id);
+      if (!isNodeMap(rec)) return;
+      // A run is not split from itself. Wrapping a run (a TOC bookmark, a hyperlink) removes and
+      // reinserts the SAME node, which looks like a replacement but partitions nothing.
+      if (root === product.id) continue;
+      rec.set(NODE_SPLIT_FROM_FIELD, root);
+      if (canRepair) rec.set(NODE_SPLIT_START_FIELD, cursor);
+      this.index(root, product.id);
+      if (canRepair) this.indexTextWitnesses(root, product.text);
+      cursor += product.text?.value.length ?? 0;
+    }
     // A later round re-split a run an earlier round produced, and the shared origin was split by
     // two replicas — the tangle the dedup declines. Count it, so the session reconciles the
     // author's store only on the edit that creates the tangle, not on every keystroke while it
     // persists. A single author re-formatting a paragraph re-splits products too, but its origin
     // is never contested, so this ignores it — no wasted reconcile without a real conflict.
-    if (this.reSplitOfContestedOrigin(root)) this.declinedTangleCount += 1;
+    if (this.reSplitOfContestedOrigin(root)) this.declinedTangleCount += products.length;
+  }
+
+  /**
+   * Rebase text written concurrently to a split source onto the winning split products.
+   *
+   * The overlay is derived from shared state and never writes to Yjs. Every live peer and late
+   * joiner therefore computes the same result without requiring the split author to stay online.
+   * The baseline proves the product text has not changed since the split, so a later sequential
+   * edit is never overwritten.
+   */
+  concurrentTextOverlays(isPresent: SplitDedupContext['isPresent']): SplitTextOverlays {
+    const changedIds = new Set<LogicalId>();
+    const pending = this.pendingTextRepairOrigins;
+    this.pendingTextRepairOrigins = new Set();
+    for (const root of pending) {
+      for (const id of this.overlayIdsByOrigin.get(root) ?? []) {
+        if (this.textOverlays.delete(id)) changedIds.add(id);
+      }
+      this.overlayIdsByOrigin.delete(root);
+      const runs = this.runsBySplitOrigin.get(root);
+      if (!runs) continue;
+      if (this.isReSplit(root) || isPresent(root)) continue;
+      const base = nodeRecordSplitBaseText(this.nodes.get(root), this.limits.maxTextLength);
+      const source = this.runText(root);
+      if (base === null || !source || source.value === base) continue;
+      const presentReplicas = new Set<string>();
+      for (const runId of runs) {
+        if (isPresent(runId)) presentReplicas.add(replicaOfLogicalId(runId) ?? '');
+      }
+      const winner = [...presentReplicas].sort()[0];
+      if (winner === undefined) continue;
+      const products = [...runs]
+        .filter((runId) => isPresent(runId) && replicaOfLogicalId(runId) === winner)
+        .map((runId) => ({
+          id: runId,
+          start: nodeRecordSplitStart(this.nodes.get(runId)),
+          text: this.runText(runId),
+        }))
+        .sort(
+          (left, right) => (left.start ?? 0) - (right.start ?? 0) || left.id.localeCompare(right.id)
+        );
+      if (!this.productsCoverBaseline(products, base)) continue;
+      const merged = mergeSourceEditIntoProducts(base, source.value, products);
+      const overlayIds = new Set<LogicalId>();
+      for (let index = 0; index < products.length; index += 1) {
+        const product = products[index]!;
+        const values = partitionRunText(product.text!, merged[index]!);
+        for (let textIndex = 0; textIndex < product.text!.parts.length; textIndex += 1) {
+          const id = product.text!.parts[textIndex]!.id;
+          const overlay = values[textIndex]!;
+          if (this.textOverlays.get(id) !== overlay) changedIds.add(id);
+          this.textOverlays.set(id, overlay);
+          overlayIds.add(id);
+        }
+      }
+      this.overlayIdsByOrigin.set(root, overlayIds);
+    }
+    return { values: this.textOverlays, changedIds };
+  }
+
+  noteChanged(logicalId: LogicalId): void {
+    for (const root of this.originsByTextWitness.get(logicalId) ?? []) {
+      this.pendingTextRepairOrigins.add(root);
+    }
+  }
+
+  private productsCoverBaseline(products: readonly SplitProduct[], baseline: string): boolean {
+    if (products.length === 0 || products[0]?.start !== 0) return false;
+    for (let index = 0; index < products.length; index += 1) {
+      const product = products[index]!;
+      if (product.start === null || !product.text) return false;
+      const end = products[index + 1]?.start ?? baseline.length;
+      if (end < product.start || end > baseline.length) return false;
+    }
+    return true;
+  }
+
+  private runText(runId: LogicalId): RunText | null {
+    if (nodeKindOf(this.nodes, runId) !== 'run') return null;
+    const parts: { id: LogicalId; value: string }[] = [];
+    const witnessIds: LogicalId[] = [];
+    let value = '';
+    const seen = new Set<LogicalId>();
+    const visit = (id: LogicalId, depth: number): boolean => {
+      if (depth > this.limits.maxTreeDepth || seen.has(id)) return false;
+      seen.add(id);
+      witnessIds.push(id);
+      const rec = this.nodes.get(id);
+      if (!isNodeMap(rec)) return false;
+      if (isTextNodeMap(rec)) {
+        const text = rec.get(NODE_TEXT_FIELD);
+        if (!(text instanceof Y.Text)) return false;
+        const part = text.toString();
+        value += part;
+        if (value.length > this.limits.maxTextLength) return false;
+        parts.push({ id, value: part });
+        return true;
+      }
+      const shell = rec.get(NODE_SHELL_FIELD);
+      const decoded = unpackNodeShell(typeof shell === 'string' ? shell : '');
+      if (depth > 0 && decoded.kind === 'runProperties') return true;
+      if (depth > 0 && decoded.localName !== 't') return false;
+      for (const childId of childArrayOf(rec)?.toArray() ?? []) {
+        if (!visit(childId, depth + 1)) return false;
+      }
+      return true;
+    };
+    return visit(runId, 0) && parts.length > 0 ? { parts, witnessIds, value } : null;
   }
 
   /**
@@ -114,7 +285,25 @@ export class SplitDedupIndex {
   /** Index a run that already carries a `splitFrom` (a rebuild scan, or a remote arrival). */
   indexExisting(runId: LogicalId): void {
     const root = nodeRecordSplitFrom(this.nodes.get(runId));
-    if (root !== null && root !== runId) this.index(root, runId);
+    if (root !== null && root !== runId) {
+      this.index(root, runId);
+      this.indexTextWitnesses(root, this.runText(root));
+      this.indexTextWitnesses(root, this.runText(runId));
+      const base = nodeRecordSplitBaseText(this.nodes.get(root), this.limits.maxTextLength);
+      const source = this.runText(root);
+      if (base !== null && source && source.value !== base) {
+        this.pendingTextRepairOrigins.add(root);
+      }
+    }
+  }
+
+  private indexTextWitnesses(root: LogicalId, text: RunText | null): void {
+    if (!text) return;
+    for (const witnessId of text.witnessIds) {
+      const origins = this.originsByTextWitness.get(witnessId) ?? new Set<LogicalId>();
+      origins.add(root);
+      this.originsByTextWitness.set(witnessId, origins);
+    }
   }
 
   private index(root: LogicalId, runId: LogicalId): void {
@@ -195,4 +384,92 @@ export class SplitDedupIndex {
     }
     return losers;
   }
+}
+
+function mapBaseOffset(base: string, next: string, offset: number): number {
+  let prefix = 0;
+  const shared = Math.min(base.length, next.length);
+  while (prefix < shared && base.charCodeAt(prefix) === next.charCodeAt(prefix)) prefix += 1;
+  let suffix = 0;
+  while (
+    suffix < base.length - prefix &&
+    suffix < next.length - prefix &&
+    base.charCodeAt(base.length - suffix - 1) === next.charCodeAt(next.length - suffix - 1)
+  ) {
+    suffix += 1;
+  }
+  const baseEnd = base.length - suffix;
+  const nextEnd = next.length - suffix;
+  if (offset <= prefix) return offset;
+  if (offset >= baseEnd) return nextEnd + offset - baseEnd;
+  return prefix;
+}
+
+function mergeSourceEditIntoProducts(
+  base: string,
+  source: string,
+  products: readonly SplitProduct[]
+): readonly string[] {
+  const edit = textSplice(base, source);
+  const owner = products.findIndex((product, index) => {
+    const end = products[index + 1]?.start ?? base.length;
+    return product.start !== null && edit.start >= product.start && edit.start <= end;
+  });
+  return products.map((product, index) => {
+    const start = product.start!;
+    const end = products[index + 1]?.start ?? base.length;
+    const basePart = base.slice(start, end);
+    const current = product.text!.value;
+    const deleteStart = Math.max(edit.start, start);
+    const deleteEnd = Math.min(edit.end, end);
+    const ownsInsert = index === owner && edit.insert.length > 0;
+    if (deleteStart >= deleteEnd && !ownsInsert) return current;
+    const localStart = Math.max(0, (ownsInsert ? edit.start : deleteStart) - start);
+    const localEnd = Math.max(localStart, deleteEnd - start);
+    const mappedStart = mapBaseOffset(basePart, current, localStart);
+    const mappedEnd = mapBaseOffset(basePart, current, localEnd);
+    if (
+      mappedStart === mappedEnd &&
+      ownsInsert &&
+      current.slice(mappedStart, mappedStart + edit.insert.length) === edit.insert
+    ) {
+      return current;
+    }
+    return (
+      current.slice(0, mappedStart) + (ownsInsert ? edit.insert : '') + current.slice(mappedEnd)
+    );
+  });
+}
+
+function partitionRunText(run: RunText, merged: string): readonly string[] {
+  const boundaries = [0];
+  for (const part of run.parts) boundaries.push(boundaries.at(-1)! + part.value.length);
+  const mapped = boundaries.map((offset) => mapBaseOffset(run.value, merged, offset));
+  return run.parts.map((_, index) => merged.slice(mapped[index]!, mapped[index + 1]!));
+}
+
+function textSplice(
+  base: string,
+  next: string
+): {
+  readonly start: number;
+  readonly end: number;
+  readonly insert: string;
+} {
+  let start = 0;
+  const shared = Math.min(base.length, next.length);
+  while (start < shared && base.charCodeAt(start) === next.charCodeAt(start)) start += 1;
+  let suffix = 0;
+  while (
+    suffix < base.length - start &&
+    suffix < next.length - start &&
+    base.charCodeAt(base.length - suffix - 1) === next.charCodeAt(next.length - suffix - 1)
+  ) {
+    suffix += 1;
+  }
+  return {
+    start,
+    end: base.length - suffix,
+    insert: next.slice(start, next.length - suffix),
+  };
 }

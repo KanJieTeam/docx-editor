@@ -37,6 +37,13 @@ function doc(): Uint8Array {
   );
 }
 
+function mixedRunDoc(): Uint8Array {
+  return zipDocument(
+    '<w:p><w:r><w:t>HelloWorld</w:t></w:r></w:p>' +
+      `<w:p><w:r><w:t>${PARA1}</w:t></w:r></w:p><w:sectPr/>`
+  );
+}
+
 function bodyText(peer: Peer): string {
   const texts: string[] = [];
   walk(peer.store.bodyStore().part.root, (node: OoxmlNode) => {
@@ -168,11 +175,7 @@ describe('concurrent run-format convergence (#581)', () => {
     harness.expectConverged(bob, carol);
   });
 
-  test('concurrent typing and formatting converges without duplicating text', async () => {
-    // This peer's insert grows the origin run in place rather than splitting it, so it never
-    // enters the dedup. The concurrent format split still discards the typed characters when it
-    // copies the origin (issue #590, a separate concurrency gap); what this pins is that the
-    // dedup does not compound it — the peers converge and the text is not doubled.
+  test('concurrent typing survives formatting the same run', async () => {
     const { alice, bob } = await race(
       (peer) => runProps(peer, 0, 0, 5, 'b'),
       (peer): TreeDocOp => ({
@@ -182,8 +185,145 @@ describe('concurrent run-format convergence (#581)', () => {
         text: 'ZZZ',
       })
     );
-    // Converged (asserted by race), and the base text appears once, not doubled.
+    const expected = PARA0.slice(0, 15) + 'ZZZ' + PARA0.slice(15) + PARA1;
+    expect(bodyText(alice)).toBe(expected);
+    expect(bodyText(bob)).toBe(expected);
+    harness.apply(bob, [
+      {
+        op: 'insertText',
+        paragraphId: harness.paragraphIdAt(bob, 0),
+        offset: 18,
+        text: 'Q',
+      },
+    ]);
+    harness.expectConverged(alice, bob);
+    const edited = expected.slice(0, 18) + 'Q' + expected.slice(18);
+    expect(bodyText(alice)).toBe(edited);
+    const carol = await harness.join(alice, 'carol');
+    harness.expectConverged(alice, carol);
+    expect(bodyText(carol)).toBe(edited);
+  });
+
+  test('concurrent deletion survives formatting the same run', async () => {
+    const { alice, bob } = await race(
+      (peer) => runProps(peer, 0, 0, 5, 'b'),
+      (peer): TreeDocOp => ({
+        op: 'deleteText',
+        paragraphId: harness.paragraphIdAt(peer, 0),
+        start: 3,
+        end: 8,
+      })
+    );
+    const expected = PARA0.slice(0, 3) + PARA0.slice(8) + PARA1;
+    expect(bodyText(alice)).toBe(expected);
+    expect(bodyText(bob)).toBe(expected);
+  });
+
+  test('concurrent typing survives after the formatting peer leaves', async () => {
+    const { alice, bob, pause, resume } = await harness.pair(doc());
+    pause();
+    harness.apply(alice, [runProps(alice, 0, 0, 5, 'b')]);
+    harness.apply(bob, [
+      {
+        op: 'insertText',
+        paragraphId: harness.paragraphIdAt(bob, 0),
+        offset: 15,
+        text: 'ZZZ',
+      },
+    ]);
+    harness.leave(alice);
+    resume();
+    const expected = PARA0.slice(0, 15) + 'ZZZ' + PARA0.slice(15) + PARA1;
+    expect(bodyText(bob)).toBe(expected);
+    expect(markCount(bob, 'b')).toBeGreaterThan(0);
+    const carol = await harness.join(bob, 'carol');
+    harness.expectConverged(bob, carol);
+    expect(bodyText(carol)).toBe(expected);
+  });
+
+  test('concurrent typing survives when the typing peer receives the format', async () => {
+    const { alice, bob } = await race(
+      (peer): TreeDocOp => ({
+        op: 'insertText',
+        paragraphId: harness.paragraphIdAt(peer, 0),
+        offset: 15,
+        text: 'ZZZ',
+      }),
+      (peer) => runProps(peer, 0, 0, 5, 'b')
+    );
+    const expected = PARA0.slice(0, 15) + 'ZZZ' + PARA0.slice(15) + PARA1;
+    expect(bodyText(alice)).toBe(expected);
+    expect(bodyText(bob)).toBe(expected);
+    expect(markCount(alice, 'b')).toBeGreaterThan(0);
+  });
+
+  test('undo of concurrent typing updates the formatted products', async () => {
+    const { alice, bob } = await race(
+      (peer) => runProps(peer, 0, 0, 5, 'b'),
+      (peer): TreeDocOp => ({
+        op: 'insertText',
+        paragraphId: harness.paragraphIdAt(peer, 0),
+        offset: 15,
+        text: 'ZZZ',
+      })
+    );
+    expect(bob.room.session.undo()).toBe(true);
+    bob.port.flushPendingJournals();
+    harness.expectConverged(alice, bob);
     expect(bodyText(alice)).toBe(PARA0 + PARA1);
-    expect(bodyText(bob)).toBe(PARA0 + PARA1);
+    expect(markCount(alice, 'b')).toBeGreaterThan(0);
+  });
+
+  test('concurrent typing survives formatting a run that contains a tab', async () => {
+    const { alice, bob, pause, resume } = await harness.pair(mixedRunDoc());
+    harness.apply(alice, [
+      {
+        op: 'insertTab',
+        paragraphId: harness.paragraphIdAt(alice, 0),
+        offset: 5,
+      },
+    ]);
+    harness.expectConverged(alice, bob);
+    pause();
+    harness.apply(alice, [runProps(alice, 0, 0, 5, 'b')]);
+    harness.apply(bob, [
+      {
+        op: 'insertText',
+        paragraphId: harness.paragraphIdAt(bob, 0),
+        offset: 8,
+        text: 'X',
+      },
+    ]);
+    resume();
+    harness.expectConverged(alice, bob);
+    expect(bodyText(alice)).toBe('HelloWoXrld' + PARA1);
+    expect(markCount(alice, 'tab')).toBe(1);
+  });
+
+  test('concurrent source typing merges with typing on a split product', async () => {
+    const { alice, bob, pause, resume } = await harness.pair(doc());
+    pause();
+    harness.apply(alice, [runProps(alice, 0, 0, 5, 'b')]);
+    harness.apply(alice, [
+      {
+        op: 'insertText',
+        paragraphId: harness.paragraphIdAt(alice, 0),
+        offset: 2,
+        text: 'A',
+      },
+    ]);
+    harness.apply(bob, [
+      {
+        op: 'insertText',
+        paragraphId: harness.paragraphIdAt(bob, 0),
+        offset: 15,
+        text: 'B',
+      },
+    ]);
+    resume();
+    harness.expectConverged(alice, bob);
+    const expected = 'AlApha bravo canBvas delta editor' + PARA1;
+    expect(bodyText(alice)).toBe(expected);
+    expect(bodyText(bob)).toBe(expected);
   });
 });
