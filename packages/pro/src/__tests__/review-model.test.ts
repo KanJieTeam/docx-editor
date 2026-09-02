@@ -177,6 +177,23 @@ describe('one decision is one card', () => {
     expect(revisionsOf(collectReviewItems({ storyPart: part }))).toHaveLength(2);
   });
 
+  test('empty deleted field controls join their visible replacement', () => {
+    const part = story(
+      `<w:p><w:del w:id="33" w:author="QA" w:date="D">` +
+        `<w:r><w:fldChar w:fldCharType="separate"/></w:r></w:del>` +
+        `${del('34', delRun('old'), 'QA')}` +
+        `<w:del w:id="35" w:author="QA" w:date="D">` +
+        `<w:r><w:fldChar w:fldCharType="end"/></w:r></w:del>` +
+        `${ins('36', run('new'), 'QA')}</w:p>`
+    );
+    const items = revisionsOf(collectReviewItems({ storyPart: part }));
+    expect(items).toHaveLength(1);
+    expect(items[0]!.revisionKind).toBe('replace');
+    expect(items[0]!.replacedText).toBe('old');
+    expect(items[0]!.text).toBe('new');
+    expect(items[0]!.addresses.map((address) => address.id)).toEqual(['33', '34', '35', '36']);
+  });
+
   test('card ids are unique, so a list key never collides', () => {
     const part = story(
       `<w:p>${ins('7', run('a'))}${run(' x ')}${ins('7', run('b'))}${del('7', delRun('c'), 'QA')}</w:p>`

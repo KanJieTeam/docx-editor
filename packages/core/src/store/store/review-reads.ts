@@ -487,7 +487,17 @@ function mergeAdjacentSameKindEdits(
   const endKeys = new Set<string>();
   for (const item of mergeable) {
     byStart.set(keyOf(item, item.ranges[0]!.start), item);
-    endKeys.add(keyOf(item, item.ranges[item.ranges.length - 1]!.end));
+    // An empty field-control wrapper can prefix a visible revision at the same position.
+    // Its point is not evidence that the visible revision has a predecessor.
+    if (
+      item.ranges.some(
+        (range) =>
+          range.start.paragraphId !== range.end.paragraphId ||
+          range.start.offset !== range.end.offset
+      )
+    ) {
+      endKeys.add(keyOf(item, item.ranges[item.ranges.length - 1]!.end));
+    }
   }
 
   const consumed = new Set<string>();
