@@ -50,6 +50,7 @@ layout pass, and the paint step directly.
 | `./store`                     | The canonical tree and its transactional store.                                              |
 | `./layout`                    | The DOM-free layout pass.                                                                    |
 | `./output`                    | Serialization.                                                                               |
+| `./export`                    | Reusable, DOM-free semantic layout sessions for Markdown, PDF, and future exporters.         |
 | `./automation`                | The object model behind `@docx-editor.dev/editor-api`.                                       |
 | `./collaboration`             | Provider-neutral collaboration session contracts.                                            |
 | `./collaboration/replication` | Replication helpers for collaboration providers.                                             |
@@ -68,6 +69,47 @@ as tree operations, so the browser never invents markup inside your document.
 Nodes are typed where layout needs them and generic everywhere else, preserving the element
 verbatim. Content the engine does not model is carried rather than dropped, so a document full
 of unknown extensions still opens, edits, and saves.
+
+Export sessions use the editor's reader-safe revision view by default: `all-markup` keeps both
+halves of pending tracked changes visible. Pass `displayMode: 'proposed'` or
+`displayMode: 'original'` explicitly when the exporter should present a resolved view instead.
+
+### Building a physical-page exporter
+
+Use the document-aware font composition root for Markdown, PDF, or any exporter whose page breaks
+matter. `openDocumentForExport(bytes)` without a measurer intentionally uses deterministic
+fixed-width approximation. `openFontBackedDocumentForExport` discovers the document's actual run,
+style, header, footer, note, field, symbol, and equation families, then binds the resolved shaping
+snapshot to the layout session.
+
+```ts
+import { readFile } from 'node:fs/promises';
+import { openFontBackedDocumentForExport } from '@docx-editor.dev/core/export';
+import { packagedFonts } from '@docx-editor.dev/fonts';
+
+const bytes = new Uint8Array(await readFile('contract.docx'));
+const opened = await openFontBackedDocumentForExport(bytes, {
+  // First wins: put caller-supplied licensed fonts first, bundled metric substitutes next,
+  // and an optional network resolver last.
+  fonts: [callerFonts, packagedFonts({ install: false }), optionalNetworkFonts],
+  fontPolicy: 'strict',
+  onFontResolution: (report) => auditLogger.info(report),
+});
+
+if (!opened.ok) throw new Error(`DOCX rejected: ${opened.reason}`);
+try {
+  const layout = await opened.session.layout();
+  await writeExporterOutput(layout);
+} finally {
+  opened.session.dispose(); // releases document-owned shaping bytes
+}
+```
+
+Keep font retrieval, substitution, cancellation, diagnostics, and memory ownership in this Core
+lane. Format adapters should consume the resulting semantic pages; Markdown binds Core source
+artifacts to string offsets, while PDF can bind the same artifacts to page rectangles. For a live
+`HeadlessDocumentView`, pass the revision-stable measurer already used by its editor rather than
+starting asynchronous document-specific font resolution against mutable state.
 
 ## Fidelity
 

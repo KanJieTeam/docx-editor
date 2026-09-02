@@ -19,6 +19,7 @@
 // `breakParagraph`, so they hit the same cache with keys at the cell's content width.
 
 import type { OoxmlElement, OoxmlNode } from '@docx-editor.dev/core/store';
+import { stripAnchorSinksForProbe } from './table-probe-deps.ts';
 import {
   clipInlineDrawingRecordToRegion,
   publishAnchoredDrawingsForParagraph,
@@ -255,6 +256,8 @@ export interface TableFlowDeps {
   readonly inlineDrawingLayout?: import('./drawing-layout.ts').InlineDrawingLayoutContext;
   /** Per-paragraph drawing projection/resource token for break cache keys. */
   readonly drawingTokenForParagraph?: (paragraph: OoxmlNode) => string;
+  /** Per-paragraph semantic projection identity for cached cell lines. */
+  readonly projectionTokenForParagraph?: (paragraph: OoxmlNode) => string;
   /** @deprecated Prefer {@link drawingTokenForParagraph}. */
   readonly drawingLayoutToken?: string;
   /**
@@ -432,6 +435,7 @@ function placeCellParagraph(
   readonly fitted: boolean;
 } {
   const paragraphId = paragraph.id;
+  const keyFor = deps.cache?.keyFor?.bind(deps.cache) ?? paragraphLayoutKey;
   const listItem = deps.listItems?.get(paragraphId);
   const layoutInputs = resolveParagraphLayoutInputs(
     paragraph,
@@ -446,6 +450,8 @@ function placeCellParagraph(
     indent,
     available,
     alignment,
+    styleId,
+    outlineLevel,
     spacing,
     lineSpacing,
     bottomBorder,
@@ -512,7 +518,7 @@ function placeCellParagraph(
   // `txbxList` property. A numbering edit moves only this property while the host's
   // subtree stays byte-identical; box-free paragraphs keep their pre-existing key shape.
   const hostedListToken = deps.hostedListTokenForParagraph?.(paragraph) ?? '';
-  const key = paragraphLayoutKey({
+  const key = keyFor({
     paragraph,
     properties: [
       ...props,
@@ -536,6 +542,7 @@ function placeCellParagraph(
       deps.drawingTokenForParagraph?.(paragraph) || deps.drawingLayoutToken || '',
       deps.inlineDrawingLayout !== undefined
     ),
+    projectionToken: deps.projectionTokenForParagraph?.(paragraph) ?? '',
     ...(positionedExclusionToken ? { exclusionToken: positionedExclusionToken } : {}),
   });
   if (deps.cache) deps.onCellBreakKey?.(key);
@@ -894,6 +901,9 @@ function placeCellParagraph(
       end: records[records.length - 1]!.range.end,
     },
     props,
+    styleId,
+    outlineLevel,
+    alignment,
     spacing: { before: appliedBefore, after: appliedAfter },
     indent,
     tabStops,
@@ -1489,6 +1499,7 @@ export function layoutRowFragmentBounded(
       ...(row.revisionAuthor !== undefined ? { revisionAuthor: row.revisionAuthor } : {}),
       ...(row.revisionDate !== undefined ? { revisionDate: row.revisionDate } : {}),
       rowIndex: 0,
+      isHeaderRow: row.isHeader,
       isHeaderRepeat,
       ...(isContinuation ? { isContinuation: true as const } : {}),
       cells,
@@ -1498,23 +1509,6 @@ export function layoutRowFragmentBounded(
     remainder: complete ? null : remainderCursors,
     fitted: anyFitted || row.cells.every((cell) => cell.vMergeContinue) || clipExact,
     nestedSplitBlocked: anyNestedBlocked,
-  };
-}
-
-/**
- * Measure the natural height of a full (unsplit) row without allocating line ids.
- * Used for whole-row preflight before committing placement.
- */
-function stripAnchorSinksForProbe(deps: TableFlowDeps): TableFlowDeps {
-  return {
-    ...deps,
-    measuringOnly: true,
-    collectAnchoredDrawings: undefined,
-    publishAnchoredDrawings: undefined,
-    deferAnchoredDrawings: undefined,
-    onAnchorRepublish: undefined,
-    onAnchorShift: undefined,
-    anchorDeferOnly: true,
   };
 }
 

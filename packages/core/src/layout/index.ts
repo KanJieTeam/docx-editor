@@ -82,6 +82,18 @@ export {
 } from './harfbuzz-shaper.ts';
 export { setHarfBuzzWasmUrl } from './harfbuzz-wasm-binary.ts';
 export {
+  LayoutShapingConfigurationError,
+  createLayoutShaping,
+  disposeLayoutShaping,
+  layoutFontConfigurationFingerprint,
+  prepareLayoutFontConfiguration,
+  type LayoutFontConfiguration,
+  type LayoutFontSource,
+  type LayoutFontSubstitution,
+  type PreparedLayoutFontConfiguration,
+  type LayoutShapingInstrumentation,
+} from './layout-shaping.ts';
+export {
   UnsupportedScriptError,
   itemizeScriptFontSlots,
   styleForFontSlot,
@@ -159,6 +171,8 @@ export {
   type PageGeometry,
   type PageRecord,
   type ListMarkerRecord,
+  type NoteAreaRecord,
+  type NoteStoryRecord,
   type ParagraphBottomBorderRecord,
   type ParagraphBorderEdge,
   type ParagraphBorderSide,
@@ -175,6 +189,82 @@ export {
   type TableRowFragmentRecord,
   type TextMeasurer,
 } from './semantic-records.ts';
+export type {
+  SemanticArtifactRootStoryKind,
+  SemanticArtifactStoryKind,
+  SemanticCommentArtifactRecord,
+  SemanticReviewArtifactOccurrence,
+  SemanticReviewArtifactPosition,
+  SemanticReviewArtifactRecord,
+  SemanticReviewArtifactSource,
+  SemanticTrackedChangeArtifactRecord,
+} from './review-artifact-records.ts';
+export {
+  exportSourceRangeOf,
+  forEachSemanticDrawing,
+  forEachSemanticStory,
+  forEachSemanticSpan,
+  forEachStoryParagraphFragment,
+  type SemanticDrawingVisit,
+  type SemanticDrawingLayer,
+  type SemanticSpanVisit,
+  type SemanticRootStoryKind,
+  type SemanticStoryKind,
+  type SemanticStoryVisit,
+  type StoryDrawingContext,
+  type StoryDrawingHost,
+  type StoryParagraphFragmentContext,
+} from './export-traversal.ts';
+export { lineSegments, type LineSegment } from './line-segments.ts';
+export type {
+  AnchoredDrawingLayoutFallback,
+  AnchoredDrawingRecord,
+  InlineDrawingRecord,
+} from './drawing-layout.ts';
+export type { TextboxStoryLayout } from './textbox-story-layout.ts';
+export type { TextboxStoryFallbackReason } from './textbox-story-layout.ts';
+export type {
+  DrawingClipFallback,
+  DrawingGeometry,
+  DrawingInsets,
+  DrawingPoint,
+} from './drawing-geometry.ts';
+export type {
+  DrawingAccessibility,
+  DrawingHorizontalReferenceFrame,
+  DrawingTransform,
+  DrawingVerticalReferenceFrame,
+  ImageWrapTarget,
+  SourceCrop,
+} from '../store/package/drawing-projection.ts';
+export type {
+  VectorShapeComponent,
+  VectorShapeProjection,
+} from '../store/package/drawing-shape-projection.ts';
+export {
+  createDocumentStyleDependencies,
+  type DocumentStyleDependencies,
+} from './document-style-deps.ts';
+export {
+  createDocumentFurnitureSource,
+  type CreateDocumentFurnitureSourceOptions,
+  type DocumentFurnitureSource,
+} from './document-furniture-source.ts';
+export {
+  createDocumentNotesInput,
+  documentRelationshipTargetIn,
+  type CreateDocumentNotesInputOptions,
+} from './document-notes-input.ts';
+export {
+  createDocumentLinkProjectors,
+  type DocumentLinkProjectors,
+} from './document-link-projector.ts';
+export type { StoryProjectionDependencies } from './text-projection-epoch.ts';
+export {
+  createFieldLinkRegistry,
+  type FieldLinkRegistry,
+  type RegisteredFieldLink,
+} from './field-link-registry.ts';
 // Named on `StyleSpanRecord`, so a consumer reading spans needs to be able to name it too.
 export type { FieldAtomMarker } from './field-pieces.ts';
 export {
@@ -448,7 +538,10 @@ export {
   type RevisionKind,
 } from './revision-projection.ts';
 export {
+  createLayoutShapedMeasurer,
   createShapedMeasurer,
+  type LayoutEnvironmentShapedMeasurerOptions,
+  type LayoutShapingEnvironment,
   type LayoutShapingOptions,
   type ShapedMeasurerOptions,
 } from './shaped-measurer.ts';

@@ -212,23 +212,90 @@ const catalogByFamily = ((): ReadonlyMap<string, readonly GoogleFontFace[]> => {
  * host that supplied its own (a CSP-constrained proxy, a test double) never receives
  * bytes some other fetcher produced. A `WeakMap` so a discarded fetcher's bytes go too.
  */
-const byteCaches = new WeakMap<object, Map<string, Promise<Uint8Array>>>();
+const MAX_CACHED_FONT_BYTES = 16 * 1024 * 1024;
+const MAX_CACHED_FONT_FACES = 64;
 
-function cacheFor(fetcher: typeof fetch): Map<string, Promise<Uint8Array>> {
+interface PendingFontFetch {
+  /** Signal-scoped waiters still racing this fetch; the last aborting one cancels it. */
+  waiters: number;
+  /** An unsigned waiter joined, so no abort may cancel the shared work under it. */
+  pinned: boolean;
+  readonly controller: AbortController;
+}
+
+interface FontByteCache {
+  readonly entries: Map<string, Promise<Uint8Array>>;
+  readonly sizes: Map<string, number>;
+  /** In-flight state per URL; absent once the entry holds settled bytes. */
+  readonly pending: Map<string, PendingFontFetch>;
+  totalBytes: number;
+}
+
+const byteCaches = new WeakMap<object, FontByteCache>();
+
+function cacheFor(fetcher: typeof fetch): FontByteCache {
   let cache = byteCaches.get(fetcher);
   if (!cache) {
-    cache = new Map();
+    cache = { entries: new Map(), sizes: new Map(), pending: new Map(), totalBytes: 0 };
     byteCaches.set(fetcher, cache);
   }
   return cache;
 }
 
-async function fetchFace(face: GoogleFontFace, fetcher: typeof fetch): Promise<Uint8Array> {
+function cacheSuccess(cache: FontByteCache, url: string, bytes: Uint8Array): void {
+  const previous = cache.sizes.get(url) ?? 0;
+  cache.entries.delete(url);
+  cache.sizes.delete(url);
+  cache.totalBytes -= previous;
+  if (bytes.byteLength > MAX_CACHED_FONT_BYTES) return;
+  cache.entries.set(url, Promise.resolve(bytes));
+  cache.sizes.set(url, bytes.byteLength);
+  cache.totalBytes += bytes.byteLength;
+  while (cache.entries.size > MAX_CACHED_FONT_FACES || cache.totalBytes > MAX_CACHED_FONT_BYTES) {
+    // Evict oldest SETTLED entries only. A pending entry has no recorded bytes to reclaim,
+    // and dropping its cache reference would both orphan the downloaded bytes (the settle
+    // handler declines to record a replaced entry) and break single-flight for new callers.
+    let oldest: string | undefined;
+    for (const key of cache.entries.keys()) {
+      if (cache.sizes.has(key)) {
+        oldest = key;
+        break;
+      }
+    }
+    if (oldest === undefined) break;
+    cache.entries.delete(oldest);
+    cache.totalBytes -= cache.sizes.get(oldest) ?? 0;
+    cache.sizes.delete(oldest);
+  }
+}
+
+async function fetchFace(
+  face: GoogleFontFace,
+  fetcher: typeof fetch,
+  signal?: AbortSignal
+): Promise<Uint8Array> {
   const byteCache = cacheFor(fetcher);
-  const inFlight = byteCache.get(face.url);
-  if (inFlight) return inFlight;
+  const inFlight = byteCache.entries.get(face.url);
+  const inFlightState = inFlight ? byteCache.pending.get(face.url) : undefined;
+  // Reuse a settled entry, or join a shared in-flight fetch. The one refusal: a signal-scoped
+  // caller never joins a PINNED fetch (one an unsigned caller owns), because that fetch may be
+  // stranded and nothing can cancel it — the caller replaces it with work it can cancel.
+  if (inFlight && (!inFlightState || !signal || !inFlightState.pinned)) {
+    // Map insertion order is the LRU order. Pending entries can move too; successful byte
+    // accounting is unchanged until their completion records the actual size.
+    byteCache.entries.delete(face.url);
+    byteCache.entries.set(face.url, inFlight);
+    if (!inFlightState) return raceWithAbort(inFlight, signal);
+    return joinPendingFetch(inFlight, inFlightState, signal);
+  }
+  // The fetch is cache-owned under its own controller: concurrent documents share ONE download
+  // per face instead of one each. Signal-scoped waiters are refcounted and the LAST aborting
+  // waiter cancels the shared request, so caller-owned work stays physically cancellable. A
+  // failed or cancelled fetch is forgotten below, so it can never poison retries.
+  const controller = new AbortController();
+  const state: PendingFontFetch = { waiters: 0, pinned: !signal, controller };
   const pending = (async () => {
-    const response = await fetcher(face.url);
+    const response = await fetcher(face.url, { signal: controller.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const bytes = new Uint8Array(await response.arrayBuffer());
     // The cheap half of content-checking, done here so an error page served with 200
@@ -239,11 +306,87 @@ async function fetchFace(face: GoogleFontFace, fetcher: typeof fetch): Promise<U
     }
     return bytes;
   })();
-  byteCache.set(face.url, pending);
+  byteCache.entries.set(face.url, pending);
+  byteCache.pending.set(face.url, state);
   // A failed fetch must not be remembered as a failure forever: the next document gets to
-  // try again. Only successes stay cached.
-  pending.catch(() => byteCache.delete(face.url));
-  return pending;
+  // try again. Only successes stay cached. Identity checks keep a replaced fetch's late
+  // settlement from touching its successor's cache slot.
+  pending.then(
+    (bytes) => {
+      if (byteCache.pending.get(face.url) === state) byteCache.pending.delete(face.url);
+      if (byteCache.entries.get(face.url) === pending) cacheSuccess(byteCache, face.url, bytes);
+    },
+    () => {
+      if (byteCache.pending.get(face.url) === state) byteCache.pending.delete(face.url);
+      if (byteCache.entries.get(face.url) !== pending) return;
+      byteCache.entries.delete(face.url);
+      byteCache.sizes.delete(face.url);
+    }
+  );
+  return joinPendingFetch(pending, state, signal);
+}
+
+function joinPendingFetch(
+  work: Promise<Uint8Array>,
+  state: PendingFontFetch,
+  signal: AbortSignal | undefined
+): Promise<Uint8Array> {
+  if (!signal) {
+    // An unsigned waiter can never abandon the fetch, so no abort may cancel it either.
+    state.pinned = true;
+    return work;
+  }
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? new Error('Font loading was aborted'));
+  }
+  state.waiters += 1;
+  let counted = true;
+  const leave = (abandoning: boolean): void => {
+    if (!counted) return;
+    counted = false;
+    state.waiters -= 1;
+    if (abandoning && state.waiters === 0 && !state.pinned) {
+      state.controller.abort(signal.reason ?? new Error('Font loading was aborted'));
+    }
+  };
+  return new Promise<Uint8Array>((resolve, reject) => {
+    const abort = (): void => {
+      reject(signal.reason ?? new Error('Font loading was aborted'));
+      leave(true);
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', abort);
+        leave(false);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', abort);
+        leave(false);
+        reject(error);
+      }
+    );
+  });
+}
+
+function raceWithAbort<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return work;
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error('Font loading was aborted'));
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => reject(signal.reason ?? new Error('Font loading was aborted'));
+    signal.addEventListener('abort', abort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      }
+    );
+  });
 }
 
 /**
@@ -366,6 +509,7 @@ export function googleFonts(options: GoogleFontsOptions = {}): GoogleFontsResolv
       const fragment = await loadDefaultFonts({
         families: [...new Set(packaged.values())],
         fetcher,
+        signal: request.signal,
       });
       sources.push(...fragment.sources);
       // Re-keyed onto the DOCUMENT's spelling for the same reason the catalog path does
@@ -391,7 +535,7 @@ export function googleFonts(options: GoogleFontsOptions = {}): GoogleFontsResolv
       packagedJob(),
       ...[...wanted.values()].flat().map(async (face) => {
         try {
-          const bytes = await fetchFace(face, fetcher);
+          const bytes = await fetchFace(face, fetcher, request.signal);
           sources.push({
             request: { family: face.family, weight: face.weight, style: face.style },
             id: `google-fonts:${face.family}#${face.weight}#${face.style}`,

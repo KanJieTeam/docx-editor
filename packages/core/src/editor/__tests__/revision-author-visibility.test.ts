@@ -18,10 +18,12 @@ describe('detached review author commands', () => {
 
     commands.setAllReviewAuthorsVisible(false);
     expect([...visibility.hiddenAuthors]).toEqual(['Ada']);
+    expect((visibility.hiddenAuthors as unknown as { add?: unknown }).add).toBeUndefined();
     expect(notifications).toBe(0);
 
     commands.showAllReviewAuthors();
     expect(visibility.hiddenAuthors.size).toBe(0);
+    expect((visibility.hiddenAuthors as unknown as { add?: unknown }).add).toBeUndefined();
     expect(notifications).toBe(1);
   });
 });

@@ -1628,6 +1628,44 @@ export interface HeaderFooterSlotMeta {
 export type HeaderFooterVariant = 'default' | 'first' | 'even';
 
 // @public
+export type HeadlessDocumentRejection = OoxmlPackageRejection | 'no-main-document-tree';
+
+// @public
+export interface HeadlessDocumentView {
+    // (undocumented)
+    currentPackage(): OoxmlPackage;
+    // (undocumented)
+    documentProperties(): DocumentProperties;
+    // (undocumented)
+    documentThemeFonts(): HeadlessThemeFonts;
+    // (undocumented)
+    headerFooterPartsBySection(): readonly HeaderFooterParts[];
+    headerFooterResolutionBySection?(): readonly HeaderFooterSectionResolution[];
+    // (undocumented)
+    numberingRoot(): OoxmlElement | null;
+    // (undocumented)
+    packageRevision(): number;
+    // (undocumented)
+    part(): OoxmlPart;
+    // (undocumented)
+    relationshipTarget(relationshipId: string): ReturnType<typeof relationshipTargetIn>;
+    // (undocumented)
+    settingsRoot(): OoxmlElement | null;
+    // (undocumented)
+    stylesRoot(): OoxmlElement | null;
+}
+
+// @public
+export interface HeadlessThemeFonts {
+    // (undocumented)
+    readonly major: string | null;
+    readonly majorEastAsia?: string | null;
+    // (undocumented)
+    readonly minor: string | null;
+    readonly minorEastAsia?: string | null;
+}
+
+// @public
 export type HrefProjection = {
     readonly href: string;
     readonly ok: true;
@@ -1696,12 +1734,14 @@ export const IMAGE_WRAP_TARGETS: readonly ImageWrapTarget[];
 
 // @public
 export interface ImageDecodePort {
-    convertPreserved?(bytes: Uint8Array, mime: PreservedImageMime, limits: ImageResourceLimits): Promise<Readonly<{
+    convertPreserved?(bytes: Uint8Array, mime: PreservedImageMime, limits: ImageResourceLimits,
+    signal?: AbortSignal): Promise<Readonly<{
         bytes: Uint8Array;
         mime: SupportedImageMime;
     }> | null>;
     // (undocumented)
-    decode(bytes: Uint8Array, mime: SupportedImageMime, limits: ImageResourceLimits): Promise<Readonly<{
+    decode(bytes: Uint8Array, mime: SupportedImageMime, limits: ImageResourceLimits,
+    signal?: AbortSignal): Promise<Readonly<{
         dpiX: number;
         dpiY: number;
         pixelHeight: number;
@@ -3010,6 +3050,19 @@ export interface OoxmlXmlSpaceAttribute extends OoxmlAttributeBase {
 }
 
 // @public
+export function openHeadlessDocument(bytes: Uint8Array): OpenHeadlessDocumentResult;
+
+// @public
+export type OpenHeadlessDocumentResult = {
+    readonly ok: true;
+    readonly view: HeadlessDocumentView;
+} | {
+    readonly detail?: string;
+    readonly ok: false;
+    readonly reason: HeadlessDocumentRejection;
+};
+
+// @public
 export interface OperationContext {
     // (undocumented)
     readonly budget: Budget;
@@ -3374,6 +3427,9 @@ export function removeNode(part: OoxmlPart, nodeId: string, options?: EditOption
 
 // @public
 export function removePackageCustomNode(packageStore: TreePackageStore, controlNodeId: string, scope?: StoryScope): CustomNodeWriteResult;
+
+// @public
+export type RenderableImageMime = SupportedImageMime | VectorImageMime;
 
 // @public
 export function replaceChildren(part: OoxmlPart, nodeId: string, children: readonly OoxmlNode[], options?: EditOptions): OoxmlEditResult;
@@ -4822,6 +4878,18 @@ export const twipsToPoints: (value: Twips) => Points;
 
 // @public
 export function usedParaIds(root: OoxmlElement): ReadonlySet<string>;
+
+// @public
+export interface ValidatedImageBytesHandle {
+    // (undocumented)
+    readonly contentId: string;
+    // (undocumented)
+    readonly generation: number;
+    // (undocumented)
+    readonly registryId: number;
+    // (undocumented)
+    readonly resourceKey: string;
+}
 
 // @public
 export interface ValidatedRasterHeader {

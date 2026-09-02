@@ -56,6 +56,17 @@ function pieces(
 }
 
 describe('review author layout filter', () => {
+  test('canonical filters expose no mutating Set methods or divergent cache identity', () => {
+    const filter = revisionAuthorFilter(['Grace', 'Ada', 'Ada']);
+    expect(filter).toBeDefined();
+    if (!filter) return;
+    expect([...filter.hiddenAuthors]).toEqual(['Ada', 'Grace']);
+    expect(filter.cacheKey).toBe('["Ada","Grace"]');
+    expect((filter.hiddenAuthors as unknown as { add?: unknown }).add).toBeUndefined();
+    expect((filter.hiddenAuthors as unknown as { delete?: unknown }).delete).toBeUndefined();
+    expect((filter.hiddenAuthors as unknown as { clear?: unknown }).clear).toBeUndefined();
+  });
+
   test('hidden insertions remain as ordinary accepted text', () => {
     const result = pieces(`<w:p>${ins('Ada', 'new')}${ins('Grace', 'other')}</w:p>`, ['Ada']);
     expect(result.map((piece) => piece.text)).toEqual(['new', 'other']);

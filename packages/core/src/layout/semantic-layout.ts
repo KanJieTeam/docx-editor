@@ -25,6 +25,7 @@ import {
   type HyperlinkProjector,
 } from './field-projection.ts';
 import {
+  aggregateParagraphTokensForTableBlock,
   framedTokenJoin,
   listTokenForTableBlock,
   paragraphLayoutKey,
@@ -120,8 +121,11 @@ import {
   MAX_DRAWING_EXCLUSION_REFLOW_PASSES,
 } from './drawing-exclusion.ts';
 import { drawingModelOffsetsInParagraph } from './drawing-layout.ts';
-import { drawingTokenForTableBlockMemo } from './inline-drawing-source.ts';
-import { projectDrawingsInPart } from '../store/package/drawing-projection.ts';
+import { bodyLineId } from './body-line-id.ts';
+import {
+  drawingSourceOrderInPart,
+  drawingTokenForTableBlockMemo,
+} from './inline-drawing-source.ts';
 import {
   emptyTocPlaceholderParagraphIds,
   emptyTocSuppressedResultParagraphIds,
@@ -130,11 +134,9 @@ import {
 import { furnitureLayoutContext, remapPage } from './hf-layout.ts';
 import type { BodyPageFieldContext } from './field-page-furniture.ts';
 import { createSectionPageFurniture } from './section-page-furniture.ts';
-import type { OverflowPageShell } from './page-furniture-insets.ts';
 import {
   createPageContentInsets,
   registerOverflowPageShell,
-  type PageContentInsets,
   type PageFurniture,
 } from './page-furniture-insets.ts';
 import { convergenceTailShiftAllowed } from './page-reuse-guards.ts';
@@ -150,13 +152,23 @@ import {
   paragraphSectionNode,
   type SectionColumns,
 } from './section-properties.ts';
-import { resolveSectionColumns, type ResolvedSectionColumns } from './section-columns.ts';
+import { resolveSectionColumns } from './section-columns.ts';
 import {
   inheritNotesLayoutInput,
   layoutSemanticDocumentWithNotes,
   notesReserveContextKey,
 } from './note-pagination.ts';
 import { passProducerOf, producerWithControlContext } from './pass-producer.ts';
+
+let exclusionLayoutPassObserverForTest: (() => void) | null = null;
+
+/** Observe exclusion-relay layout passes in deterministic tests. @internal */
+export function observeExclusionLayoutPassesForTest(observer: () => void): () => void {
+  exclusionLayoutPassObserverForTest = observer;
+  return () => {
+    if (exclusionLayoutPassObserverForTest === observer) exclusionLayoutPassObserverForTest = null;
+  };
+}
 import {
   DEFAULT_PAGE_GEOMETRY,
   type BlockFragmentRecord,
@@ -177,11 +189,7 @@ import {
   type ResolvedListItem,
 } from './list-resolve.ts';
 import { noteRefNumberingFromNotes } from './field-noteref.ts';
-import {
-  refTokenForTableBlock,
-  resolveStoryRefFieldsWithNoteNumbers,
-  type RefFieldContext,
-} from './field-ref.ts';
+import { refTokenForTableBlock, resolveStoryRefFieldsWithNoteNumbers } from './field-ref.ts';
 import { publishListMarker } from './list-marker.ts';
 import {
   NO_DEFERRED_DRAWINGS,
@@ -190,19 +198,23 @@ import {
   sameDeferCounts,
   sameFragments,
 } from './semantic-fragment-signature.ts';
-import { type FlowCheckpoint, type LayoutSession } from './layout-session.ts';
+import { createLayoutSession, type FlowCheckpoint, type LayoutSession } from './layout-session.ts';
+import { replaceLayoutSession } from './layout-session.ts';
 import { furnitureForSection, layoutMultiSectionDocument } from './multi-section-layout.ts';
 import { hostedListTokenDeps, layoutTextboxStory } from './textbox-story-layout.ts';
+import {
+  layoutBlocksWithColumnBalance,
+  type BlockLayoutOptions as ColumnBalanceBlockLayoutOptions,
+  type BlockLayoutResult,
+} from './column-balance-layout.ts';
 
 /** Extra full-document layouts after the reflow pass budget to detect a stable 2-cycle. */
 const MAX_DRAWING_EXCLUSION_STABILIZATION_PASSES = 2;
-
 export {
   createLayoutSession,
   type LayoutSession,
   type LayoutSessionStats,
 } from './layout-session.ts';
-
 // Both types moved to `page-furniture-insets.ts` with the per-page resolution that reads them;
 // they are re-exported here because this module is the import site every caller already has.
 export { type HeaderFooterVariantName, type PageFurniture } from './page-furniture-insets.ts';
@@ -241,6 +253,8 @@ export interface SemanticLayoutOptions {
    * the recompute path — the memo must never miss a token move it cannot see.
    */
   readonly drawingLayoutEpoch?: string;
+  /** Part-level freshness signal for paragraph-local semantic projection tokens. */
+  readonly projectionEpoch?: string;
   /**
    * Who produced the measurements, folded into every cache key.
    *
@@ -348,6 +362,10 @@ export interface SemanticLayoutOptions {
   readonly inlineDrawingLayout?: InlineDrawingLayoutContext;
   /** Per-paragraph drawing projection/resource token for break cache keys. */
   readonly drawingTokenForParagraph?: (paragraph: OoxmlNode) => string;
+  /** Per-paragraph identity for projected links and live document-property text. */
+  readonly projectionTokenForParagraph?: (paragraph: OoxmlNode) => string;
+  /** Memoized aggregate projection identity for an immutable table subtree. */
+  readonly projectionTokenForTable?: (table: OoxmlNode) => string;
   /** @deprecated Prefer {@link drawingTokenForParagraph}. */
   readonly drawingLayoutToken?: string;
   /** Internal: reflow pass index while wrap exclusions converge. */
@@ -375,6 +393,8 @@ export interface SemanticLayoutOptions {
   readonly emptyTocSuppressedResultParagraphIds?: ReadonlySet<string>;
 }
 
+type BlockLayoutOptions = ColumnBalanceBlockLayoutOptions<SemanticLayoutOptions>;
+
 /** Prepass results by block node, valid while the width and producer both hold. */
 type PreparedBlock =
   | {
@@ -388,6 +408,7 @@ type PreparedBlock =
       readonly lineSpacing: ParagraphLineSpacing;
       readonly contextualSpacing: boolean;
       readonly styleId: string | null;
+      readonly outlineLevel: number | null;
       readonly borders: ParagraphBorders;
       /**
        * Border identity + indent, for the `w:between` group rule.
@@ -412,6 +433,7 @@ interface PreparedBlockMemo {
   readonly contentWidth: number;
   readonly producer: string;
   readonly drawingToken: string;
+  readonly projectionToken: string;
   /**
    * The resolved list item this entry was prepared under, by its own cache token.
    *
@@ -513,6 +535,7 @@ export interface SectionPrepass {
    */
   readonly numberingIndex: NumberingIndex | undefined;
   readonly drawingEpoch: string;
+  readonly projectionEpoch: string;
   readonly prepared: PreparedBlock[];
   readonly keys: string[];
   readonly paragraphDocumentOrder: ReadonlyMap<string, number>;
@@ -541,11 +564,6 @@ function tocVerdictFor(paragraphId: string, ids: TocIdSets): string {
   if (!chrome && !placeholder && !suppressed) return '';
   return `${chrome ? 1 : 0}${placeholder ? 1 : 0}${suppressed ? 1 : 0}`;
 }
-const drawingSourceOrderByContext = new WeakMap<
-  InlineDrawingLayoutContext,
-  ReadonlyMap<string, number>
->();
-
 /**
  * Lay one story part out into pages.
  *
@@ -561,6 +579,8 @@ export function layoutSemanticDocument(
   revision: number,
   options: SemanticLayoutOptions
 ): SemanticLayout {
+  // ONE revision projection for both. Section block ranges index this exact list; using a
+  // different display mode or author predicate maps filtered blocks to the wrong geometry.
   const displayMode = options.displayMode ?? DEFAULT_REVISION_DISPLAY_MODE;
   const authorFilter = options.revisionAuthorFilter;
   const blocks = storyBlocks(part, displayMode, authorFilter);
@@ -570,6 +590,7 @@ export function layoutSemanticDocument(
   const controlToken = contentControlContextToken(part);
   const optionsWithControlContext: SemanticLayoutOptions = {
     ...options,
+    displayMode,
     producer: producerWithControlContext(options.producer, controlToken),
     tocFieldChromeParagraphIds:
       options.tocFieldChromeParagraphIds ?? tocFieldChromeParagraphIds(part),
@@ -581,17 +602,7 @@ export function layoutSemanticDocument(
   // Full-body list resolve so counters continue across sections and table cells.
   let drawingSourceOrder = options.drawingSourceOrder;
   if (!drawingSourceOrder && options.inlineDrawingLayout) {
-    drawingSourceOrder = drawingSourceOrderByContext.get(options.inlineDrawingLayout);
-    if (!drawingSourceOrder) {
-      drawingSourceOrder = (() => {
-        const order = new Map<string, number>();
-        projectDrawingsInPart(part).forEach((projection, index) => {
-          order.set(projection.drawingNodeId, index);
-        });
-        return order;
-      })();
-      drawingSourceOrderByContext.set(options.inlineDrawingLayout, drawingSourceOrder);
-    }
+    drawingSourceOrder = drawingSourceOrderInPart(part, options.inlineDrawingLayout);
   }
   const optionsWithLists = options.session
     ? withResolvedListItemsForSession(
@@ -676,9 +687,18 @@ export function layoutSemanticDocument(
     }
     return finalized;
   };
-
   const finish = (layout: SemanticLayout): SemanticLayout => {
-    const withBoundaries = attachContentControlBoundaries(layout, part, controlToken);
+    let projected = layout;
+    if (layout.displayMode !== displayMode) {
+      const { contentControls, controlContextToken, ...base } = layout;
+      projected = {
+        ...base,
+        displayMode,
+        ...(contentControls !== undefined ? { contentControls } : {}),
+        ...(controlContextToken !== undefined ? { controlContextToken } : {}),
+      };
+    }
+    const withBoundaries = attachContentControlBoundaries(projected, part, controlToken);
     if (options.session) {
       options.session.previous = withBoundaries;
     }
@@ -707,100 +727,13 @@ export function layoutSemanticDocument(
   );
 }
 
-interface BlockLayoutResult {
-  readonly layout: SemanticLayout;
-  readonly pages: readonly PageRecord[];
-  readonly lineCounter: number;
-  /** Used height of the LAST page's content column, for a section that continues onto it. */
-  readonly endCursorY: number;
-  /** Trailing paragraph spacing at the end of the flow, for adjacent-spacing collapse. */
-  readonly endSpaceAfter: number;
-  /**
-   * Whether the last page is the one the flow was still filling.
-   *
-   * False when the flow closed a page and opened nothing after it — an explicit
-   * `w:br w:type="page"` on the last paragraph. `endCursorY` is 0 in BOTH cases, so a
-   * section that continues onto this one cannot tell "empty column at the top of a fresh
-   * sheet" from "that sheet is full and the break already ended it" without this.
-   */
-  readonly endsOpenPage: boolean;
-  /**
-   * The content box AND furniture a page at a DOCUMENT index resolves to under this section's
-   * variants, for a sheet placed on `box`.
-   *
-   * Published so a pass that MINTS a sheet after layout — note overflow — can resolve the new
-   * index's shell instead of copying whichever page it cloned from. Defined past the section's
-   * own last page, which is exactly where an overflow sheet lands.
-   */
-  readonly overflowShellAt: (documentPageIndex: number, box: LayoutBox) => OverflowPageShell;
-}
-
-type BlockLayoutOptions = SemanticLayoutOptions & {
-  readonly geometry: PageGeometry;
-  readonly sectionColumns?: SectionColumns;
-  readonly lineCounterStart?: number;
-  readonly flowStartY?: number;
-  readonly spaceBeforeCarry?: number;
-  readonly pageIndexStart?: number;
-  /**
-   * The host sheet's content box, when this section continues the previous one onto it.
-   *
-   * Set with `flowStartY` by the multi-section orchestrator. See `continuedPageInsets` in
-   * `page-furniture-insets.ts` for why the section's own variants cannot answer this.
-   */
-  readonly continuedPageInsets?: PageContentInsets;
-  /**
-   * Balance this section's columns (ECMA-376 §17.6.4): Word divides the content of a
-   * multi-column section that ends in a continuous section break evenly across its
-   * columns instead of filling each to the page bottom first.
-   */
-  readonly balanceColumns?: boolean;
-  /**
-   * Column-height limit (content-box-relative bottom, points) applied to the FIRST page
-   * only. Internal to the balance search: overflow pages keep the full content height so
-   * an over-tall block always makes progress exactly as it does today.
-   */
-  readonly columnRegionBottom?: number;
-  /**
-   * The section's `w:pgNumType/@w:fmt`, for measuring body page-field placeholders.
-   *
-   * Absent means the section authors none, which is decimal. The placeholder and the value
-   * that replaces it must agree about whether a `\#` picture applies, and only the section
-   * knows the format — see {@link numericPictureApplies}.
-   */
-  readonly bodyPageNumberFormat?: string;
-  /**
-   * The story's resolved REF inputs, built once in `layoutSemanticDocument` and riding the
-   * options spreads (single-section `runBody` and the multi-section `...rest`) as a runtime
-   * property — deliberately NOT a `SemanticLayoutOptions` member, so the public options
-   * surface stays put. Absent for stories without REF fields and for non-body lanes.
-   */
-  readonly refFields?: RefFieldContext;
-};
-
-/**
- * Body line ids are paragraph-local rather than document-ordinal.
- *
- * An edit that adds a line before an explicit page break changes the document-wide line count
- * but not any line after that break. Keeping those tail ids stable lets incremental layout reuse
- * the old pages once geometry reconverges.
- */
-function bodyLineId(
-  paragraphId: string,
-  start: number,
-  lineIndex: number,
-  occurrence?: string
-): string {
-  const local = `line:${paragraphId}:${lineIndex}:${start}`;
-  return occurrence === undefined ? local : `${local}:occ:${occurrence}`;
-}
-
 function layoutBlocksPass(
   bodies: readonly OoxmlElement[],
   revision: number,
   options: BlockLayoutOptions
 ): BlockLayoutResult {
   const geometry = options.geometry;
+  const keyFor = options.cache?.keyFor?.bind(options.cache) ?? paragraphLayoutKey;
   const contentWidthForReflow = geometry.width - geometry.margin.left - geometry.margin.right;
   const columns = resolveSectionColumns(
     options.sectionColumns ?? DEFAULT_SECTION_PROPERTIES.columns,
@@ -811,7 +744,12 @@ function layoutBlocksPass(
     options.drawingExclusionPass === undefined &&
     !options.drawingExclusionConverged
   ) {
-    const sourceOrderOf = (drawingNodeId: string) => options.drawingSourceOrder?.get(drawingNodeId);
+    const sourceOrderOf = (drawingNodeId: string): number | undefined => {
+      const projectedId =
+        options.inlineDrawingLayout?.projectionForAtom?.(drawingNodeId)?.drawingNodeId ??
+        drawingNodeId;
+      return options.drawingSourceOrder?.get(projectedId);
+    };
     const exclusionColumnLayout = Object.freeze({
       columnCount: columns.count,
       columnGapPt: columns.gaps[0] ?? 0,
@@ -823,6 +761,10 @@ function layoutBlocksPass(
     let result: BlockLayoutResult | null = null;
     let converged = false;
     const seenZoneTokens = new Set<string>();
+    const layoutExclusionCandidate = (candidateOptions: BlockLayoutOptions): BlockLayoutResult => {
+      exclusionLayoutPassObserverForTest?.();
+      return layoutBlocksWithGeometry(bodies, revision, candidateOptions);
+    };
     const previousPages = options.session?.previous?.pages;
     if (previousPages) {
       zonesByPage = collectExclusionZonesByPageMemoized(
@@ -833,7 +775,7 @@ function layoutBlocksPass(
         options.drawingSourceOrder,
         exclusionColumnLayout
       );
-      result = layoutBlocksWithGeometry(bodies, revision, {
+      result = layoutExclusionCandidate({
         ...options,
         drawingExclusionPass: 0,
         drawingExclusionZonesByPage: zonesByPage,
@@ -855,10 +797,39 @@ function layoutBlocksPass(
       zonesByPage = new Map(nextZones);
       seenZoneTokens.add(exclusionMapsToken(nextZones));
     }
+    // The common document has an image-layout port but no exclusion-producing anchors. Build
+    // pass zero with a disposable session so that, when its collected zone map is empty, that
+    // very pass is publishable and can seed the caller's incremental state. Previously the
+    // engine retained this complete probe while constructing an identical final layout.
+    const publishCandidate = (
+      candidate: BlockLayoutResult,
+      candidateSession: LayoutSession | undefined
+    ): BlockLayoutResult => {
+      if (options.session && candidateSession)
+        replaceLayoutSession(options.session, candidateSession);
+      return candidate;
+    };
+    const publishConverged = (
+      zones: ReadonlyMap<number, readonly ExclusionZone[]>
+    ): BlockLayoutResult => {
+      // The caller's session still owns pre-relay pages; resuming it could replay the seeded
+      // geometry. Build the converged result cold, then replace the session atomically.
+      const candidateSession = options.session ? createLayoutSession() : undefined;
+      return publishCandidate(
+        layoutExclusionCandidate({
+          ...options,
+          session: candidateSession,
+          drawingExclusionConverged: true,
+          drawingExclusionZonesByPage: zones,
+        }),
+        candidateSession
+      );
+    };
     for (let pass = 0; pass < MAX_DRAWING_EXCLUSION_REFLOW_PASSES; pass += 1) {
-      result = layoutBlocksWithGeometry(bodies, revision, {
+      const candidateSession = options.session ? createLayoutSession() : undefined;
+      result = layoutExclusionCandidate({
         ...options,
-        session: undefined,
+        session: candidateSession,
         drawingExclusionPass: pass,
         drawingExclusionZonesByPage: zonesByPage,
       });
@@ -870,9 +841,17 @@ function layoutBlocksPass(
         exclusionColumnLayout
       );
       if (nextZones.size === 0) {
-        converged = true;
-        zonesByPage = nextZones;
-        break;
+        // A candidate laid under seeded zones cannot publish merely because it collected none.
+        if (pass === 0 && zonesByPage.size === 0) {
+          return publishCandidate(result, candidateSession);
+        }
+        return publishConverged(nextZones);
+      }
+      if (exclusionMapsEqual(zonesByPage, nextZones)) {
+        // This candidate was already laid under the exact stable zone map. Check before
+        // cycle detection: a stable token is necessarily in `seenZoneTokens`, but stability
+        // can publish this very pass while treating it as a cycle constructs one cold twin.
+        return publishCandidate(result, candidateSession);
       }
       const nextToken = exclusionMapsToken(nextZones);
       if (seenZoneTokens.has(nextToken)) {
@@ -881,11 +860,6 @@ function layoutBlocksPass(
         break;
       }
       seenZoneTokens.add(nextToken);
-      if (pass > 0 && exclusionMapsEqual(zonesByPage, nextZones)) {
-        converged = true;
-        zonesByPage = nextZones;
-        break;
-      }
       zonesByPage = new Map(nextZones);
     }
     if (!converged) {
@@ -894,9 +868,10 @@ function layoutBlocksPass(
         stab < MAX_DRAWING_EXCLUSION_STABILIZATION_PASSES && !converged;
         stab += 1
       ) {
-        result = layoutBlocksWithGeometry(bodies, revision, {
+        const candidateSession = options.session ? createLayoutSession() : undefined;
+        result = layoutExclusionCandidate({
           ...options,
-          session: undefined,
+          session: candidateSession,
           drawingExclusionPass: MAX_DRAWING_EXCLUSION_REFLOW_PASSES + stab,
           drawingExclusionZonesByPage: zonesByPage,
         });
@@ -908,7 +883,10 @@ function layoutBlocksPass(
           exclusionColumnLayout
         );
         const nextToken = exclusionMapsToken(nextZones);
-        if (exclusionMapsEqual(zonesByPage, nextZones) || seenZoneTokens.has(nextToken)) {
+        if (exclusionMapsEqual(zonesByPage, nextZones)) {
+          return publishCandidate(result, candidateSession);
+        }
+        if (seenZoneTokens.has(nextToken)) {
           converged = true;
           zonesByPage = nextZones;
           break;
@@ -922,11 +900,7 @@ function layoutBlocksPass(
         `wrap exclusion reflow did not converge within ${MAX_DRAWING_EXCLUSION_REFLOW_PASSES} passes`
       );
     }
-    return layoutBlocksWithGeometry(bodies, revision, {
-      ...options,
-      drawingExclusionConverged: true,
-      drawingExclusionZonesByPage: zonesByPage,
-    });
+    return publishConverged(zonesByPage);
   }
 
   const measurer = options.measurer;
@@ -1130,6 +1104,13 @@ function layoutBlocksPass(
             options.drawingLayoutToken ||
             ''
           : options.drawingLayoutToken || '';
+    const projectionToken =
+      block.kind === 'paragraph'
+        ? (options.projectionTokenForParagraph?.(block) ?? '')
+        : block.kind === 'table' && options.projectionTokenForParagraph
+          ? (options.projectionTokenForTable?.(block) ??
+            aggregateParagraphTokensForTableBlock(block, options.projectionTokenForParagraph))
+          : '';
     // A TABLE'S LIST STATE IS ITS CELLS'. `listItems` is keyed by PARAGRAPH, and a numbered
     // list that continues inside a table cell has its markers there — so reading the table's
     // own id gave an empty token, and a renumbering that left the table's flow key untouched
@@ -1163,6 +1144,7 @@ function layoutBlocksPass(
       memo.contentWidth === availableWidth &&
       memo.producer === producer &&
       memo.drawingToken === paragraphDrawingToken &&
+      memo.projectionToken === projectionToken &&
       memo.listToken === listToken &&
       memo.refToken === refToken &&
       memo.drawingContext === hasInlineDrawingContext
@@ -1179,7 +1161,7 @@ function layoutBlocksPass(
       entry = {
         kind: 'table',
         table: block,
-        key: paragraphLayoutKey({
+        key: keyFor({
           paragraph: block,
           properties: [
             ...(listToken ? [{ localName: 'list', attributes: { token: listToken } }] : []),
@@ -1188,6 +1170,7 @@ function layoutBlocksPass(
           width: availableWidth,
           producer,
           drawingToken: keyedDrawingToken,
+          projectionToken,
         }),
       };
     } else {
@@ -1207,6 +1190,7 @@ function layoutBlocksPass(
         lineSpacing,
         contextualSpacing,
         styleId,
+        outlineLevel,
         shading,
         inheritedRunProperties,
         markRunProperties,
@@ -1232,6 +1216,7 @@ function layoutBlocksPass(
         lineSpacing,
         contextualSpacing,
         styleId,
+        outlineLevel,
         borders,
         // The box's own INSETS, not its resolved edges. `available` is
         // `contentWidth - indent.left - indent.right`, so keying on `indent.left + available`
@@ -1248,7 +1233,7 @@ function layoutBlocksPass(
         tabStops,
         keeps: paragraphKeeps(props),
         ...(listItem ? { listItem } : {}),
-        key: paragraphLayoutKey({
+        key: keyFor({
           paragraph: block,
           properties: [
             ...props,
@@ -1266,6 +1251,7 @@ function layoutBlocksPass(
           width: available,
           producer,
           drawingToken: keyedDrawingToken,
+          projectionToken,
         }),
       };
     }
@@ -1273,6 +1259,7 @@ function layoutBlocksPass(
       contentWidth: availableWidth,
       producer,
       drawingToken: paragraphDrawingToken,
+      projectionToken,
       listToken,
       refToken,
       drawingContext: hasInlineDrawingContext,
@@ -1295,11 +1282,17 @@ function layoutBlocksPass(
     options.drawingLayoutEpoch === undefined
       ? null
       : withDrawingContext(options.drawingLayoutEpoch ?? '', hasInlineDrawingContext);
+  const projectionEpoch =
+    options.projectionTokenForParagraph !== undefined && options.projectionEpoch === undefined
+      ? null
+      : (options.projectionEpoch ?? '');
   const prepassMemo = session?.prepass as SectionPrepass | null | undefined;
   const prepassValid =
     prepassMemo != null &&
     drawingEpoch !== null &&
+    projectionEpoch !== null &&
     prepassMemo.drawingEpoch === drawingEpoch &&
+    prepassMemo.projectionEpoch === projectionEpoch &&
     prepassMemo.producer === producer &&
     prepassMemo.contentWidth === contentWidth &&
     prepassMemo.styleCascade === styleCascade &&
@@ -1358,6 +1351,7 @@ function layoutBlocksPass(
       listItems,
       numberingIndex: options.numberingIndex,
       drawingEpoch: drawingEpoch ?? '',
+      projectionEpoch: projectionEpoch ?? '',
       prepared,
       keys,
       paragraphDocumentOrder: paragraphDocumentOrderOf(
@@ -1374,7 +1368,9 @@ function layoutBlocksPass(
       flowKeys: flow,
     };
   }
-  if (session && drawingEpoch !== null && !prepassValid) session.prepass = prepass;
+  if (session && drawingEpoch !== null && projectionEpoch !== null && !prepassValid) {
+    session.prepass = prepass;
+  }
   const { prepared, keys, paragraphDocumentOrder, keepsNext, flowKeys } = prepass;
   /** Retain the whole document's live keys — block keys plus recorded table-cell keys. */
   const publishRetainedKeys = (): void => {
@@ -1573,8 +1569,12 @@ function layoutBlocksPass(
 
   const pageContentClip = (): LayoutBox => pageClipRegion(anchorFrameBase());
 
-  const sourceOrderOf = (drawingNodeId: string): number | undefined =>
-    options.drawingSourceOrder?.get(drawingNodeId);
+  const sourceOrderOf = (drawingNodeId: string): number | undefined => {
+    const projectedId =
+      options.inlineDrawingLayout?.projectionForAtom?.(drawingNodeId)?.drawingNodeId ??
+      drawingNodeId;
+    return options.drawingSourceOrder?.get(projectedId);
+  };
 
   const collectAnchoredDrawings = (drawings: readonly AnchoredDrawingRecord[]): void => {
     if (drawings.length === 0) return;
@@ -1696,9 +1696,13 @@ function layoutBlocksPass(
       ...(displayMode ? { displayMode } : {}),
       ...(authorFilter ? { revisionAuthorFilter: authorFilter } : {}),
       ...(options.documentProperties ? { documentProperties: options.documentProperties } : {}),
+      ...(options.projectLink ? { projectLink: options.projectLink } : {}),
+      ...(options.projectFieldLink ? { projectFieldLink: options.projectFieldLink } : {}),
       ...(options.numberingIndex ? { numberingIndex: options.numberingIndex } : {}),
       inlineDrawingLayout: options.inlineDrawingLayout,
       drawingTokenForParagraph: options.drawingTokenForParagraph,
+      projectionTokenForParagraph: options.projectionTokenForParagraph,
+      projectionTokenForTable: options.projectionTokenForTable,
     });
 
   // Table layout shares the flow's line count, paragraph cache, and precomputed list items
@@ -1739,6 +1743,9 @@ function layoutBlocksPass(
       : options.drawingLayoutToken
         ? { drawingLayoutToken: options.drawingLayoutToken }
         : {}),
+    ...(options.projectionTokenForParagraph
+      ? { projectionTokenForParagraph: options.projectionTokenForParagraph }
+      : {}),
     ...(options.inlineDrawingLayout
       ? {
           anchorFrameBase,
@@ -1783,6 +1790,25 @@ function layoutBlocksPass(
       entry.tabStops,
       entry.available
     );
+
+  // A one-shot cache releases a paragraph only after its final placement. This preserves
+  // keep-with-next lookahead hits without retaining a second document-sized line tree beside
+  // the published layout. Live caches implement `release` as a no-op.
+  const breakKeysByParagraph = new Map<string, Set<string>>();
+  const rememberBreakKey = (paragraphId: string, key: string): void => {
+    let keys = breakKeysByParagraph.get(paragraphId);
+    if (!keys) {
+      keys = new Set();
+      breakKeysByParagraph.set(paragraphId, keys);
+    }
+    keys.add(key);
+  };
+  const releasePlacedBreaks = (paragraphId: string): void => {
+    const keys = breakKeysByParagraph.get(paragraphId);
+    if (!keys || !cache) return;
+    for (const key of keys) cache.release?.(key);
+    breakKeysByParagraph.delete(paragraphId);
+  };
 
   // Shared by placement and by the `w:keepNext` lookahead, which needs the height of the
   // blocks it keeps WITH. Both read the same cache entry, so the lookahead re-measures nothing.
@@ -1836,6 +1862,7 @@ function layoutBlocksPass(
         cacheKey += `\0excl:${flowColumnIndex}|${cursorY.toFixed(3)}|${exclusionToken}`;
       }
       if (startOffset > 0) cacheKey += `\0from:${startOffset}`;
+      rememberBreakKey(paragraphId, cacheKey);
     }
     const usePageColumnCoords = columnCount > 1;
     return breakParagraph(
@@ -2199,6 +2226,8 @@ function layoutBlocksPass(
 
     let lines = breakBlock(entry, index);
     if (lines.length === 0) {
+      // Cross-paragraph TOC field chrome: tree preserved, no painted row or flow height.
+      releasePlacedBreaks(paragraphId);
       positionedFlow.note(floatSignals, paragraph.id, flowColumnIndex, pageFragments.length);
       continue;
     }
@@ -2471,6 +2500,9 @@ function layoutBlocksPass(
               end: pending[pending.length - 1]!.range.end,
             },
         props,
+        styleId: entry.styleId,
+        outlineLevel: entry.outlineLevel,
+        alignment: entry.alignment,
         spacing: { before: fragmentBefore, after: appliedAfter },
         indent,
         ...(bottomBorderRecord ? { bottomBorder: bottomBorderRecord } : {}),
@@ -2791,6 +2823,7 @@ function layoutBlocksPass(
       }
     }
     flushFragment(true);
+    releasePlacedBreaks(paragraphId);
     previousSpaceAfter = endedWithPageBreak ? 0 : spacing.after;
   }
 
@@ -2840,7 +2873,11 @@ function layoutBlocksPass(
   // re-placed: a resumed pass never visits the prefix, and evicting its entries would make
   // the next full pass measure the whole document again.
   publishRetainedKeys();
-  const layout: SemanticLayout = { revision, pages };
+  const layout: SemanticLayout = {
+    revision,
+    pages,
+    ...(options.displayMode ? { displayMode: options.displayMode } : {}),
+  };
   if (session) {
     session.previous = layout;
     // A converged pass stops early, so the tail's checkpoints were never recomputed. The
@@ -2903,128 +2940,12 @@ function layoutBlocksPass(
   };
 }
 
-/** Content-relative bottom of each column's content on one page, floored at the region top. */
-function columnBottomsOf(
-  page: PageRecord,
-  columns: ResolvedSectionColumns,
-  regionTop: number
-): number[] {
-  const bottoms = columns.lefts.map(() => regionTop);
-  for (const fragment of page.fragments) {
-    if (tableFloat.isOutOfFlowTableFragment(fragment)) continue;
-    let column = 0;
-    // A fragment starts at its column's left edge plus indents; assign it to the LAST
-    // column whose origin it does not precede (half-point slack for table indents).
-    for (let index = columns.count - 1; index >= 0; index -= 1) {
-      if (fragment.box.x + 0.5 >= columns.lefts[index]!) {
-        column = index;
-        break;
-      }
-    }
-    bottoms[column] = Math.max(bottoms[column]!, fragment.box.y + fragment.box.height);
-  }
-  return bottoms;
-}
-
-/** The balance search stops once the fitting bound is known this tightly (points). */
-const BALANCE_TOLERANCE_PT = 0.25;
-const MAX_BALANCE_STEPS = 20;
-
-/**
- * Lay a block run out under its section geometry, balancing columns when asked.
- *
- * Word balances the columns of a multi-column section that ends in a continuous section
- * break (ECMA-376 §17.6.4): the content divides across the columns instead of filling the
- * first one to the page bottom. The flow itself already knows how to advance columns —
- * balancing is finding the SHORTEST first-page column height that still keeps the section
- * on its single sheet, which is monotone in the height, so a binary search over trial
- * passes finds it. Trials run session-less; only the final pass publishes.
- *
- * Conservative bounds: only a section whose natural layout is one open sheet balances.
- * A section that already fills pages keeps Word's fill-then-flow shape for those pages,
- * and balancing just its tail sheet is deferred.
- */
 function layoutBlocksWithGeometry(
   bodies: readonly OoxmlElement[],
   revision: number,
   options: BlockLayoutOptions
 ): BlockLayoutResult {
-  const columns = resolveSectionColumns(
-    options.sectionColumns ?? DEFAULT_SECTION_PROPERTIES.columns,
-    options.geometry.width - options.geometry.margin.left - options.geometry.margin.right
-  );
-  if (!options.balanceColumns || columns.count < 2 || options.columnRegionBottom !== undefined) {
-    if (options.session) options.session.balanceLimit = null;
-    return layoutBlocksPass(bodies, revision, options);
-  }
-
-  const session = options.session;
-  const regionTop = options.flowStartY ?? 0;
-  const { session: _trialSession, ...trialOptions } = options;
-  const balancedResult = (final: BlockLayoutResult): BlockLayoutResult => {
-    const page = final.pages[0];
-    // The next continuous section resumes BELOW the whole balanced region, not below the
-    // last column's own cursor.
-    const endCursorY = page
-      ? Math.max(...columnBottomsOf(page, columns, regionTop))
-      : final.endCursorY;
-    if (session) session.endCursorY = endCursorY;
-    return { ...final, endCursorY };
-  };
-
-  // Unchanged content early-exits on ONE attempt at the remembered limit, skipping the
-  // natural pass and the search. A stale limit just means this attempt is wasted work:
-  // the section changed, so the search below reruns and overwrites everything it stored.
-  if (session && session.balanceLimit !== null) {
-    const remembered = session.balanceLimit;
-    const attempt = layoutBlocksPass(bodies, revision, {
-      ...options,
-      columnRegionBottom: remembered,
-    });
-    if (session.stats.placed === 0 && session.stats.reusedPages === attempt.pages.length) {
-      session.balanceLimit = remembered;
-      return balancedResult(attempt);
-    }
-  }
-
-  const natural = layoutBlocksPass(bodies, revision, trialOptions);
-  if (natural.pages.length !== 1 || !natural.endsOpenPage) {
-    if (session) session.balanceLimit = null;
-    return layoutBlocksPass(bodies, revision, options);
-  }
-
-  const naturalBottoms = columnBottomsOf(natural.pages[0]!, columns, regionTop);
-  const total = naturalBottoms.reduce((sum, bottom) => sum + Math.max(0, bottom - regionTop), 0);
-  if (total <= 0) {
-    if (session) session.balanceLimit = null;
-    return layoutBlocksPass(bodies, revision, options);
-  }
-
-  // The natural single-sheet layout fits its own bottom by construction; the ideal split
-  // cannot be shorter than an even division of the flowed content.
-  let low = regionTop + total / columns.count;
-  let high = Math.max(...naturalBottoms) + 0.01;
-  const fits = (limit: number): boolean => {
-    try {
-      const trial = layoutBlocksPass(bodies, revision, {
-        ...trialOptions,
-        columnRegionBottom: limit,
-      });
-      return trial.pages.length === 1 && trial.endsOpenPage;
-    } catch {
-      // Keep rules or atomic rows can refuse a band this short; that is "does not fit".
-      return false;
-    }
-  };
-  for (let step = 0; step < MAX_BALANCE_STEPS && high - low > BALANCE_TOLERANCE_PT; step += 1) {
-    const mid = (low + high) / 2;
-    if (fits(mid)) high = mid;
-    else low = mid;
-  }
-
-  const final = layoutBlocksPass(bodies, revision, { ...options, columnRegionBottom: high });
-  if (session) session.balanceLimit = high;
-  return balancedResult(final);
+  return layoutBlocksWithColumnBalance(bodies, revision, options, layoutBlocksPass);
 }
 
 export { createFixedMeasurer } from './fixed-measurer.ts';

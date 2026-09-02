@@ -41,6 +41,7 @@ packages through their normal build tool.
 | [`@docx-editor.dev/core`](https://www.npmjs.com/package/@docx-editor.dev/core)             | Framework-agnostic engine: OOXML read/write, canonical document tree, layout, paint. Depend on this if you fork an adapter.                                                                | [Docs](https://www.docx-editor.dev/docs/2.x/core)         |
 | [`@docx-editor.dev/i18n`](https://www.npmjs.com/package/@docx-editor.dev/i18n)             | Shared locale strings and types consumed by the adapter.                                                                                                                                   | [Docs](https://www.docx-editor.dev/docs/2.x/i18n)         |
 | [`@docx-editor.dev/fonts`](https://www.npmjs.com/package/@docx-editor.dev/fonts)           | Open-licensed substitutes for common Word fonts, with local and on-demand resolvers.                                                                                                       | [Docs](https://www.docx-editor.dev/docs/2.x/guides/fonts) |
+| `@docx-editor.dev/docx-to-markdown`                                                        | Private workspace package for server-first DOCX to Markdown conversion using the shared semantic layout engine, packaged fonts, and HarfBuzz.                                              | Internal preview                                          |
 | [`@docx-editor.dev/pro`](https://www.npmjs.com/package/@docx-editor.dev/pro)               | Tracked changes, comments, real-time collaboration, and custom nodes.                                                                                                                      | [Docs](https://www.docx-editor.dev/docs/2.x/pro)          |
 | [`@docx-editor.dev/editor-api`](https://www.npmjs.com/package/@docx-editor.dev/editor-api) | Office.js-compatible editing API: a batching object model that edits a document from a server, or an editor already open in a page.                                                        | [Docs](https://www.docx-editor.dev/docs/2.x/editor-api)   |
 
@@ -126,13 +127,14 @@ See [Fonts and measurement](https://www.docx-editor.dev/docs/2.x/guides/fonts).
 ```bash
 bun install
 bun run dev        # localhost:5173
+bun run dev:markdown # DOCX → paginated Markdown demo on localhost:5177
 bun run build
 bun run typecheck
 ```
 
 A live preview of `main` is auto-deployed at **[latest.docx-editor.dev](https://latest.docx-editor.dev/)** — useful for trying out changes before they ship to npm.
 
-Examples: [Vite](examples/vite) | [Next.js](examples/nextjs) | [Remix](examples/remix) | [Astro](examples/astro) | [Vue](examples/vue) | [Collaboration](examples/collaboration)
+Examples: [Vite](examples/vite) | [DOCX to Markdown](examples/docx-to-markdown) | [Next.js](examples/nextjs) | [Remix](examples/remix) | [Astro](examples/astro) | [Vue](examples/vue) | [Collaboration](examples/collaboration)
 
 **[Documentation](https://www.docx-editor.dev/docs)** | **[React props and ref methods](https://www.docx-editor.dev/docs/2.x/react/props)** | **[Vue props and ref methods](https://www.docx-editor.dev/docs/2.x/vue/props)**
 

@@ -28,6 +28,7 @@ import {
 } from './comment-reads.ts';
 import { locateSites } from './review-site-locations.ts';
 import { createRecentRootCache } from './recent-root-cache.ts';
+import { deepParagraphOrderOfPart } from './review-paragraph-order.ts';
 // The vocabulary this derivation speaks — the item shapes and their pure helpers — lives in
 // `review-items.ts`, where the binding and layout lanes can reach it too.
 import {
@@ -44,6 +45,7 @@ import {
 } from './review-items.ts';
 
 export { locateSites } from './review-site-locations.ts';
+export { deepParagraphOrderOfPart, paragraphOrderOfPart } from './review-paragraph-order.ts';
 
 /** `EG_ParaRPrTrackChanges` by element name: the four decisions a paragraph mark can carry. */
 const MARK_DIRECTIONS: Readonly<Record<string, 'insert' | 'delete' | 'moveFrom' | 'moveTo'>> = {
@@ -117,6 +119,23 @@ const CONTENT_KINDS: Readonly<Record<string, ReviewRevisionKind>> = {
   revisionMoveTo: 'moveTo',
 };
 
+/** @internal */
+export interface ReviewDerivationDependencies {
+  readonly retainRevisionItems: boolean;
+  readonly revisionSites: typeof collectRevisionSites;
+  readonly locations: typeof locateSites;
+  readonly commentAnchors: typeof commentAnchorsOfStory;
+  readonly deepOrder: (part: OoxmlPart) => ReadonlyMap<string, number>;
+}
+
+const interactiveReviewDerivation: ReviewDerivationDependencies = {
+  retainRevisionItems: true,
+  revisionSites: collectRevisionSites,
+  locations: locateSites,
+  commentAnchors: commentAnchorsOfStory,
+  deepOrder: deepParagraphOrderOfPart,
+};
+
 /**
  * Every revision in one story, one card per DECISION.
  *
@@ -133,16 +152,25 @@ const CONTENT_KINDS: Readonly<Record<string, ReviewRevisionKind>> = {
  * SHARED, so the return type is readonly.
  */
 export function revisionItemsOf(part: OoxmlPart): readonly ReviewRevisionItem[] {
+  return revisionItemsOfWith(part, interactiveReviewDerivation);
+}
+
+function revisionItemsOfWith(
+  part: OoxmlPart,
+  dependencies: ReviewDerivationDependencies
+): readonly ReviewRevisionItem[] {
   const cacheable = part.root.kind !== 'paragraph';
-  if (cacheable) {
+  if (cacheable && dependencies.retainRevisionItems) {
     const cached = revisionItemsCache.get(part.root);
     // The name rides along because the items embed it (`ranges[*].partName`): a root is
     // the cache key, and serving one part's items to another part that shares the root
     // under a different name would stamp every range with the wrong part.
     if (cached && cached.name === part.name) return cached.items;
   }
-  const items = computeRevisionItemsOf(part);
-  if (cacheable) revisionItemsCache.set(part.root, { name: part.name, items });
+  const items = computeRevisionItemsOf(part, dependencies);
+  if (cacheable && dependencies.retainRevisionItems) {
+    revisionItemsCache.set(part.root, { name: part.name, items });
+  }
   return items;
 }
 
@@ -152,14 +180,17 @@ const revisionItemsCache = createRecentRootCache<{
   readonly items: readonly ReviewRevisionItem[];
 }>(8);
 
-function computeRevisionItemsOf(part: OoxmlPart): ReviewRevisionItem[] {
+function computeRevisionItemsOf(
+  part: OoxmlPart,
+  dependencies: ReviewDerivationDependencies
+): ReviewRevisionItem[] {
   // Sites FIRST, and the site index only when there is at least one. `locateSites` merges
   // an O(document) index per fresh root, and a structural keystroke on an untracked
   // document paid that merge for a list this function was about to answer "empty" over.
   // The site walk itself is per-subtree memoized, so it is the cheap half.
-  const sites = collectRevisionSites(part);
+  const sites = dependencies.revisionSites(part);
   if (sites.length === 0) return [];
-  const located = locateSites(part);
+  const located = dependencies.locations(part);
   const byAddress = new Map<
     string,
     {
@@ -306,7 +337,7 @@ function computeRevisionItemsOf(part: OoxmlPart): ReviewRevisionItem[] {
         entry.siteNodeIds
       )
   );
-  return pairReplacements(items, paragraphOrderOfPart(part));
+  return pairReplacements(items, dependencies.deepOrder(part));
 }
 
 /**
@@ -687,6 +718,14 @@ export function commentItemsOf(
  * on) is a layout question the queue deliberately does not answer.
  */
 export function collectReviewItems(input: ReviewModelInput): ReviewItem[] {
+  return collectReviewItemsWith(input, interactiveReviewDerivation);
+}
+
+/** @internal */
+export function collectReviewItemsWith(
+  input: ReviewModelInput,
+  dependencies: ReviewDerivationDependencies
+): ReviewItem[] {
   // The body part deduped against the furniture list, so a caller passing a part twice —
   // or the same shared header under two sections — cannot double every card in it.
   const parts: OoxmlPart[] = [input.storyPart];
@@ -710,16 +749,16 @@ export function collectReviewItems(input: ReviewModelInput): ReviewItem[] {
   // With one story there is nothing to merge: the memoized per-part order IS the order,
   // and copying it entry-by-entry was a measurable slice of every full derivation.
   const order: ReadonlyMap<string, number> =
-    parts.length === 1 ? paragraphOrderOfPart(parts[0]!) : new Map<string, number>();
+    parts.length === 1 ? dependencies.deepOrder(parts[0]!) : new Map<string, number>();
   for (const part of parts) {
     // Loops, not `push(...spread)`: a heavily tracked part yields tens of thousands of
     // items, and spreading them as call arguments overflows the engine's argument limit.
-    for (const item of revisionItemsOf(part)) revisions.push(item);
-    for (const anchor of commentAnchorsOfStory(part)) anchors.push(anchor);
+    for (const item of revisionItemsOfWith(part, dependencies)) revisions.push(item);
+    for (const anchor of dependencies.commentAnchors(part)) anchors.push(anchor);
     if (parts.length === 1) continue;
     const merged = order as Map<string, number>;
     const base = merged.size;
-    for (const [id, position] of paragraphOrderOfPart(part)) {
+    for (const [id, position] of dependencies.deepOrder(part)) {
       if (!merged.has(id)) merged.set(id, base + position);
     }
   }
@@ -881,119 +920,3 @@ export function linkRevisionReplies<T extends LinkableReviewItem>(items: readonl
     return item;
   });
 }
-
-/**
- * Paragraph node id → document position, from the TREE rather than from a layout.
- *
- * Memoized on the immutable root: one full derivation pass asks this question three times
- * (replacement pairing, the queue's merged order, the session's cached order), and each
- * answer was a fresh full-tree walk. The instance is SHARED, so the return type is
- * ReadonlyMap: a caller mutating it would poison every later reader of this root.
- */
-export function paragraphOrderOfPart(part: OoxmlPart): ReadonlyMap<string, number> {
-  const cached = paragraphOrderCache.get(part.root);
-  if (cached) return cached;
-  const order = new Map<string, number>();
-  const walk = (node: OoxmlNode, depth: number): void => {
-    if (node.kind === 'textValue' || depth > 64) return;
-    if (node.kind === 'paragraph') {
-      if (!order.has(node.id)) order.set(node.id, order.size);
-      return;
-    }
-    // A table's paragraph sequence is a pure function of the table subtree, so an unchanged
-    // table hands back its list instead of being re-descended — an edit outside any table
-    // otherwise re-walked every cell of every table in the document.
-    if (node.kind === 'table') {
-      let ids = tableParagraphIdsCache.get(node);
-      if (!ids) {
-        const found: string[] = [];
-        const collect = (candidate: OoxmlNode, nestedDepth: number): void => {
-          if (candidate.kind === 'textValue' || nestedDepth > 64) return;
-          if (candidate.kind === 'paragraph') {
-            found.push(candidate.id);
-            return;
-          }
-          for (const child of candidate.children) collect(child, nestedDepth + 1);
-        };
-        for (const child of node.children) collect(child, 0);
-        ids = found;
-        tableParagraphIdsCache.set(node, ids);
-      }
-      for (const id of ids) {
-        if (!order.has(id)) order.set(id, order.size);
-      }
-      return;
-    }
-    for (const child of node.children) walk(child, depth + 1);
-  };
-  walk(part.root, 0);
-  paragraphOrderCache.set(part.root, order);
-  return order;
-}
-
-/** The paragraph order index per part root, bounded like {@link locatedSitesCache}. */
-const paragraphOrderCache = createRecentRootCache<Map<string, number>>(8);
-
-/**
- * Like {@link paragraphOrderOfPart}, but descends INTO paragraphs, so paragraphs nested
- * in a run's content — a textbox's `w:txbxContent` — rank right after their host.
- *
- * A separate function on purpose: the shallow order feeds the review queue's card
- * ordering, and re-ranking nested paragraphs there would move cards. This one exists for
- * position containment tests ("is the caret inside this range"), where a paragraph the
- * shallow order cannot see is a position that can never match.
- */
-export function deepParagraphOrderOfPart(part: OoxmlPart): ReadonlyMap<string, number> {
-  const cached = deepParagraphOrderCache.get(part.root);
-  if (cached) return cached;
-  const order = new Map<string, number>();
-  for (const id of subtreeDeepParagraphIds(part.root, 0)) {
-    if (!order.has(id)) order.set(id, order.size);
-  }
-  deepParagraphOrderCache.set(part.root, order);
-  return order;
-}
-
-/** One shared empty list for the subtrees that hold no paragraph. */
-const EMPTY_DEEP_PARAGRAPH_IDS: readonly string[] = Object.freeze([]);
-
-/**
- * Deep paragraph ids under one immutable node, in document order, memoized per node.
- *
- * The deep order re-derives per fresh root, and a structural keystroke re-walked every
- * node of the document — every run of every paragraph — to relist ids that did not move.
- * Composing from per-subtree memos re-walks only the rebuilt spine.
- *
- * The entry remembers the depth it was computed at, because the 64-level cap makes the
- * list depth-dependent: an op can republish a shared subtree at a different depth (an
- * unwrap rebuilds only the spine ABOVE it), and serving a list computed under the old
- * cap would diverge from a cold walk on hostile >64-deep nesting. A depth mismatch just
- * recomputes, so the memo stays exactly the cold walk's answer.
- */
-const subtreeDeepParagraphIdsCache = new WeakMap<
-  OoxmlNode,
-  { readonly depth: number; readonly ids: readonly string[] }
->();
-
-function subtreeDeepParagraphIds(node: OoxmlNode, depth: number): readonly string[] {
-  if (node.kind === 'textValue' || depth > 64) return EMPTY_DEEP_PARAGRAPH_IDS;
-  const cached = subtreeDeepParagraphIdsCache.get(node);
-  if (cached && cached.depth === depth) return cached.ids;
-  let found: string[] | null = null;
-  if (node.kind === 'paragraph') (found ??= []).push(node.id);
-  for (const child of node.children) {
-    const ids = subtreeDeepParagraphIds(child, depth + 1);
-    if (ids.length === 0) continue;
-    found ??= [];
-    for (const id of ids) found.push(id);
-  }
-  const result: readonly string[] = found ?? EMPTY_DEEP_PARAGRAPH_IDS;
-  subtreeDeepParagraphIdsCache.set(node, { depth, ids: result });
-  return result;
-}
-
-/** The deep paragraph order per part root, bounded like the shallow one above. */
-const deepParagraphOrderCache = createRecentRootCache<Map<string, number>>(8);
-
-/** Paragraph ids of one table subtree, in reading order, per immutable table node. */
-const tableParagraphIdsCache = new WeakMap<OoxmlNode, readonly string[]>();

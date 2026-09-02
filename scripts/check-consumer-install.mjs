@@ -27,6 +27,8 @@ const vueAppDir = path.join(tempRoot, 'vue-app');
 const stagedPackagesDir = path.join(tempRoot, 'staged-packages');
 
 const bumpRank = { patch: 1, minor: 2, major: 3 };
+const MINIMAL_DOCX_BASE64 =
+  'UEsDBBQAAAAIAK66Hl10JJxTuwAAAD4BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbJWQuQ7CMAyGX6XKiqgRAwNquwArMPACVuq2EbkUm+vtSTk6sDHa//FZrk6PSFzcnfVcq0EkrgFYD+SQyxDJZ6ULyaHkMfUQUZ+xJ1guFivQwQt5mcvYoZpqSx1erBS7e16zCb5WiSyrYvM2jqxaYYzWaJSsw9W3P5T5h1Dm5MvDg4k8ywYFTXW4UkqmpeKISfboch3cQmqhDfriMqIcjX/xQtcZTVN+bIspaGI2vne2nBSHxn/vgNfbmidQSwMEFAAAAAgArroeXWF7L0OIAAAA8gAAAAsAAABfcmVscy8ucmVsc43POQ7CMBAF0KtEPkAmUFCg2BVNWsQFLHu8iHjReBBwe1xQEERBOYve15/PuGqOJbcQaxseac1NisBcjwDNBEy6jaVi7hdXKGnuI3mo2ly1R9hP0wHo0xBqYw6LlYIWuxPD5VnxH7s4Fw2eirklzPwj4uujy5o8shT3Qhbsez12VoCaYVNRvQBQSwMEFAAAAAgArroeXeGNti99AAAApgAAABEAAAB3b3JkL2RvY3VtZW50LnhtbDWOQQ7CMAwEv1L1AaTiwKEqufOMkIQ2UmxHtiHwexwhLmNbu17t1tdE8QkZdXpDRVn7dT5U2+qcxCNDkBO1jKY9iCGonby7TpwaU8wiBXeo7rwsFweh4Owt8k7pM2Yb4AH1NxQNteY0RcJXZimEmxvKoJmM5jf+vm35N/NfUEsBAhQAFAAAAAgArroeXXQknFO7AAAAPgEAABMAAAAAAAAAAAAAAAAAAAAAAFtDb250ZW50X1R5cGVzXS54bWxQSwECFAAUAAAACACuuh5dYXsvQ4gAAADyAAAACwAAAAAAAAAAAAAAAADsAAAAX3JlbHMvLnJlbHNQSwECFAAUAAAACACuuh5d4Y22L30AAACmAAAAEQAAAAAAAAAAAAAAAACdAQAAd29yZC9kb2N1bWVudC54bWxQSwUGAAAAAAMAAwC5AAAASQIAAAAA';
 
 // This check runs before `changeset version`. Stage the versions that the fixed group will
 // publish, so a peer floor for that pending release is tested against matching local tarballs.
@@ -113,30 +115,39 @@ function packPackage(packagePath) {
   const source = path.join(ROOT, packagePath);
   const manifest = JSON.parse(readFileSync(path.join(source, 'package.json'), 'utf8'));
   const pendingVersion = pendingVersions.get(manifest.name);
-  // Mirror what `changeset version` will publish: the bumped version AND, for a bump that
-  // leaves a peer floor behind (a minor over a `~x.y.z` floor), the rewritten floor.
-  // Staging only the version made every adapter tarball peer-refuse the core tarball on
-  // any pending minor, while the real release rewrites the floor in the same commit.
-  const stagedPeers = {};
-  let peersChanged = false;
-  for (const [peerName, range] of Object.entries(manifest.peerDependencies ?? {})) {
-    const peerPending = pendingVersions.get(peerName);
-    if (peerPending && !tildeRangeSatisfies(range, peerPending)) {
-      stagedPeers[peerName] = `~${peerPending}`;
-      peersChanged = true;
-    } else {
-      stagedPeers[peerName] = range;
+  // Mirror what `changeset version` will publish: the bumped version AND every internal peer or
+  // runtime dependency floor left behind by a fixed-group bump. Otherwise npm may satisfy a
+  // staged package from the registry and the consumer smoke test never exercises its tarball.
+  const stageInternalRanges = (ranges = {}) => {
+    const staged = {};
+    let changed = false;
+    for (const [dependencyName, range] of Object.entries(ranges)) {
+      const dependencyPending = pendingVersions.get(dependencyName);
+      if (dependencyPending && !tildeRangeSatisfies(range, dependencyPending)) {
+        staged[dependencyName] = `~${dependencyPending}`;
+        changed = true;
+      } else {
+        staged[dependencyName] = range;
+      }
     }
-  }
+    return { staged, changed };
+  };
+  const peers = stageInternalRanges(manifest.peerDependencies);
+  const dependencies = stageInternalRanges(manifest.dependencies);
   let packSource = source;
-  if ((pendingVersion && pendingVersion !== manifest.version) || peersChanged) {
+  if (
+    (pendingVersion && pendingVersion !== manifest.version) ||
+    peers.changed ||
+    dependencies.changed
+  ) {
     mkdirSync(stagedPackagesDir, { recursive: true });
     packSource = path.join(stagedPackagesDir, path.basename(packagePath));
     cpSync(source, packSource, { recursive: true });
     const staged = {
       ...manifest,
       ...(pendingVersion ? { version: pendingVersion } : {}),
-      ...(manifest.peerDependencies ? { peerDependencies: stagedPeers } : {}),
+      ...(manifest.peerDependencies ? { peerDependencies: peers.staged } : {}),
+      ...(manifest.dependencies ? { dependencies: dependencies.staged } : {}),
     };
     writeFileSync(path.join(packSource, 'package.json'), `${JSON.stringify(staged, null, 2)}\n`);
   }
@@ -166,6 +177,7 @@ try {
     packPackage('packages/react'),
     packPackage('packages/vue'),
     packPackage('packages/fonts'),
+    packPackage('packages/docx-to-markdown'),
     packPackage('packages/editor-api'),
     packPackage('packages/pro'),
   ];
@@ -278,6 +290,26 @@ export default defineConfig({ plugins: [react()] });
     { cwd: reactAppDir }
   );
   run('npm', ['run', 'build'], { cwd: reactAppDir });
+  // The Markdown package is deliberately server-only. Exercise a shaped conversion through
+  // both installed runtime entries so missing fonts, WASM, assets, or CJS interop fail here.
+  run(
+    'node',
+    [
+      '--input-type=module',
+      '--eval',
+      `const pkg = await import('@docx-editor.dev/docx-to-markdown'); const result = await pkg.exportMarkdown(Uint8Array.from(Buffer.from('${MINIMAL_DOCX_BASE64}', 'base64'))); if (result.markdown !== 'Installed conversion') throw new Error(result.markdown);`,
+    ],
+    { cwd: reactAppDir }
+  );
+  run(
+    'node',
+    [
+      '--input-type=commonjs',
+      '--eval',
+      `const pkg = require('@docx-editor.dev/docx-to-markdown'); void (async () => { const result = await pkg.exportMarkdown(Uint8Array.from(Buffer.from('${MINIMAL_DOCX_BASE64}', 'base64'))); if (result.markdown !== 'Installed conversion') throw new Error(result.markdown); })().catch((error) => { console.error(error); process.exitCode = 1; });`,
+    ],
+    { cwd: reactAppDir }
+  );
 
   // The consumer has NO Tailwind and no PostCSS — exactly the host the shipped
   // stylesheet must carry on its own. Assert the CSS vite emitted is the compiled,

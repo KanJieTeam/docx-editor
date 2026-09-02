@@ -488,11 +488,9 @@ export interface DrawingAnchorFrameContext {
    * the content box bottom down to the sheet bottom. NOT the authored `w:pgMar` values: a
    * header taller than the top margin pushes the body content box down, and a page-relative
    * anchor resolved against the authored margin then lands that difference too low (#274).
-   *
    * HF stories keep authored page/landmark insets; attached pages supply effective margin frames.
-   * The horizontal pair stays `marginLeft` / `marginRight` because nothing pushes the content
-   * box sideways: `contentBox.x - box.x` is always the authored left margin. A future gutter
-   * or binding offset would need its own inset field rather than a change of meaning here.
+   * Horizontal insets stay authored because nothing pushes the content box sideways; future
+   * gutters or binding offsets need their own field.
    */
   readonly contentInsetTop: number;
   readonly contentInsetBottom: number;
@@ -1321,7 +1319,9 @@ export function publishAnchoredDrawingsForParagraph(options: {
       resolved,
       clipRegion,
       revisions,
-      ...(options.sourceOrderOf ? { sourceOrder: options.sourceOrderOf(atom.atomId) } : {}),
+      ...(options.sourceOrderOf
+        ? { sourceOrder: options.sourceOrderOf(projection.drawingNodeId) }
+        : {}),
       ...(projection.textboxStory && options.layoutTextboxStory
         ? { textboxStory: options.layoutTextboxStory(projection) }
         : {}),

@@ -24,9 +24,16 @@ import {
   type FixedPointRoundingMode,
   type NormalizationPolicy,
   type ShapedRun,
+  type ShapingEnvironmentInput,
   type TextShaper,
   type VersionedShapingLibrary,
 } from './shaped-run.ts';
+
+/** Fingerprinted, operation-wide portion of every shaping call. @public */
+export type LayoutShapingEnvironment = Omit<
+  ShapingEnvironmentInput,
+  'font' | 'direction' | 'fallbackOrder'
+>;
 
 /**
  * A fully resolved shaping bundle: fonts, shaper, and the environment they were admitted
@@ -41,16 +48,7 @@ export interface LayoutShapingOptions {
     readonly family: string;
     readonly sizeHalfPoints: number;
   };
-  readonly environment: {
-    readonly variationAxes: Readonly<Record<string, number>>;
-    readonly shapingLibrary: VersionedShapingLibrary;
-    readonly unicodeDataVersion: string;
-    readonly normalization: NormalizationPolicy;
-    readonly language: string;
-    readonly features: Readonly<Record<string, number>>;
-    readonly fixedPointScale: number;
-    readonly roundingMode: FixedPointRoundingMode;
-  };
+  readonly environment: LayoutShapingEnvironment;
   readonly ligatureCaretPolicy: 'cluster-edges-only';
   readonly operation: OperationSnapshot;
 }
@@ -80,6 +78,22 @@ export interface ShapedMeasurerOptions {
   /** ISO 15924 script and BCP 47 language for shaping. Latin/English by default. */
   readonly script?: string;
   readonly language?: string;
+  /** Optional low-level shaping controls; omitted values preserve the released defaults. */
+  readonly normalization?: NormalizationPolicy;
+  readonly features?: Readonly<Record<string, number>>;
+  readonly roundingMode?: FixedPointRoundingMode;
+}
+
+/** Environment-bound production options that cannot drift from layout cache identity. @public */
+export interface LayoutEnvironmentShapedMeasurerOptions {
+  /** Shaper from the same admitted layout operation. */
+  readonly shaper: TextShaper;
+  /** Resolve a run to an admitted face, or null to use the bounded fallback. */
+  readonly resolveFont: (style: ResolvedRunStyle) => ResolvedFont | null;
+  /** Bounded measurement fallback when no admitted face resolves. */
+  readonly fallback: TextMeasurer;
+  /** Fingerprinted shaping environment; all geometry-affecting controls come from here. */
+  readonly environment: LayoutShapingOptions['environment'];
 }
 
 /**
@@ -121,6 +135,12 @@ const MAX_FACE_BOX_EM = 4;
  */
 const SMALL_CAPS_PROBE_ALPHABET = 'abcdefghijklmnopqrstuvwxyz';
 
+// One measurer belongs to one editor/export session, but a large document can still ask it to
+// measure hundreds of thousands of distinct line-break prefixes. Keeping every prefix made the
+// measurement cache larger than the published layout it accelerated. A fixed-size clock keeps
+// the hot working set while giving every session a hard retention bound.
+const MAX_CACHED_SHAPED_WIDTHS = 4_096;
+
 /** Super and subscript draw at three quarters, so they measure at three quarters. */
 const sizeFactorOf = (style: ResolvedRunStyle): number =>
   style.verticalAlign === 'baseline' ? 1 : 0.75;
@@ -148,17 +168,27 @@ function halfPointsOf(style: ResolvedRunStyle): number {
  * measurement and paint cannot disagree. Falls back per-run when a font is unavailable rather than
  * throwing, because a document naming a font nobody has must still lay out.
  */
-export function createShapedMeasurer(options: ShapedMeasurerOptions): TextMeasurer {
-  const {
-    shaper,
-    resolveFont,
-    fallback,
-    shapingLibrary,
-    unicodeDataVersion,
-    fixedPointScale = 1000,
-    script = 'Latn',
-    language = 'en',
-  } = options;
+export function createShapedMeasurer(options: ShapedMeasurerOptions): TextMeasurer;
+export function createShapedMeasurer(options: LayoutEnvironmentShapedMeasurerOptions): TextMeasurer;
+export function createShapedMeasurer(
+  options: ShapedMeasurerOptions | LayoutEnvironmentShapedMeasurerOptions
+): TextMeasurer {
+  const environment = 'environment' in options ? options.environment : undefined;
+  const explicit = 'environment' in options ? undefined : options;
+  const { shaper, resolveFont, fallback } = options;
+  const baseEnvironment: LayoutShapingEnvironment =
+    environment ??
+    ({
+      shapingLibrary: explicit!.shapingLibrary,
+      unicodeDataVersion: explicit!.unicodeDataVersion,
+      script: explicit?.script ?? 'Latn',
+      fixedPointScale: explicit?.fixedPointScale ?? 1000,
+      normalization: explicit?.normalization ?? 'none',
+      features: explicit?.features ?? {},
+      roundingMode: explicit?.roundingMode ?? 'halfToEven',
+      language: explicit?.language ?? 'en',
+      variationAxes: {},
+    } satisfies LayoutShapingEnvironment);
 
   // Nested by font object and half-point size rather than by one concatenated string key:
   // `measure` runs once per word-boundary probe of every line break in the document, and
@@ -177,6 +207,22 @@ export function createShapedMeasurer(options: ShapedMeasurerOptions): TextMeasur
   // amortizes the family/weight lookup across every probe of the runs that share it.
   const fontsByStyle = new WeakMap<ResolvedRunStyle, ResolvedFont | null>();
   const smallCapsSupportByFont = new WeakMap<ResolvedFont, boolean>();
+  const widthClock = new Array<
+    | {
+        readonly cache: Map<string, number>;
+        readonly text: string;
+      }
+    | undefined
+  >(MAX_CACHED_SHAPED_WIDTHS);
+  let widthClockCursor = 0;
+
+  const cacheWidth = (cache: Map<string, number>, text: string, advance: number): void => {
+    const evicted = widthClock[widthClockCursor];
+    if (evicted) evicted.cache.delete(evicted.text);
+    cache.set(text, advance);
+    widthClock[widthClockCursor] = { cache, text };
+    widthClockCursor = (widthClockCursor + 1) % MAX_CACHED_SHAPED_WIDTHS;
+  };
 
   const resolveFontCached = (style: ResolvedRunStyle): ResolvedFont | null => {
     // A stored `null` ("no font resolves") comes back as null, not undefined, so the
@@ -215,21 +261,16 @@ export function createShapedMeasurer(options: ShapedMeasurerOptions): TextMeasur
       // claiming a level here would be asserting an analysis that has not run.
       bidiLevel: 0,
       environment: createShapingEnvironment({
+        ...baseEnvironment,
         font,
-        variationAxes: {},
-        shapingLibrary,
-        unicodeDataVersion,
-        normalization: 'none',
-        script,
-        language,
         direction: 'ltr',
         // `w:smallCaps` selects the font's small-cap glyphs. Paint uses the matching CSS
         // feature, so shaping must reserve those glyph advances instead of lowercase advances.
-        features: style.smallCaps ? { smcp: 1 } : {},
+        features: style.smallCaps
+          ? { ...baseEnvironment.features, smcp: 1 }
+          : baseEnvironment.features,
         fallbackOrder: [],
-        fixedPointScale,
-        roundingMode: 'halfToEven',
-      }),
+      } satisfies ShapingEnvironmentInput),
     });
 
   /**
@@ -297,8 +338,8 @@ export function createShapedMeasurer(options: ShapedMeasurerOptions): TextMeasur
           // hostile font from taking the document down with it.
           return fallback.measure(text, style);
         }
-        advance = total / fixedPointScale;
-        byText.set(text, advance);
+        advance = total / baseEnvironment.fixedPointScale;
+        cacheWidth(byText, text, advance);
       }
       // Base-size advance scaled to the drawn size; the cache stays keyed on the base size,
       // so baseline and super/subscript runs of one face share entries.
@@ -340,8 +381,8 @@ export function createShapedMeasurer(options: ShapedMeasurerOptions): TextMeasur
           // Vertical metrics are a property of the FACE, not of the text, so any string
           // yields them; a single space is the cheapest to shape.
           const shaped = shape(' ', font, style);
-          const ascent = shaped.metrics.ascent / fixedPointScale;
-          const descent = shaped.metrics.descent / fixedPointScale;
+          const ascent = shaped.metrics.ascent / baseEnvironment.fixedPointScale;
+          const descent = shaped.metrics.descent / baseEnvironment.fixedPointScale;
           // Word's single-spaced line box is ascent + descent + lineGap, and the leading sits
           // BELOW the descent — the same total GDI reports as `tmHeight + tmExternalLeading`.
           // Dropping the gap is what made a 10 pt Arial line 11.17 pt where Word draws 11.50
@@ -368,7 +409,7 @@ export function createShapedMeasurer(options: ShapedMeasurerOptions): TextMeasur
           const squeeze = rawFaceBox > faceBoxCeiling ? faceBoxCeiling / rawFaceBox : 1;
           const faceBox = rawFaceBox * squeeze;
           const lineGap = Math.min(
-            Math.max(0, shaped.metrics.lineGap / fixedPointScale),
+            Math.max(0, shaped.metrics.lineGap / baseEnvironment.fixedPointScale),
             faceBox * MAX_LINE_GAP_FACE_BOXES
           );
           const height = faceBox + lineGap;
@@ -392,4 +433,21 @@ export function createShapedMeasurer(options: ShapedMeasurerOptions): TextMeasur
         : { height: metrics.height * factor, baseline: metrics.baseline * factor };
     },
   };
+}
+
+/**
+ * Bind measurement directly to the environment whose operation identity keys layout caches.
+ * Production browser/server hosts use this adapter so fingerprinted and executed shaping cannot
+ * drift through independently forwarded fields.
+ * @public
+ */
+export function createLayoutShapedMeasurer(
+  shaping: LayoutShapingOptions,
+  options: Pick<ShapedMeasurerOptions, 'resolveFont' | 'fallback'>
+): TextMeasurer {
+  return createShapedMeasurer({
+    ...options,
+    shaper: shaping.shaper,
+    environment: shaping.environment,
+  });
 }

@@ -6,16 +6,21 @@
 // correct until someone types.
 
 import { describe, expect, test } from 'bun:test';
-import { readOoxmlPart, type OoxmlPart } from '@docx-editor.dev/core/store';
+import {
+  applyTreeOp,
+  readOoxmlPart,
+  type OoxmlNode,
+  type OoxmlPart,
+} from '@docx-editor.dev/core/store';
 import {
   createFixedMeasurer,
   createParagraphLayoutCache,
   layoutSemanticDocument,
-  linesOf,
   paragraphLayoutKey,
+  type ParagraphLayoutCache,
   type PageGeometry,
 } from '../index.ts';
-import { PARAGRAPH_KEY_INPUT_ROLES } from '../layout-cache.ts';
+import { layoutNodeTokenVisitTestRecorder, PARAGRAPH_KEY_INPUT_ROLES } from '../layout-cache.ts';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 
@@ -169,6 +174,103 @@ describe('the cache key covers every input that can change a break (task 9.2)', 
 });
 
 describe('the cache is bounded and self-pruning (task 9.2)', () => {
+  test('one-shot caches release placed values while reusable caches retain them', () => {
+    const oneShot = createParagraphLayoutCache<string>({ retainAcrossPasses: false });
+    const reusable = createParagraphLayoutCache<string>();
+    oneShot.set('paragraph', 'break');
+    reusable.set('paragraph', 'break');
+
+    expect(oneShot.retainAcrossPasses).toBe(false);
+    expect(reusable.retainAcrossPasses).toBe(true);
+    oneShot.release('paragraph');
+    reusable.release('paragraph');
+    expect(oneShot.get('paragraph')).toBeUndefined();
+    expect(reusable.get('paragraph')).toBe('break');
+  });
+
+  test('clearing a one-shot cache releases its subtree key memo scope', () => {
+    const cache = createParagraphLayoutCache<never>({ retainAcrossPasses: false });
+    const part = load('<w:p><w:r><w:t>construction-only identity</w:t></w:r></w:p>');
+    const body = part.root.children.find((node) => node.kind === 'body')!;
+    const paragraphNode = body.children.find((node) => node.kind === 'paragraph')!;
+    const inputs = {
+      paragraph: paragraphNode,
+      properties: [],
+      width: 100,
+      producer: 'one-shot',
+    } as const;
+    const recorder = layoutNodeTokenVisitTestRecorder();
+    try {
+      const first = cache.keyFor!(inputs);
+      expect(recorder.nodeVisits).toBeGreaterThan(0);
+      recorder.reset();
+      expect(cache.keyFor!(inputs)).toBe(first);
+      expect(recorder.nodeVisits).toBe(0);
+
+      cache.clear();
+      recorder.reset();
+      expect(cache.keyFor!(inputs)).toBe(first);
+      expect(recorder.nodeVisits).toBeGreaterThan(0);
+    } finally {
+      recorder.dispose();
+    }
+  });
+
+  test('legacy structural caches without the optional release hook still lay out', () => {
+    const inner = createParagraphLayoutCache<never>();
+    const legacy: ParagraphLayoutCache<never> = {
+      get: (key) => inner.get(key),
+      set: (key, value) => inner.set(key, value),
+      retain: (keys) => inner.retain(keys),
+      clear: () => inner.clear(),
+      get stats() {
+        return inner.stats;
+      },
+    };
+    expect(() => geometryOf(load(MANY), 1, legacy as Cache)).not.toThrow();
+  });
+
+  test('custom key hooks keep their cache receiver', () => {
+    const inner = createParagraphLayoutCache<never>();
+    let calls = 0;
+    const seenNodeIds = new Set<string>();
+    const custom: ParagraphLayoutCache<never> = {
+      get: (key) => inner.get(key),
+      set: (key, value) => inner.set(key, value),
+      retain: (keys) => inner.retain(keys),
+      clear: () => inner.clear(),
+      keyFor(inputs) {
+        expect(this).toBe(custom);
+        calls += 1;
+        seenNodeIds.add(inputs.paragraph.id);
+        return inner.keyFor!(inputs);
+      },
+      get stats() {
+        return inner.stats;
+      },
+    };
+    const table = '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>';
+    const part = load(`${MANY}${table}`);
+    let bodyParagraphId: string | undefined;
+    let cellParagraphId: string | undefined;
+    const visit = (node: OoxmlNode, insideCell: boolean): void => {
+      if (node.kind === 'textValue') return;
+      if (node.kind === 'paragraph') {
+        if (insideCell) cellParagraphId ??= node.id;
+        else bodyParagraphId ??= node.id;
+      }
+      for (const child of node.children) visit(child, insideCell || node.kind === 'tableCell');
+    };
+    visit(part.root, false);
+
+    expect(() => lay(part, 1, custom as Cache)).not.toThrow();
+    expect(calls).toBeGreaterThan(0);
+    expect(bodyParagraphId).toBeDefined();
+    expect(cellParagraphId).toBeDefined();
+    expect(seenNodeIds.has(bodyParagraphId!)).toBe(true);
+    expect(seenNodeIds.has(cellParagraphId!)).toBe(true);
+  });
+
   test('it evicts least-recently-used entries from PAST generations over its limit', () => {
     const cache = createParagraphLayoutCache<string>({ maxEntries: 2 });
     cache.set('a', '1');
@@ -299,7 +401,7 @@ describe('key memoization over immutable nodes', () => {
     expect(paragraphLayoutKey(inputs)).toBe(paragraphLayoutKey(inputs));
   });
 
-  test('a changed width recomputes, and recomputation is value-stable', () => {
+  test('a changed width recomputes, and the bounded memo reuses an earlier width', () => {
     const part = load(paragraph('memoized paragraph content'));
     const node = firstParagraphOf(part);
     const at100 = paragraphLayoutKey({
@@ -315,7 +417,8 @@ describe('key memoization over immutable nodes', () => {
       producer: 'p',
     });
     expect(at200).not.toBe(at100);
-    // The memo holds one entry per node; alternating widths must still produce the same VALUE.
+    // Prepass and placement commonly alternate widths; both stay warm without serializing the
+    // immutable OOXML subtree into either key.
     const at100again = paragraphLayoutKey({
       paragraph: node,
       properties: [],
@@ -359,6 +462,7 @@ describe('key memoization over immutable nodes', () => {
       width: 100,
       producer: 'p',
       drawingToken: 'd0',
+      projectionToken: 'p0',
       exclusionToken: 'x0',
     };
     const changed: Record<
@@ -369,6 +473,7 @@ describe('key memoization over immutable nodes', () => {
       width: { width: 200 },
       producer: { producer: 'q' },
       drawingToken: { drawingToken: 'd1' },
+      projectionToken: { projectionToken: 'p1' },
       exclusionToken: { exclusionToken: 'x1' },
     };
     for (const [field, override] of Object.entries(changed)) {
@@ -378,10 +483,8 @@ describe('key memoization over immutable nodes', () => {
     }
   });
 
-  test('a REPLACED paragraph node with identical content keys to the same value', () => {
-    // Two parses of the same XML are different node objects with the same structural ids;
-    // the memo must never let one node object's cached key answer for another object, and
-    // equal content at the same structural id must still produce an equal key value.
+  test('a replaced content-equal paragraph reuses its exact interned identity', () => {
+    // A canonical digest preserves incremental reuse even when a store rebuilds immutable nodes.
     const a = paragraphLayoutKey({
       paragraph: firstParagraphOf(load(paragraph('same content'))),
       properties: [],
@@ -395,5 +498,106 @@ describe('key memoization over immutable nodes', () => {
       producer: 'p',
     });
     expect(a).toEqual(b);
+  });
+
+  test('a cell edit rehashes only its copy-on-write path, not the whole table', () => {
+    const rows = Array.from(
+      { length: 200 },
+      (_, index) =>
+        `<w:tr><w:tc>${paragraph(`left ${index} ${'word '.repeat(8)}`)}</w:tc>` +
+        `<w:tc>${paragraph(`right ${index} ${'word '.repeat(8)}`)}</w:tc></w:tr>`
+    ).join('');
+    const part = load(`<w:tbl><w:tblPr/>${rows}</w:tbl>`);
+    const findFirst = (node: OoxmlNode, kind: string): OoxmlNode | null => {
+      if (node.kind === kind) return node;
+      if (node.kind === 'textValue') return null;
+      for (const child of node.children) {
+        const found = findFirst(child, kind);
+        if (found) return found;
+      }
+      return null;
+    };
+    const paragraphs: OoxmlNode[] = [];
+    const collectParagraphs = (node: OoxmlNode): void => {
+      if (node.kind === 'paragraph') {
+        paragraphs.push(node);
+        return;
+      }
+      if (node.kind !== 'textValue') for (const child of node.children) collectParagraphs(child);
+    };
+    const table = findFirst(part.root, 'table');
+    expect(table).not.toBeNull();
+    collectParagraphs(table!);
+    expect(paragraphs).toHaveLength(400);
+
+    const recorder = layoutNodeTokenVisitTestRecorder();
+    try {
+      recorder.reset();
+      const before = paragraphLayoutKey({
+        paragraph: table!,
+        properties: [],
+        width: 500,
+        producer: 'table-digest',
+      });
+      const coldVisits = recorder.nodeVisits;
+      const reparsedTable = findFirst(load(`<w:tbl><w:tblPr/>${rows}</w:tbl>`).root, 'table');
+      expect(reparsedTable).not.toBeNull();
+      expect(
+        paragraphLayoutKey({
+          paragraph: reparsedTable!,
+          properties: [],
+          width: 500,
+          producer: 'table-digest',
+        })
+      ).toBe(before);
+
+      const target = paragraphs[201]!;
+      const edited = applyTreeOp(part, {
+        op: 'insertText',
+        paragraphId: target.id,
+        offset: 0,
+        text: 'changed ',
+      });
+      expect(edited.ok).toBe(true);
+      if (!edited.ok) throw new Error(edited.reason);
+      const editedTable = findFirst(edited.part.root, 'table');
+      expect(editedTable).not.toBeNull();
+      recorder.reset();
+      const after = paragraphLayoutKey({
+        paragraph: editedTable!,
+        properties: [],
+        width: 500,
+        producer: 'table-digest',
+      });
+      const editedVisits = recorder.nodeVisits;
+
+      expect(after).not.toBe(before);
+      expect(coldVisits).toBeGreaterThan(2_000);
+      // Deterministic structural bound, not timing: table → row → cell → paragraph → run/text.
+      expect(editedVisits).toBeLessThanOrEqual(16);
+    } finally {
+      recorder.dispose();
+    }
+  });
+
+  test('file-controlled attribute delimiters cannot forge the recursive node token', () => {
+    // The old printable serialization made these attribute lists identical:
+    // `a=x|:b=y`. Hashing an ambiguous serialization cannot repair that collision.
+    const keyOf = (attributes: string) =>
+      paragraphLayoutKey({
+        paragraph: firstParagraphOf(load(`<w:p><w:r ${attributes}><w:t>same</w:t></w:r></w:p>`)),
+        properties: [],
+        width: 100,
+        producer: 'p',
+      });
+    expect(keyOf('a="x|:b=y"')).not.toBe(keyOf('a="x" b="y"'));
+  });
+
+  test('attacker-sized attribute cardinality cannot overflow an argument list', () => {
+    const attributes = Array.from({ length: 100_000 }, (_, index) => `a${index}="x"`).join(' ');
+    const node = firstParagraphOf(load(`<w:p ${attributes}><w:r><w:t>x</w:t></w:r></w:p>`));
+    expect(() =>
+      paragraphLayoutKey({ paragraph: node, properties: [], width: 100, producer: 'p' })
+    ).not.toThrow();
   });
 });

@@ -123,12 +123,12 @@ const shared = {
     output: 'src/output/index.ts',
     store: 'src/store/index.ts',
     editor: 'src/editor/index.ts',
+    export: 'src/export/index.ts',
   },
   // Same reason the adapter sets it: tsup defaults to `node`, which resolves
   // bundled deps through their `node` export condition, and fflate's node build
   // runs `createRequire` at module top level and throws in a browser.
   platform: 'browser',
-  dts: true,
   // Many entries share the engine's internals. Splitting emits them once into
   // shared chunks instead of copying them into all fourteen bundles.
   splitting: true,
@@ -169,6 +169,7 @@ const shared = {
       '@docx-editor.dev/core/output': resolve(here, 'src/output/index.ts'),
       '@docx-editor.dev/core/store': resolve(here, 'src/store/index.ts'),
       '@docx-editor.dev/core/editor': resolve(here, 'src/editor/index.ts'),
+      '@docx-editor.dev/core/export': resolve(here, 'src/export/index.ts'),
     };
   },
 } satisfies Options;
@@ -181,6 +182,13 @@ export default defineConfig([
   {
     ...shared,
     format: ['esm'],
+    // Emit the package's one public declaration graph here. Every `types`
+    // condition in package.json points at these `.d.ts` files, independent of
+    // whether the consumer selects the ESM or CJS runtime. Asking the CJS build
+    // for declarations as well creates an unused parallel `.d.cts` graph and,
+    // because tsup evaluates this config array with Promise.all, nearly doubles
+    // peak declaration-build memory on constrained CI/preview builders.
+    dts: true,
     clean: false,
     onSuccess: copyHarfBuzzBinary,
     // THE POINT OF THE SPLIT. Left external, harfbuzzjs reaches the consumer's bundler with
@@ -214,6 +222,10 @@ export default defineConfig([
   {
     ...shared,
     format: ['cjs'],
+    // Runtime-only: the ESM build above owns the declarations selected by the
+    // export map. Keep this explicit so a future refactor cannot accidentally
+    // restore two concurrent declaration bundlers.
+    dts: false,
     clean: false,
     define: { __DOCX_HARFBUZZ_WASM_URL_SUPPORTED__: 'false' },
     // harfbuzzjs stays EXTERNAL here, because it cannot be inlined: its entry is a

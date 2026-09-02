@@ -120,6 +120,21 @@ describe('a restyled STYLE definition is not a format change on every span', () 
 });
 
 describe('buildStyleCascadeTable last-wins and docDefaults', () => {
+  test('explicit outline levels win over English names while localized names remain neutral', () => {
+    const table = buildStyleCascadeTable(
+      loadStyles(
+        '<w:style w:type="paragraph" w:styleId="Conflict"><w:name w:val="Heading 1"/>' +
+          '<w:pPr><w:outlineLvl w:val="4"/></w:pPr></w:style>' +
+          '<w:style w:type="paragraph" w:styleId="Demoted"><w:name w:val="Heading 2"/>' +
+          '<w:pPr><w:outlineLvl w:val="9"/></w:pPr></w:style>' +
+          '<w:style w:type="paragraph" w:styleId="Localized"><w:name w:val="Titre 2"/></w:style>'
+      )
+    );
+    expect(table.styles.get('Conflict')?.outlineLevel).toBe(4);
+    expect(table.styles.get('Demoted')?.outlineLevel).toBeNull();
+    expect(table.styles.get('Localized')?.outlineLevel).toBeNull();
+  });
+
   test('duplicate Heading1 keeps the last definition', () => {
     const table = buildStyleCascadeTable(loadStyles(HEADING1_FIRST + HEADING1_LAST));
     const style = table.styles.get('Heading1')!;
@@ -504,6 +519,26 @@ describe('bounded cacheToken fingerprint', () => {
       `<w:rPr><w:sz w:val="22"/><w:color w:val="222222"/></w:rPr></w:style>`;
     const c = buildStyleCascadeTable(loadStyles(changed));
     expect(c.cacheToken).not.toBe(a.cacheToken);
+  });
+
+  test('table, row, and conditional style properties each invalidate the token', () => {
+    const tableStyle = (tblWidth: string, header: string, conditionalHeader: string) =>
+      `<w:style w:type="table" w:styleId="Grid">` +
+      `<w:tblPr><w:tblW w:type="dxa" w:w="${tblWidth}"/></w:tblPr>` +
+      `<w:trPr><w:tblHeader w:val="${header}"/></w:trPr>` +
+      `<w:tblStylePr w:type="firstRow"><w:trPr>` +
+      `<w:tblHeader w:val="${conditionalHeader}"/></w:trPr></w:tblStylePr>` +
+      '</w:style>';
+    const base = buildStyleCascadeTable(loadStyles(tableStyle('2400', 'off', 'off')));
+    const same = buildStyleCascadeTable(loadStyles(tableStyle('2400', 'off', 'off')));
+    const changedTable = buildStyleCascadeTable(loadStyles(tableStyle('4800', 'off', 'off')));
+    const styledHeader = buildStyleCascadeTable(loadStyles(tableStyle('2400', 'on', 'off')));
+    const conditionalHeader = buildStyleCascadeTable(loadStyles(tableStyle('2400', 'off', 'on')));
+
+    expect(same.cacheToken).toBe(base.cacheToken);
+    expect(changedTable.cacheToken).not.toBe(base.cacheToken);
+    expect(styledHeader.cacheToken).not.toBe(base.cacheToken);
+    expect(conditionalHeader.cacheToken).not.toBe(base.cacheToken);
   });
 
   test('layout cache misses after styles change via producer token', () => {

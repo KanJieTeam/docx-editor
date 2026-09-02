@@ -83,6 +83,140 @@ export interface RevisionFilter {
   readonly cacheKey: string;
 }
 
+/** A read-only Set facade whose backing collection is unreachable to consumers. */
+class ImmutableStringSet implements ReadonlySet<string> {
+  readonly #values: Set<string>;
+
+  constructor(values: Iterable<string>) {
+    this.#values = new Set(values);
+    Object.freeze(this);
+  }
+
+  get size(): number {
+    return this.#values.size;
+  }
+
+  has(value: string): boolean {
+    return this.#values.has(value);
+  }
+
+  forEach(
+    callbackfn: (value: string, value2: string, set: ReadonlySet<string>) => void,
+    thisArg?: unknown
+  ): void {
+    this.#values.forEach((value) => callbackfn.call(thisArg, value, value, this));
+  }
+
+  entries() {
+    return this.#values.entries();
+  }
+
+  keys() {
+    return this.#values.keys();
+  }
+
+  values() {
+    return this.#values.values();
+  }
+
+  union<U>(other: {
+    readonly size: number;
+    has(value: U): boolean;
+    keys(): Iterator<U>;
+  }): Set<string | U> {
+    const result = new Set<string | U>(this.#values);
+    const keys = other.keys();
+    let next = keys.next();
+    while (!next.done) {
+      result.add(next.value);
+      next = keys.next();
+    }
+    return result;
+  }
+
+  intersection<U>(other: {
+    readonly size: number;
+    has(value: U): boolean;
+    keys(): Iterator<U>;
+  }): Set<string & U> {
+    const result = new Set<string & U>();
+    for (const value of this.#values) {
+      if (other.has(value as unknown as U)) result.add(value as string & U);
+    }
+    return result;
+  }
+
+  difference<U>(other: {
+    readonly size: number;
+    has(value: U): boolean;
+    keys(): Iterator<U>;
+  }): Set<string> {
+    const result = new Set<string>();
+    for (const value of this.#values) {
+      if (!other.has(value as unknown as U)) result.add(value);
+    }
+    return result;
+  }
+
+  symmetricDifference<U>(other: {
+    readonly size: number;
+    has(value: U): boolean;
+    keys(): Iterator<U>;
+  }): Set<string | U> {
+    const result = new Set<string | U>(this.#values);
+    const keys = other.keys();
+    let next = keys.next();
+    while (!next.done) {
+      const value = next.value;
+      if (this.#values.has(value as unknown as string)) result.delete(value);
+      else result.add(value);
+      next = keys.next();
+    }
+    return result;
+  }
+
+  isSubsetOf(other: {
+    readonly size: number;
+    has(value: unknown): boolean;
+    keys(): Iterator<unknown>;
+  }): boolean {
+    if (this.size > other.size) return false;
+    for (const value of this.#values) if (!other.has(value)) return false;
+    return true;
+  }
+
+  isSupersetOf(other: {
+    readonly size: number;
+    has(value: unknown): boolean;
+    keys(): Iterator<unknown>;
+  }): boolean {
+    if (this.size < other.size) return false;
+    const keys = other.keys();
+    let next = keys.next();
+    while (!next.done) {
+      if (!this.#values.has(next.value as string)) return false;
+      next = keys.next();
+    }
+    return true;
+  }
+
+  isDisjointFrom(other: {
+    readonly size: number;
+    has(value: unknown): boolean;
+    keys(): Iterator<unknown>;
+  }): boolean {
+    for (const value of this.#values) if (other.has(value)) return false;
+    return true;
+  }
+
+  [Symbol.iterator]() {
+    return this.#values[Symbol.iterator]();
+  }
+}
+
+/** Shared immutable empty author set for editor-facing visibility snapshots. @internal */
+export const EMPTY_REVISION_AUTHOR_SET: ReadonlySet<string> = new ImmutableStringSet([]);
+
 /** @deprecated Use {@link RevisionFilter}. */
 export interface RevisionAuthorFilter extends RevisionFilter {}
 
@@ -94,10 +228,11 @@ export function revisionAuthorFilter(
   for (const author of hiddenAuthors) hidden.add(author);
   if (hidden.size === 0) return undefined;
   const ordered = [...hidden].sort();
+  const hiddenSnapshot = new ImmutableStringSet(ordered);
   return Object.freeze({
-    hiddenAuthors: hidden,
-    includes: (revision: RevisionAttribution) => !hidden.has(revision.author),
-    includesNode: (_nodeId: string, author: string) => !hidden.has(author),
+    hiddenAuthors: hiddenSnapshot,
+    includes: (revision: RevisionAttribution) => !hiddenSnapshot.has(revision.author),
+    includesNode: (_nodeId: string, author: string) => !hiddenSnapshot.has(author),
     cacheKey: JSON.stringify(ordered),
   });
 }
@@ -507,5 +642,17 @@ export function formatRevisionOf(
 
 /** True when this stack of revisions marks its content as deleted from the live document. */
 export function revisionsAreDeletion(revisions: readonly RevisionAttribution[]): boolean {
-  return revisions.some((revision) => revision.kind === 'delete' || revision.kind === 'moveFrom');
+  return revisions.some((revision) => {
+    switch (revision.kind) {
+      case 'delete':
+      case 'moveFrom':
+        return true;
+      case 'insert':
+      case 'moveTo':
+      case 'format':
+        return false;
+      default:
+        return revision.kind satisfies never;
+    }
+  });
 }

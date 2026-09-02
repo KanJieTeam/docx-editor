@@ -1,20 +1,13 @@
 // Bounded table structure over the typed canonical tree.
 //
-// Reads `w:tbl`/`w:tr`/`w:tc` typed nodes plus their generic property subtrees into a plain
-// bounded structure the table layout consumes. All widths leave here in POINTS — twips are
-// converted once at this boundary, matching `geometryOfSection` and `paragraphIndent`.
+// Reads `w:tbl`/`w:tr`/`w:tc` into the bounded structure consumed by table layout. All widths
+// leave in POINTS, matching `geometryOfSection` and `paragraphIndent`.
 //
-// Every value below is attacker-controlled (a .docx is a zip of XML the author fully
-// controls), so every read clamps before anything is allocated from it and no attacker-sized
-// collection is ever spread or passed as varargs. Do not relax these limits: hostile inputs
-// can otherwise trigger multi-gigabyte allocation attempts or spread-arity failures that vary
-// by JavaScript engine.
+// Every value is attacker-controlled. Clamp before allocation, and never spread or pass an
+// attacker-sized collection as varargs: either can trigger unbounded allocation or arity failure.
 //
-// The width algebra this walk feeds — reading CT_TblWidth, and reconciling the authored
-// preferences against the `w:tblGrid` seed — lives in `table-widths.ts`, because settling a
-// column means looking at every cell that covers it across every row rather than at any one
-// node this walk visits.
-
+// Width reconciliation lives in `table-widths.ts`: settling one column depends on every cell
+// covering it across every row, not any one node visited here.
 import {
   flattenContentControls,
   WML_NAMESPACE_URI,
@@ -65,7 +58,8 @@ import {
   type CellMarginsPt,
 } from './table-cell-margins.ts';
 import { readCellTextDirection } from './table-cell-text-direction.ts';
-
+import { readCellVerticalAlign, type CellVerticalAlign } from './table-cell-vertical-align.ts';
+import { tableRowIsHeader } from './table-row-header-style.ts';
 // Cell padding is its own unit (`table-cell-margins.ts`); re-exported here because this is
 // where the published table surface lives.
 export {
@@ -83,6 +77,7 @@ export {
   type PreferredWidth,
   type PreferredWidthType,
 } from './table-widths.ts';
+export type { CellVerticalAlign } from './table-cell-vertical-align.ts';
 
 /**
  * Layout-time nesting ceiling. Parse-time depth (MAX_DEPTH = 256 XML levels) alone still
@@ -121,9 +116,6 @@ const LAST_GRID_COLUMN = MAX_TABLE_COLUMNS - 1;
 
 /** Distinct conditional-format combinations memoized per table; see `styleFormattingFor`. */
 const MAX_CELL_CONDITION_SETS = 256;
-
-/** `w:vAlign` — where a cell's content sits when the row is taller than the content. */
-export type CellVerticalAlign = 'top' | 'center' | 'bottom';
 
 /** `w:tblPr/w:jc` (17.4.29, ST_JcTable): where the table sits within the text column. */
 export type TableAlignment = 'left' | 'center' | 'right';
@@ -375,14 +367,6 @@ function readVMergeContinue(cellProperties: OoxmlElement | undefined): boolean {
   if (!vMerge) return false;
   // Explicit "continue" or a bare <w:vMerge/> continues; only "restart" starts a cell.
   return attributeValue(vMerge, 'val') !== 'restart';
-}
-
-function readVAlign(cellProperties: OoxmlElement | undefined): CellVerticalAlign {
-  const node = cellProperties && childNamed(cellProperties, 'vAlign');
-  const value = node && attributeValue(node, 'val');
-  if (value === 'center') return 'center';
-  if (value === 'bottom') return 'bottom';
-  return 'top';
 }
 
 function readShading(cellProperties: OoxmlElement | undefined): string | undefined {
@@ -953,6 +937,17 @@ function readTableStructureUncached(
     const plan = plans[rowIndex]!;
     const rowNode = plan.node;
     const rowProperties = plan.properties;
+    const rowConditions = conditionalTypesFor({
+      look,
+      rowIndex,
+      rowCount: bodyRows,
+      gridColumn: 0,
+      gridSpan: Math.max(1, columnCount),
+      columnCount: Math.max(1, columnCount),
+      rowProperties,
+      cellProperties: undefined,
+    });
+    const isHeader = tableRowIsHeader(tableStyle, rowConditions, rowProperties);
     let cellIndex = 0;
     const cells: SemanticTableCell[] = [];
     for (const cellNode of plan.cells) {
@@ -1001,7 +996,7 @@ function readTableStructureUncached(
         gridColumn,
         ...(gridCols[gridColumn]?.id ? { gridColumnId: gridCols[gridColumn]!.id } : {}),
         vMergeContinue: readVMergeContinue(cellProperties),
-        vAlign: readVAlign(cellProperties),
+        vAlign: readCellVerticalAlign(cellProperties),
         textDirection: readCellTextDirection(cellProperties),
         margins: cellMargins,
         borders: mergeCellBorders(
@@ -1029,7 +1024,7 @@ function readTableStructureUncached(
       ...(rowRevisionId !== undefined ? { revisionId: rowRevisionId } : {}),
       ...(rowRevisionAuthor !== undefined ? { revisionAuthor: rowRevisionAuthor } : {}),
       ...(rowRevisionDate !== undefined ? { revisionDate: rowRevisionDate } : {}),
-      isHeader: readFlag(rowProperties, 'tblHeader'),
+      isHeader,
       cantSplit: readFlag(rowProperties, 'cantSplit'),
       height: readRowHeight(rowProperties),
       cells,

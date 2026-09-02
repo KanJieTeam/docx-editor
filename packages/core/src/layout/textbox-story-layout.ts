@@ -105,6 +105,9 @@ export interface TextboxStoryLayoutOptions {
   readonly revisionAuthorFilter?: RevisionAuthorFilter;
   /** Document properties, for a document-property field inside the text-box story. */
   readonly documentProperties?: import('@docx-editor.dev/core/store').DocumentProperties;
+  /** Sanitized hyperlink seams inherited from the story containing this text box. */
+  readonly projectLink?: import('./field-pieces.ts').HyperlinkProjector;
+  readonly projectFieldLink?: import('./field-pieces.ts').FieldLinkProjector;
   /** Story nesting depth; a textbox laid out from inside another textbox passes depth + 1. */
   readonly depth?: number;
   /**
@@ -129,6 +132,10 @@ export interface TextboxStoryLayoutOptions {
   readonly drawingTokenForParagraph?: (
     paragraph: import('@docx-editor.dev/core/store').OoxmlNode
   ) => string;
+  /** Host-part semantic projection token for each paragraph in this text-box story. */
+  readonly projectionTokenForParagraph?: (paragraph: OoxmlNode) => string;
+  /** Memoized aggregate projection token for a table in this text-box story. */
+  readonly projectionTokenForTable?: (table: OoxmlNode) => string;
 }
 
 /** Stable line-id namespace for one textbox story. */
@@ -194,7 +201,8 @@ export function textboxStoryListItems(
 /** Hard ceiling on nodes visited when discovering `w:txbxContent` under one block. */
 const MAX_HOSTED_STORY_SCAN_NODES = 20_000;
 
-interface HostedContentsScan {
+/** Bounded text-box story discovery used by layout and export font provisioning. @internal */
+export interface HostedContentsScan {
   readonly contents: readonly OoxmlNode[];
   /** True when the budget stopped the walk before the whole subtree was seen. */
   readonly truncated: boolean;
@@ -215,7 +223,8 @@ const NO_HOSTED_CONTENTS: HostedContentsScan = Object.freeze({
  */
 const hostedTextboxContentsByBlock = new WeakMap<OoxmlNode, HostedContentsScan>();
 
-function hostedTextboxContents(block: OoxmlNode): HostedContentsScan {
+/** Discover text-box stories hosted by one layout block. @internal */
+export function hostedTextboxContents(block: OoxmlNode): HostedContentsScan {
   const cached = hostedTextboxContentsByBlock.get(block);
   if (cached) return cached;
   const found: OoxmlNode[] = [];
@@ -431,6 +440,8 @@ export function layoutTextboxStory(
     ...(listItems ? { listItems } : {}),
     ...(options.pageContext ? { pageContext: options.pageContext } : {}),
     ...(options.documentProperties ? { documentProperties: options.documentProperties } : {}),
+    ...(options.projectLink ? { projectLink: options.projectLink } : {}),
+    ...(options.projectFieldLink ? { projectFieldLink: options.projectFieldLink } : {}),
     ...(options.defaultTabStopPt !== undefined
       ? { defaultTabStopPt: options.defaultTabStopPt }
       : {}),
@@ -439,6 +450,12 @@ export function layoutTextboxStory(
     ...(options.inlineDrawingLayout ? { inlineDrawingLayout: options.inlineDrawingLayout } : {}),
     ...(options.drawingTokenForParagraph
       ? { drawingTokenForParagraph: options.drawingTokenForParagraph }
+      : {}),
+    ...(options.projectionTokenForParagraph
+      ? { projectionTokenForParagraph: options.projectionTokenForParagraph }
+      : {}),
+    ...(options.projectionTokenForTable
+      ? { projectionTokenForTable: options.projectionTokenForTable }
       : {}),
   });
 

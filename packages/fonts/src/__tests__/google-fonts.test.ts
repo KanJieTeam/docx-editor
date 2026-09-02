@@ -528,4 +528,147 @@ describe('googleFonts resolver', () => {
       fragment.sources.filter((source) => source.request.family === 'TeX Gyre Adventor')
     ).toHaveLength(4);
   });
+
+  test('successful signal-scoped loads seed the immutable cache for later exports', async () => {
+    const { fetcher, requested } = fakeFetcher();
+    const resolver = googleFonts({ fetcher, onFailure: () => {} });
+    await resolver({
+      families: ['Tinos'],
+      defaultFamily: 'No Such Family',
+      signal: new AbortController().signal,
+    });
+    await resolver({
+      families: ['Tinos'],
+      defaultFamily: 'No Such Family',
+      signal: new AbortController().signal,
+    });
+    expect(requested).toHaveLength(4);
+  });
+
+  test('an aborted signal-scoped load is cancellable, never cached, and can retry', async () => {
+    let failing = true;
+    let calls = 0;
+    let observedSignals = 0;
+    const fetcher = ((input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      const face = GOOGLE_FONT_CATALOG.find((entry) => entry.url === String(input));
+      if (!face) return Promise.resolve(new Response(null, { status: 404 }));
+      if (!failing) return Promise.resolve(new Response(new Uint8Array(face.byteLength)));
+      if (init?.signal) observedSignals += 1;
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener(
+          'abort',
+          () => reject(init.signal?.reason ?? new Error('aborted')),
+          { once: true }
+        );
+      });
+    }) as typeof fetch;
+    const resolver = googleFonts({ fetcher, onFailure: () => {} });
+    const controller = new AbortController();
+    const first = resolver({
+      families: ['Tinos'],
+      defaultFamily: 'No Such Family',
+      signal: controller.signal,
+    });
+    queueMicrotask(() => controller.abort('deadline'));
+    expect((await first).sources).toHaveLength(0);
+    expect(observedSignals).toBe(4);
+
+    failing = false;
+    const retried = await resolver({
+      families: ['Tinos'],
+      defaultFamily: 'No Such Family',
+      signal: new AbortController().signal,
+    });
+    expect(retried.sources).toHaveLength(4);
+    expect(calls).toBe(8);
+  });
+
+  test('concurrent signal-scoped loads share one download per face', async () => {
+    // Server exports always pass a signal. Two documents naming the same face must not cost
+    // two CDN downloads, and one caller aborting must not cancel the other's shared fetch.
+    let calls = 0;
+    const resolveByUrl = new Map<string, (response: Response) => void>();
+    const fetcher = ((input: RequestInfo | URL) => {
+      calls += 1;
+      const face = GOOGLE_FONT_CATALOG.find((entry) => entry.url === String(input));
+      if (!face) return Promise.resolve(new Response(null, { status: 404 }));
+      return new Promise<Response>((resolve) => resolveByUrl.set(face.url, resolve));
+    }) as typeof fetch;
+    const resolver = googleFonts({ fetcher, onFailure: () => {} });
+    const abandoning = new AbortController();
+    const first = resolver({
+      families: ['Tinos'],
+      defaultFamily: 'No Such Family',
+      signal: abandoning.signal,
+    });
+    await Promise.resolve();
+    const second = resolver({
+      families: ['Tinos'],
+      defaultFamily: 'No Such Family',
+      signal: new AbortController().signal,
+    });
+    await Promise.resolve();
+    const sharedCalls = calls;
+    // One waiter abandons; the survivor keeps the shared fetch alive to completion.
+    abandoning.abort('first-caller-deadline');
+    expect((await first).sources).toHaveLength(0);
+    for (const [url, resolve] of resolveByUrl) {
+      const face = GOOGLE_FONT_CATALOG.find((entry) => entry.url === url)!;
+      resolve(new Response(new Uint8Array(face.byteLength)));
+    }
+    expect((await second).sources).toHaveLength(4);
+    expect(calls).toBe(sharedCalls);
+    expect(sharedCalls).toBe(4);
+  });
+
+  test('a signal-scoped retry can replace a stranded shared request without late cache deletion', async () => {
+    let retrying = false;
+    let calls = 0;
+    const rejectStranded: ((reason?: unknown) => void)[] = [];
+    const fetcher = ((input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      const face = GOOGLE_FONT_CATALOG.find((entry) => entry.url === String(input));
+      if (!face) return Promise.resolve(new Response(null, { status: 404 }));
+      if (retrying && init?.signal) {
+        return Promise.resolve(new Response(new Uint8Array(face.byteLength)));
+      }
+      return new Promise<Response>((_, reject) => rejectStranded.push(reject));
+    }) as typeof fetch;
+    const resolver = googleFonts({ fetcher, onFailure: () => {} });
+    const shared = resolver({ families: ['Tinos'], defaultFamily: 'No Such Family' });
+    await Promise.resolve();
+    retrying = true;
+    const retry = await resolver({
+      families: ['Tinos'],
+      defaultFamily: 'No Such Family',
+      signal: new AbortController().signal,
+    });
+    expect(retry.sources).toHaveLength(4);
+    expect(calls).toBe(8);
+
+    for (const reject of rejectStranded) reject(new Error('late shared failure'));
+    await shared;
+    const cached = await resolver({ families: ['Tinos'], defaultFamily: 'No Such Family' });
+    expect(cached.sources).toHaveLength(4);
+    expect(calls).toBe(8);
+  });
+
+  test('the process cache evicts old successful faces under its byte and entry ceilings', async () => {
+    const { fetcher, requested } = fakeFetcher();
+    const resolver = googleFonts({ fetcher, onFailure: () => {} });
+    const families = GOOGLE_FONT_FAMILIES.filter(
+      (family) => family !== 'Tinos' && family !== 'Century Gothic'
+    ).slice(0, 17);
+    const request = (wanted: readonly string[]) =>
+      resolver({ families: wanted, defaultFamily: 'No Such Family' });
+
+    await request(['Tinos']);
+    const tinosUrls = new Set(
+      GOOGLE_FONT_CATALOG.filter((face) => face.family === 'Tinos').map((face) => face.url)
+    );
+    await request(families);
+    await request(['Tinos']);
+    expect(requested.filter((url) => tinosUrls.has(url))).toHaveLength(8);
+  });
 });

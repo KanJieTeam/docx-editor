@@ -9,7 +9,8 @@
 // content, and downstream sinks (inline swatch backgrounds, `w:color` writes) must only
 // receive values this module has already bounded.
 
-import type { OoxmlElement, OoxmlNode } from '../store/package/ooxml-tree.ts';
+import type { OoxmlElement } from '../store/package/ooxml-tree.ts';
+import { collectThemeSchemeFaces } from '../store/package/theme-font-scheme.ts';
 import { collectThemeColorScheme } from '../store/package/theme-color-resolution.ts';
 
 /**
@@ -39,57 +40,8 @@ export interface DocumentThemeColorEntry {
   readonly hex: string;
 }
 
-function isElement(node: OoxmlNode): node is OoxmlElement {
-  return node.kind !== 'textValue';
-}
-
-function attributeValue(node: OoxmlElement, localName: string): string | undefined {
-  return node.attributes.find((attribute) => attribute.localName === localName)?.value;
-}
-
-/** Depth-first search for the first element with a local name, document order. */
-function findElement(root: OoxmlElement, localName: string): OoxmlElement | null {
-  const stack: OoxmlNode[] = [root];
-  while (stack.length > 0) {
-    const node = stack.pop()!;
-    if (!isElement(node)) continue;
-    if (node.localName === localName) return node;
-    for (let i = node.children.length - 1; i >= 0; i -= 1) stack.push(node.children[i]!);
-  }
-  return null;
-}
-
-/** The first element child, or the one with a given local name. */
-function elementChild(parent: OoxmlElement, localName?: string): OoxmlElement | null {
-  for (const child of parent.children) {
-    if (!isElement(child)) continue;
-    if (localName === undefined || child.localName === localName) return child;
-  }
-  return null;
-}
-
-/** The theme's font slots, for resolving `w:rFonts` theme attributes. */
-export interface DocumentThemeFonts {
-  /** `a:majorFont` latin typeface — headings. */
-  readonly major: string | null;
-  /** `a:minorFont` latin typeface — body text. */
-  readonly minor: string | null;
-  /** `a:majorFont` east asian typeface (`a:ea`) — headings. */
-  readonly majorEastAsia: string | null;
-  /** `a:minorFont` east asian typeface (`a:ea`) — body text. */
-  readonly minorEastAsia: string | null;
-}
-
-/** The CSS-sink shape font names must satisfy (document-catalog's `FONT_NAME`). */
-const FONT_NAME = /^[\p{L}\p{N}\p{M} \-.+_]{1,64}$/u;
-
-/** A validated `a:latin`/`a:ea` typeface under `a:majorFont`/`a:minorFont`, or null. */
-function schemeTypeface(scheme: OoxmlElement, slot: string, face: 'latin' | 'ea'): string | null {
-  const font = elementChild(scheme, slot);
-  const element = font ? elementChild(font, face) : null;
-  const raw = element ? attributeValue(element, 'typeface') : undefined;
-  return raw !== undefined && FONT_NAME.test(raw) ? raw : null;
-}
+export type { DocumentThemeFonts } from '../store/package/theme-font-scheme.ts';
+import type { DocumentThemeFonts } from '../store/package/theme-font-scheme.ts';
 
 /**
  * The theme part's `a:fontScheme` typefaces. Independent slots — a valid minor font
@@ -97,16 +49,7 @@ function schemeTypeface(scheme: OoxmlElement, slot: string, face: 'latin' | 'ea'
  * all-or-nothing rule, because each resolves a different `w:rFonts` attribute.
  */
 export function collectDocumentThemeFonts(themeRoot: OoxmlElement | null): DocumentThemeFonts {
-  const empty = { major: null, minor: null, majorEastAsia: null, minorEastAsia: null };
-  if (!themeRoot) return empty;
-  const scheme = findElement(themeRoot, 'fontScheme');
-  if (!scheme) return empty;
-  return {
-    major: schemeTypeface(scheme, 'majorFont', 'latin'),
-    minor: schemeTypeface(scheme, 'minorFont', 'latin'),
-    majorEastAsia: schemeTypeface(scheme, 'majorFont', 'ea'),
-    minorEastAsia: schemeTypeface(scheme, 'minorFont', 'ea'),
-  };
+  return collectThemeSchemeFaces(themeRoot);
 }
 
 /**

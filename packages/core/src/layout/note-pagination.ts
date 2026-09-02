@@ -69,6 +69,7 @@ import {
 } from './note-fragment-geometry.ts';
 import { splitNoteFragments } from './note-splitting.ts';
 import { holdOutReserveNeed } from './note-reserve-holdout.ts';
+import { fingerprintNotesInput } from './note-input-fingerprint.ts';
 import { reindexAndRestackPages } from './page-restacking.ts';
 import type {
   BlockFragmentRecord,
@@ -156,7 +157,6 @@ export const MAX_NOTE_OVERFLOW_PAGES = 256;
 interface NoteOverflowBudget {
   remaining: number;
 }
-
 /**
  * Cap on synthetic eachPage mark candidates measured per section (plus actual marks).
  *
@@ -235,6 +235,18 @@ export interface NotesLayoutInput {
    * the same fail-closed rule `drawingsForPart` follows through `drawingLayoutEpoch`.
    */
   readonly linkRelsEpoch?: string;
+  /** Per-notes-part paragraph identity for projected links and metadata fields. */
+  readonly projectionTokenForParagraphForPart?: (
+    ownerPartName: string,
+    paragraph: import('@docx-editor.dev/core/store').OoxmlNode
+  ) => string;
+  /** Memoized table aggregate counterpart to `projectionTokenForParagraphForPart`. */
+  readonly projectionTokenForTableForPart?: (
+    ownerPartName: string,
+    table: import('@docx-editor.dev/core/store').OoxmlNode
+  ) => string;
+  /** Combined notes-part freshness signal; outer memo only, never a paragraph producer. */
+  readonly projectionEpoch?: string;
   readonly projectFieldLink?: import('./field-pieces.ts').FieldLinkProjector;
   /** Document properties for a document-property field inside a note story. */
   readonly documentProperties?: import('@docx-editor.dev/core/store').DocumentProperties;
@@ -326,49 +338,6 @@ interface NotesPassMemo {
       readonly reasons: readonly NotePaginationFallbackReason[];
     }
   >;
-}
-
-function fingerprintNoteProps(props: {
-  readonly pos: string;
-  readonly numFmt: string;
-  readonly numStart: number;
-  readonly numRestart: string;
-}): string {
-  return `${props.pos},${props.numFmt},${props.numStart},${props.numRestart}`;
-}
-
-/**
- * Content fingerprint of the notes input, paired with the IDENTITY checks a string cannot
- * carry (parts, measurer, cache, cascade). Answers null when the input cannot be
- * fingerprinted safely — drawings threaded without an epoch — which disables the memo.
- */
-function fingerprintNotesInput(input: NotesLayoutInput): string | null {
-  if (input.drawingsForPart !== undefined && input.drawingLayoutEpoch === undefined) return null;
-  if (input.projectLinkForPart !== undefined && input.linkRelsEpoch === undefined) return null;
-  return [
-    input.producer,
-    input.defaultTabStopPt ?? '',
-    input.drawingLayoutEpoch ?? '',
-    input.linkRelsEpoch ?? '',
-    input.displayMode ?? DEFAULT_REVISION_DISPLAY_MODE,
-    input.revisionAuthorFilter?.cacheKey ?? '',
-    // By CONTENT, not identity: a keystroke rebuilds the context object while every
-    // resolved value stands still, and only a value move should invalidate the memo.
-    input.refFields?.valuesToken ?? '',
-    // By CONTENT for the same reason as the REF values above: the properties object is
-    // re-read per package revision, and only a value move should repaint a DOCPROPERTY
-    // field inside a note. projectLink and projectFieldLink are deliberately absent: they
-    // are rebuilt per pass but pure over parts this memo already pins. projectLinkForPart
-    // is NOT — it reads relationship records a replicated rels-only change can move
-    // without touching the notes part — so linkRelsEpoch above stands in for it, and the
-    // guard at the top disables the memo for a caller that supplies the projector without
-    // the epoch.
-    input.documentProperties ? JSON.stringify(input.documentProperties) : '',
-    fingerprintNoteProps(input.documentFootnoteProps),
-    fingerprintNoteProps(input.documentEndnoteProps),
-    input.footnotePropsBySection.map(fingerprintNoteProps).join(';'),
-    input.endnotePropsBySection.map(fingerprintNoteProps).join(';'),
-  ].join('\0');
 }
 
 /** Identity fields the fingerprint cannot express; compared against the previous input. */
@@ -700,16 +669,15 @@ function endnotePropsFor(input: NotesLayoutInput, sectionIndex: number): Resolve
     input.documentEndnoteProps
   );
 }
-
 function layoutOpts(input: NotesLayoutInput, noteMarks?: NoteMarkContext): LayoutNoteStoryOptions {
   return {
     measurer: input.measurer,
     producer: input.producer,
+    displayMode: input.displayMode,
     cache: input.cache,
     styleCascade: input.styleCascade,
     numberingIndex: input.numberingIndex,
     defaultTabStopPt: input.defaultTabStopPt,
-    displayMode: input.displayMode,
     revisionAuthorFilter: input.revisionAuthorFilter,
     projectLink: input.projectLink,
     projectLinkForPart: input.projectLinkForPart,
@@ -718,9 +686,10 @@ function layoutOpts(input: NotesLayoutInput, noteMarks?: NoteMarkContext): Layou
     refFields: input.refFields,
     noteMarks,
     drawingsForPart: input.drawingsForPart,
+    projectionTokenForParagraphForPart: input.projectionTokenForParagraphForPart,
+    projectionTokenForTableForPart: input.projectionTokenForTableForPart,
   };
 }
-
 function effectiveNoteMarkStyle(
   noteKind: NoteKind,
   styleCascade: StyleCascadeTable | undefined
@@ -858,7 +827,7 @@ export function reprojectBodyNoteMarks(
     anyPageChanged = true;
     return { ...page, fragments };
   });
-  return anyPageChanged ? { revision: layout.revision, pages } : layout;
+  return anyPageChanged ? { ...layout, pages } : layout;
 }
 
 /** Whether any span under `blocks` is a projected to-note citation, memoized by identity. */
@@ -2514,7 +2483,7 @@ export function attachNotesToLayout(
   }
 
   // Body was laid with provisional marks; publish page-aware citation digits without reflow.
-  const withBodyMarks = reprojectBodyNoteMarks({ revision: layout.revision, pages }, noteMarks);
+  const withBodyMarks = reprojectBodyNoteMarks({ ...layout, pages }, noteMarks);
 
   return {
     layout: withBodyMarks,

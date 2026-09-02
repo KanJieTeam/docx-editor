@@ -24,6 +24,7 @@ import {
   type CellPlaceCursor,
   type TableFlowDeps,
 } from './semantic-table-layout.ts';
+import { probeRowFragmentProgress } from './table-row-progress-probe.ts';
 import { admitVMergeSpansAt, type RowVMergeLayoutOptions } from './table-vmerge-heights.ts';
 import { annotateTableFragmentGeometry } from './semantic-table-interaction.ts';
 import {
@@ -104,7 +105,8 @@ const POSITIONED_TABLE_LAYOUT_BOTTOM_PT = Number.MAX_SAFE_INTEGER / 1024;
  * cuts fail closed via {@link TablePaginationError} instead of overflowing contentHeight().
  * Contiguous leading `w:tblHeader` rows form one atomic repeated group: preflighted and
  * placed together, moved whole when the remainder is too short, re-emitted complete atop
- * each continuation page, and rejected when the group itself exceeds a fresh content page.
+ * each continuation page where the pending row can advance, and treated as ordinary rows
+ * when the authored group itself exceeds a fresh content page.
  */
 export function paginateTableInFlow(
   table: OoxmlElement,
@@ -176,6 +178,13 @@ export function paginateTableInFlow(
     if (row.isHeader) headerRows.push(row);
     else break;
   }
+  // Word treats a header prefix taller than a true fresh page as ordinary authored rows. A note
+  // reservation only shrinks an advisory band and must never split an otherwise valid prefix.
+  let headerGroupHeight = 0;
+  for (const headerRow of headerRows) headerGroupHeight += rowHeightOf(headerRow);
+  let initialHeaderGroupDegraded =
+    headerGroupHeight > (flow.unreservedContentHeight?.() ?? contentHeight()) + 0.001;
+  let repeatsEnabled = !initialHeaderGroupDegraded;
   let fragmentIndex = 0;
   let fragmentTop = flow.cursorY;
   let rows: TableRowFragmentRecord[] = [];
@@ -243,21 +252,19 @@ export function paginateTableInFlow(
 
   /**
    * Place the contiguous leading header rows as one group. Never splits the group across
-   * pages; fails closed when the group itself is taller than a fresh content page.
+   * pages; a continuation omits the repeat when it would leave its pending body row stuck.
    */
-  const placeHeaderGroup = (asRepeat: boolean): void => {
+  const placeHeaderGroup = (
+    asRepeat: boolean,
+    admitsBodyAfter?: (bodyTop: number) => boolean
+  ): void => {
     if (headerRows.length === 0) return;
 
-    let groupHeight = 0;
-    for (const headerRow of headerRows) {
-      groupHeight += rowHeightOf(headerRow);
-    }
-    if (groupHeight > contentHeight() + 0.001) {
-      throw new TablePaginationError(
-        'table-row-overheight',
-        `Table header group (${headerRows.length} row(s)) is taller than the page content box`
-      );
-    }
+    const groupHeight = headerGroupHeight;
+    // `breakForContinuation` already advanced to the target region before asking for a repeat.
+    // If that region cannot carry the group, keep it for the pending body row instead of skipping
+    // a usable nonzero-origin continuous-section column.
+    if (asRepeat && flow.cursorY + groupHeight > contentHeight() + 0.001) return;
     if (flow.cursorY + groupHeight > contentHeight() + 0.001 && flow.cursorY > 0) {
       closeTableFragment();
       advanceColumn();
@@ -267,6 +274,23 @@ export function paginateTableInFlow(
       // stretch over whatever the earlier section already painted above the region.
       fragmentTop = flow.cursorY;
     }
+
+    // A footnote reserve is advisory when it is the only obstruction to the atomic authored
+    // prefix. Use the full physical content band; the notes pass will carry displaced notes on.
+    const placementBottom =
+      !asRepeat && flow.cursorY + groupHeight > contentHeight() + 0.001
+        ? (flow.unreservedContentHeight?.() ?? contentHeight())
+        : contentHeight();
+    if (!asRepeat && flow.cursorY + groupHeight > placementBottom + 0.001) {
+      initialHeaderGroupDegraded = true;
+      repeatsEnabled = false;
+      return;
+    }
+
+    // A repeated header is furniture for the pending body row, not a reason to reject that row.
+    // Probe at the exact post-header position before committing any repeated lines or drawings.
+    // If the row cannot advance there, Word suppresses the repeat on this continuation page.
+    if (asRepeat && admitsBodyAfter && !admitsBodyAfter(flow.cursorY + groupHeight)) return;
 
     for (const headerRow of headerRows) {
       const placed = layoutRowFragment(
@@ -279,7 +303,7 @@ export function paginateTableInFlow(
         tableDeps,
         structure.cellSpacingPt
       );
-      if (placed.bottom > contentHeight() + 0.001) {
+      if (placed.bottom > placementBottom + 0.001) {
         throw new TablePaginationError(
           'table-row-overheight',
           `Table header row ${headerRow.id} overflowed the page content box`
@@ -291,22 +315,22 @@ export function paginateTableInFlow(
     }
   };
 
-  const breakForContinuation = (emitHeaders: boolean): void => {
+  const breakForContinuation = (admitsBodyAfter?: (bodyTop: number) => boolean): void => {
     closeTableFragment();
     advanceColumn();
     tableLeft = originX();
     // See placeHeaderGroup: the new fragment opens at the advanced cursor, which is the
     // column region top on a shared sheet and 0 only when a fresh page was opened.
     fragmentTop = flow.cursorY;
-    if (emitHeaders) placeHeaderGroup(true);
+    if (repeatsEnabled) placeHeaderGroup(true, admitsBodyAfter);
   };
 
   // Initial authored header group (not repeats) — atomic with body-row pagination below.
-  placeHeaderGroup(false);
+  if (!initialHeaderGroupDegraded) placeHeaderGroup(false);
 
   // `w:vMerge` heights, planned over the BODY rows: a merged cell is as tall as the rows
   // it covers, so its own row must not swallow the whole merged height.
-  const bodyRows = structure.rows.slice(headerRows.length);
+  const bodyRows = structure.rows.slice(initialHeaderGroupDegraded ? 0 : headerRows.length);
   // `tableLeft` is read through a getter, not captured: `placeHeaderGroup` and
   // `breakForContinuation` both re-derive it, and a positioned probe localizes wrap bands
   // against it — a stale left measures the head against a band that does not cross it.
@@ -319,6 +343,7 @@ export function paginateTableInFlow(
   };
 
   for (const [bodyRowIndex, row] of bodyRows.entries()) {
+    if (initialHeaderGroupDegraded && bodyRowIndex >= headerRows.length) repeatsEnabled = true;
     admitSpans(bodyRowIndex, row);
     let cursors: CellPlaceCursor[] = initialCellCursors(row);
     let isContinuation = false;
@@ -332,6 +357,37 @@ export function paginateTableInFlow(
     const heldByOpenSpan =
       vMerge !== undefined && vMerge.detachedSpanHeightPtByCellId === undefined;
 
+    /**
+     * Repeating headers is admissible only when this exact row state can progress below them.
+     * Explicitly atomic rows must fit whole; auto/atLeast and continued rows use the same bounded
+     * placer as the commit path, but behind a side-effect-free probe. The callback receives the
+     * real post-header top after any column advance.
+     */
+    const admitsRepeatedHeaders = (bodyTop: number): boolean => {
+      const pageBottom = contentHeight();
+      const remaining = pageBottom - bodyTop;
+      if (remaining <= 0.001) return false;
+      // The unsplit commit path consumes a complete row regardless of `fitted`: an empty row's
+      // authored box is structural progress even though it places no text. Mirror that path before
+      // asking the bounded probe, whose `fitted` flag deliberately means content progress.
+      if (!isContinuation && naturalHeight <= remaining + 0.001) return true;
+      if (!isContinuation && (row.cantSplit || row.height.rule === 'exact')) {
+        return false;
+      }
+      return probeRowFragmentProgress(
+        row,
+        structure.columnWidthsPt,
+        tableLeft,
+        bodyTop,
+        pageBottom,
+        isContinuation,
+        0,
+        tableDeps,
+        cursors,
+        structure.cellSpacingPt
+      );
+    };
+
     // Whole-row move: fits a fresh page but not the remaining band.
     if (
       !heldByOpenSpan &&
@@ -339,7 +395,7 @@ export function paginateTableInFlow(
       flow.cursorY + naturalHeight > contentHeight() + 0.001 &&
       flow.cursorY > 0
     ) {
-      breakForContinuation(true);
+      breakForContinuation(admitsRepeatedHeaders);
       movedToFreshPage = true;
       // A merge that did not fit the band it was offered in may fit this fresh page.
       admitSpans(bodyRowIndex);
@@ -362,7 +418,7 @@ export function paginateTableInFlow(
             `Table row ${row.id} cannot fit after repeated header rows`
           );
         }
-        breakForContinuation(true);
+        breakForContinuation(admitsRepeatedHeaders);
         movedToFreshPage = true;
         admitSpans(bodyRowIndex);
         continue;
@@ -402,7 +458,7 @@ export function paginateTableInFlow(
         cursors = placed.remainder!;
         isContinuation = true;
         movedToFreshPage = false;
-        breakForContinuation(true);
+        breakForContinuation(admitsRepeatedHeaders);
         continue;
       }
 
@@ -415,7 +471,7 @@ export function paginateTableInFlow(
       // nothing in `core` catches, on a path the module comment calls a recovery.
       if (!isContinuation && (row.cantSplit || row.height.rule === 'exact')) {
         if (flow.cursorY > 0 && !movedToFreshPage) {
-          breakForContinuation(true);
+          breakForContinuation(admitsRepeatedHeaders);
           movedToFreshPage = true;
           // Re-offered like every other break that retries this row: a merge starting on a
           // `w:cantSplit` row that did not fit the band it was offered in may fit the fresh
@@ -477,7 +533,23 @@ export function paginateTableInFlow(
 
       // First attempt on a non-empty page placed nothing useful → move to next page.
       if (!placed.fitted && flow.cursorY > 0 && !movedToFreshPage) {
-        breakForContinuation(true);
+        breakForContinuation(admitsRepeatedHeaders);
+        movedToFreshPage = true;
+        admitSpans(bodyRowIndex);
+        continue;
+      }
+
+      // A note reservation can leave an otherwise valid page with less than one line of body
+      // space. Do not reject a splittable row solely because that empty reserved band was the
+      // table's first offer; advance once to the next physical page and retry under its band.
+      const fullBand = flow.unreservedContentHeight?.() ?? contentHeight();
+      if (
+        !placed.fitted &&
+        flow.cursorY <= 0.001 &&
+        !movedToFreshPage &&
+        fullBand > contentHeight() + 0.001
+      ) {
+        breakForContinuation(admitsRepeatedHeaders);
         movedToFreshPage = true;
         admitSpans(bodyRowIndex);
         continue;
@@ -510,7 +582,7 @@ export function paginateTableInFlow(
       cursors = placed.remainder!;
       isContinuation = true;
       movedToFreshPage = false;
-      breakForContinuation(true);
+      breakForContinuation(admitsRepeatedHeaders);
     }
   }
   closeTableFragment();

@@ -17,10 +17,11 @@ import {
   indexInlineDrawingProjectionsInPart,
   isRunLevelMcAlternateContent,
   MAX_PART_SCAN_ELEMENTS,
+  projectDrawingsInPart,
   type DrawingProjection,
 } from '../store/package/drawing-projection.ts';
 import {
-  imageResourceLookupFor,
+  createOwnedImageResourceLookup,
   type ImageDecodePort,
   type ImageResourceLookup,
   type ImageResourceState,
@@ -50,6 +51,8 @@ export interface InlineDrawingLayoutBundle {
   /** Per-part resource epoch — only drawings owned by that part. */
   cacheTokenForPart(ownerPartName: string): string;
   drawingTokenForParagraph(paragraph: OoxmlNode, ownerPartName: string): string;
+  /** Number of discovered image decodes that have not settled yet. */
+  pendingResourceCount(): number;
   /** Mint validated bytes for a ready handle when contentId matches; null on stale/mismatch. */
   mintValidatedBytes(
     handle: ValidatedImageBytesHandle,
@@ -63,7 +66,7 @@ export interface CreateInlineDrawingLayoutBundleOptions {
   readonly session: InlineDrawingPackageReader;
   readonly decodePort: ImageDecodePort;
   readonly onResourcesChanged: () => void;
-  /** Test-only override; production always uses {@link imageResourceLookupFor}. */
+  /** Test-only override; production creates one independently disposable lookup per bundle. */
   readonly resourceLookup?: ImageResourceLookup;
 }
 
@@ -83,6 +86,7 @@ interface PartDrawingContextSlot {
   readonly cacheTokenForPart: () => string;
   readonly drawingTokenForParagraph: (paragraph: OoxmlNode) => string;
   readonly isCompatibleWith: (part: OoxmlPart, pkg: OoxmlPackage) => boolean;
+  readonly pendingResourceCount: () => number;
   readonly dispose: () => void;
 }
 
@@ -169,6 +173,55 @@ export function drawingAtomIdentities(part: OoxmlPart): ReadonlyMap<string, Ooxm
   if (facts.visited > MAX_PART_SCAN_ELEMENTS) return null;
   if (facts.deepest > DEFAULT_DRAWING_PROJECTION_LIMITS.maxDrawingDepth) return null;
   return facts.atoms;
+}
+
+const drawingSourceOrdersByRoot = new WeakMap<
+  OoxmlNode,
+  WeakMap<InlineDrawingLayoutContext, ReadonlyMap<string, number>>
+>();
+
+/**
+ * Canonical drawing traversal order for one immutable story root.
+ *
+ * The drawing layout context can remain compatible across a copy-on-write paragraph reorder:
+ * projections and atom objects are unchanged, but collision, exclusion, and paint order are not.
+ * Keying this fact by the current root makes that reorder observable; keying it again by context
+ * keeps MC branch selection honest. An MC wrapper owns the paragraph atom id while its selected
+ * projection publishes the inner drawing id, so ordered atoms are mapped through the context
+ * before becoming lookup keys. The ordered identity walk composes from immutable subtree memos,
+ * so an ordinary edit reuses every untouched block instead of rescanning the complete part. The
+ * bounded projection walk is only a defensive fallback when the identity walk refuses an
+ * over-limit tree.
+ * @internal
+ */
+export function drawingSourceOrderInPart(
+  part: OoxmlPart,
+  context: InlineDrawingLayoutContext
+): ReadonlyMap<string, number> {
+  let byContext = drawingSourceOrdersByRoot.get(part.root);
+  const cached = byContext?.get(context);
+  if (cached) return cached;
+  const identities = drawingAtomIdentities(part);
+  const order = new Map<string, number>();
+  let index = 0;
+  if (identities) {
+    for (const atomId of identities.keys()) {
+      const drawingId = context.projectionForAtom?.(atomId)?.drawingNodeId ?? atomId;
+      order.set(drawingId, index);
+      index += 1;
+    }
+  } else {
+    for (const projection of projectDrawingsInPart(part)) {
+      order.set(projection.drawingNodeId, index);
+      index += 1;
+    }
+  }
+  if (!byContext) {
+    byContext = new WeakMap();
+    drawingSourceOrdersByRoot.set(part.root, byContext);
+  }
+  byContext.set(context, order);
+  return order;
 }
 
 // Scratch view used to fold a coordinate in by its exact IEEE-754 bits. Coordinates are not
@@ -407,6 +460,7 @@ function createPartDrawingContextSlot(options: {
         }
         resourceEpoch += 1;
         resourceEpochByKey.set(key, resourceEpoch);
+        inFlight.delete(key);
         onResourceSettled(ownerPartName);
       })
       .catch(() => {
@@ -422,10 +476,8 @@ function createPartDrawingContextSlot(options: {
         );
         resourceEpoch += 1;
         resourceEpochByKey.set(key, resourceEpoch);
-        onResourceSettled(ownerPartName);
-      })
-      .finally(() => {
         inFlight.delete(key);
+        onResourceSettled(ownerPartName);
       });
   };
 
@@ -531,6 +583,7 @@ function createPartDrawingContextSlot(options: {
     cacheTokenForPart: () =>
       `${ownerPartName}|${resourceEpoch}|${generation}|${atomProjections.size}`,
     drawingTokenForParagraph,
+    pendingResourceCount: () => inFlight.size,
     isCompatibleWith: (nextPart, nextPkg) => {
       const nextTheme = createPackageShapeThemeResolvers(nextPkg);
       if (nextTheme.cacheToken !== theme.cacheToken) return false;
@@ -596,7 +649,7 @@ export function createInlineDrawingLayoutBundle(
   let pkgSnapshot = options.session.currentPackage();
   let lookup =
     options.resourceLookup ??
-    imageResourceLookupFor(pkgSnapshot, {
+    createOwnedImageResourceLookup(pkgSnapshot, {
       decodePort: options.decodePort,
     });
   const slots = new Map<string, PartDrawingContextSlot>();
@@ -687,7 +740,7 @@ export function createInlineDrawingLayoutBundle(
     pkgSnapshot = nextPkg;
     lookup =
       options.resourceLookup ??
-      imageResourceLookupFor(nextPkg, {
+      createOwnedImageResourceLookup(nextPkg, {
         decodePort: options.decodePort,
       });
   };
@@ -710,11 +763,21 @@ export function createInlineDrawingLayoutBundle(
       // reuse cached line records whose ready handles the new registry cannot mint.
       return `${slotMintBySlot.get(slot) ?? 0}|${slot.drawingTokenForParagraph(paragraph)}`;
     },
+    pendingResourceCount() {
+      let count = 0;
+      for (const slot of slots.values()) count += slot.pendingResourceCount();
+      return count;
+    },
     mintValidatedBytes(handle: ValidatedImageBytesHandle, expectedContentId: string) {
+      // A validated handle is a capability owned by the bundle that discovered and retained
+      // it. The process registry can still mint a live handle belonging to another export
+      // session, so check exact ownership before crossing the byte boundary.
+      if (handlesByKey.get(handle.resourceKey) !== handle) return null;
       return mintValidatedImageBytes(handle, expectedContentId);
     },
     sync(reader: InlineDrawingPackageReader) {
-      if (reader.packageRevision() === pkgRevision) return;
+      if (reader.packageRevision() === pkgRevision && reader.currentPackage() === pkgSnapshot)
+        return;
       resetPackage(reader);
     },
     dispose() {

@@ -17,6 +17,7 @@ bun run dev                 # React and Vue
 bun run dev:react           # Vite and React
 bun run dev:vue             # Vite and Vue
 bun run dev:happypath       # Packaged React component
+bun run dev:markdown        # Live DOCX editor + page-aware Markdown export
 bun run dev:igloo           # Customized React interface
 bun run dev:custom-nodes    # Custom content controls
 bun run dev:nextjs          # Next.js
@@ -48,11 +49,14 @@ Run all main framework examples together:
 bun run dev:demo
 ```
 
-Build and serve the combined React and Vue preview:
+Build and serve the combined deployment preview:
 
 ```bash
 bun run preview
 ```
+
+Open `/react/`, `/vue/`, `/igloo/`, or `/docx-to-markdown/` on the printed local URL. The local
+static server does not apply the hostname rewrites from `vercel.json`, so use these explicit paths.
 
 Fill a DOCX template without a browser:
 
@@ -69,6 +73,8 @@ Stop one server before you start the other.
   under the EigenPal Pro License and a custom citation node.
 - `vue/` shows the Vue 3 adapter and mirrors the React example.
 - `happy-path/` shows the packaged `<DocxEditor>` component with minimal host code.
+- `docx-to-markdown/` shows live, page-aware Markdown beside an editable DOCX, including GFM
+  tables and separate header/footer output.
 - `igloo/` shows extensive interface customization. See
   [Customize the editor](../docs/CUSTOMIZING.md).
 - `custom-nodes/` defines and edits a custom citation content control.
@@ -83,7 +89,8 @@ Stop one server before you start the other.
   server.
 - `collaboration-hocuspocus/` uses a Hocuspocus server for authenticated rooms and durable
   storage.
-- `parity/` serves the React and Vue builds through `bun run preview`.
+- `parity/` assembles the React, Vue, Igloo, and DOCX-to-Markdown builds for the primary Vercel
+  deployment and `bun run preview`.
 - `shared/` contains reusable example chrome, links, branding, and framework switchers. It is
   not runnable.
 - `dev-all.sh` starts the main framework examples for `bun run dev:demo`.

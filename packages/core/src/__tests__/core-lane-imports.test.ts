@@ -31,6 +31,9 @@ const LANES = Object.keys(CORE_LANES) as LaneName[];
  * — coupling that predates the lane move and is compile-time only.
  */
 const GRANDFATHERED_TYPE_EDGES: readonly { readonly file: string; readonly to: LaneName }[] = [
+  // The neutral export composition root shares the existing public FontOrigin type. This is
+  // erased and does not make the browser editor depend on the Node-oriented export lane.
+  { file: 'export/index.ts', to: 'editor' },
   { file: 'contracts/editor.ts', to: 'layout' },
   { file: 'contracts/editor.ts', to: 'store' },
   { file: 'contracts/editor.ts', to: 'collaboration' },
@@ -43,16 +46,20 @@ const GRANDFATHERED_TYPE_EDGES: readonly { readonly file: string; readonly to: L
   { file: 'contracts/modules.ts', to: 'collaboration' },
   { file: 'layout/table-interaction-targets.ts', to: 'contracts' },
   { file: 'store/store/tree-op-types.ts', to: 'contracts' },
+  // Font composition moved into the layout lane for the headless export root; the public
+  // FontConfiguration/FontSource shapes it composes stay described in contracts. Erased.
+  { file: 'layout/font-composition.ts', to: 'contracts' },
+  { file: 'layout/font-resolver.ts', to: 'contracts' },
 ];
 
 /**
  * VALUE edges the DAG does not allow, pinned until their code moves lane.
  *
  * These are live coupling, not just compile-time — each one is a debt with a tracked
- * issue, and the pin ratchets exactly like the type list. Empty today: the last entry
- * (`review-patch.ts` calling the `ReviewItem` vocabulary in the layout lane) was retired
- * when the review vocabulary moved to `store/store/review-items.ts`, a lane both binding
- * and layout may import.
+ * issue, and the pin ratchets exactly like the type list. Empty today: the export
+ * composition root's font edges were retired when `font-composition.ts`/`font-resolver.ts`
+ * moved to the layout lane and the rendered-font derivations moved to `store/package/`,
+ * lanes every headless exporter may import.
  */
 const GRANDFATHERED_VALUE_EDGES: readonly { readonly file: string; readonly to: LaneName }[] = [];
 

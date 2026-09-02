@@ -167,6 +167,11 @@ export interface LayoutNoteStoryOptions {
    */
   readonly projectLinkForPart?: (ownerPartName: string) => HyperlinkProjector | undefined;
   readonly projectFieldLink?: FieldLinkProjector;
+  readonly projectionTokenForParagraphForPart?: (
+    ownerPartName: string,
+    paragraph: OoxmlNode
+  ) => string;
+  readonly projectionTokenForTableForPart?: (ownerPartName: string, table: OoxmlNode) => string;
   /** Document properties for a document-property field inside a note story. */
   readonly documentProperties?: import('@docx-editor.dev/core/store').DocumentProperties;
   /**
@@ -271,6 +276,9 @@ export function layoutNoteStory(
   const flow = flowBlocksInBox(blocks, 0, width, 0, 0, {
     measurer: options.measurer,
     cache: options.cache,
+    // The projected pieces are cached, not merely the authored paragraph text. A shared
+    // exporter/browser cache can therefore only reuse them within the revision projection
+    // that produced them. Keep the unfiltered default key stable, matching furniture.
     producer:
       options.producer +
       (displayMode === DEFAULT_REVISION_DISPLAY_MODE ? '' : `|rev:${displayMode}`) +
@@ -283,7 +291,20 @@ export function layoutNoteStory(
     ...(projectLink ? { projectLink } : {}),
     ...(options.projectFieldLink ? { projectFieldLink: options.projectFieldLink } : {}),
     ...(options.documentProperties ? { documentProperties: options.documentProperties } : {}),
+    ...(options.ownerPartName && options.projectionTokenForParagraphForPart
+      ? {
+          projectionTokenForParagraph: (paragraph: OoxmlNode) =>
+            options.projectionTokenForParagraphForPart!(options.ownerPartName!, paragraph),
+        }
+      : {}),
+    ...(options.ownerPartName && options.projectionTokenForTableForPart
+      ? {
+          projectionTokenForTable: (table: OoxmlNode) =>
+            options.projectionTokenForTableForPart!(options.ownerPartName!, table),
+        }
+      : {}),
     ...(options.refFields ? { refFields: options.refFields } : {}),
+    displayMode,
     ...(options.defaultTabStopPt !== undefined
       ? { defaultTabStopPt: options.defaultTabStopPt }
       : {}),
@@ -295,7 +316,6 @@ export function layoutNoteStory(
             : {}),
         }
       : {}),
-    displayMode,
     ...(options.revisionAuthorFilter ? { revisionAuthorFilter: options.revisionAuthorFilter } : {}),
   });
 
@@ -396,8 +416,12 @@ export function defaultNoteSeparatorRuleStyle(
  * True when a separator note contains only OOXML separator markers (and empty noteRef
  * atoms Word often authors beside them) — no measurable text or paragraph borders.
  */
-export function isMarkerOnlySeparatorNote(note: OoxmlNode): boolean {
-  const blocks = noteStoryBlocks(note);
+export function isMarkerOnlySeparatorNote(
+  note: OoxmlNode,
+  displayMode?: RevisionDisplayMode,
+  revisionAuthorFilter?: RevisionAuthorFilter
+): boolean {
+  const blocks = noteStoryBlocks(note, displayMode, revisionAuthorFilter);
   if (blocks.length === 0) return true;
   for (const block of blocks) {
     if (block.kind !== 'paragraph') return false;
@@ -461,7 +485,7 @@ export function layoutNoteSeparator(
   const ruleStyle = defaultNoteSeparatorRuleStyle(noteKind, kind);
   const authored = findSeparatorNote(part, kind);
   if (authored) {
-    if (isMarkerOnlySeparatorNote(authored)) {
+    if (isMarkerOnlySeparatorNote(authored, options.displayMode, options.revisionAuthorFilter)) {
       return {
         kind,
         fragments: [],

@@ -27,6 +27,7 @@ import type { ResolvedRunStyle } from './run-style.ts';
 import type { FontSlot } from './script-itemization.ts';
 import type { ResolvedCellBorders } from './table-borders.ts';
 import type { EquationSpanRecord } from './equation-layout.ts';
+import type { SemanticReviewArtifactRecord } from './review-artifact-records.ts';
 
 export type {
   InlineDrawingRecord,
@@ -343,6 +344,12 @@ export interface ParagraphFragmentRecord {
   readonly fragmentIndex: number;
   readonly range: SourceRange;
   readonly props: readonly OoxmlProperty[];
+  /** Resolved paragraph style after the style/default cascade, or null when none applies. */
+  readonly styleId: string | null;
+  /** Resolved Word outline level (0 = Heading 1), or null for body text. */
+  readonly outlineLevel: number | null;
+  /** Resolved `w:jc` alignment used by layout. */
+  readonly alignment: 'left' | 'center' | 'right' | 'both';
   /**
    * Before/after spacing applied to THIS fragment, in points.
    *
@@ -483,6 +490,8 @@ export interface ListMarkerRecord {
   readonly numId: string;
   /** `w:numFmt` of the resolved level — `bullet` or a numbering format. */
   readonly numFmt: string;
+  /** Resolved counter at this marker's own level; absent for bullets. */
+  readonly ordinal?: number;
 }
 
 /**
@@ -530,6 +539,8 @@ export interface TableRowFragmentRecord {
   readonly revisionDate?: string;
   /** Authored row ordinal within the table; repeats share the original row's index. */
   readonly rowIndex: number;
+  /** True when the authored row resolves `w:tblHeader`, including its first occurrence. */
+  readonly isHeaderRow: boolean;
   /**
    * True for a `w:tblHeader` row RE-EMITTED at the top of a continuation page. Painted,
    * but excluded from interaction walks so each caret stop exists exactly once.
@@ -829,7 +840,14 @@ export interface PageRecord {
 export interface SemanticLayout {
   /** The store revision these records were laid out from. */
   readonly revision: number;
+  /** Revision projection already applied to every published record. */
+  readonly displayMode?: import('./revision-projection.ts').RevisionDisplayMode;
   readonly pages: readonly PageRecord[];
+  /**
+   * Normalized comments and tracked changes from the same package revision as these pages.
+   * Exporters consume this plain-data stream instead of re-reading OOXML or review state.
+   */
+  readonly reviewArtifacts?: readonly SemanticReviewArtifactRecord[];
   /**
    * Every content-control boundary in document order, including multi-page fragment lists.
    *

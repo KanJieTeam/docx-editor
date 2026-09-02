@@ -74,6 +74,20 @@ const PROPERTY_CHANGE_NAMES: ReadonlySet<string> = new Set(PROPERTY_CHANGE_WRAPP
 /** The two members of `EG_ParaRPrTrackChanges` that record a MOVE of the paragraph mark. */
 const MARK_MOVE_NAMES: ReadonlySet<string> = new Set(['moveFrom', 'moveTo']);
 
+/** Cheap canonical preflight for an element that may produce a review revision item. @internal */
+export function isPotentialRevisionElement(node: OoxmlNode): boolean {
+  return (
+    node.kind !== 'textValue' &&
+    node.namespaceUri === WML_NAMESPACE_URI &&
+    (isContentRevisionKind(node.kind) ||
+      MARK_MOVE_NAMES.has(node.localName) ||
+      REFUSED_REVISION_NAMES.has(node.localName) ||
+      PROPERTY_CHANGE_NAMES.has(node.localName) ||
+      node.localName === 'ins' ||
+      node.localName === 'del')
+  );
+}
+
 /**
  * Parents that make a `w:ins`/`w:del` a STRUCTURAL revision rather than a content one.
  *
@@ -190,7 +204,11 @@ const subtreeSitesCache = new WeakMap<OoxmlNode, readonly RevisionSite[]>();
  * One walk, so accept-all does not pay a traversal per revision — and paragraphs the last
  * commit did not touch are answered from {@link paragraphSitesCache} rather than re-walked.
  */
-function collectRevisionSitesIn(part: OoxmlPart, scopeRootId?: string): RevisionSite[] {
+function collectRevisionSitesIn(
+  part: OoxmlPart,
+  scopeRootId?: string,
+  retainAcrossReads = true
+): RevisionSite[] {
   const sites: RevisionSite[] = [];
   const visit = (
     node: OoxmlNode,
@@ -209,7 +227,7 @@ function collectRevisionSitesIn(part: OoxmlPart, scopeRootId?: string): Revision
     // live OUTSIDE any paragraph: a long document of tables otherwise re-walked every
     // `w:trPr`/`w:tcPr` per derivation even though only one paragraph had changed.
     if (node.kind === 'paragraph' || node.kind === 'table') {
-      const cached = subtreeSitesCache.get(node);
+      const cached = retainAcrossReads ? subtreeSitesCache.get(node) : undefined;
       if (cached) {
         // A plain loop, not a spread: spreading is bounded by the engine's argument-count
         // limit, and one adversarial table can legally hold more tracked markers than that
@@ -223,7 +241,7 @@ function collectRevisionSitesIn(part: OoxmlPart, scopeRootId?: string): Revision
       // paragraph, so a content site's depth inside its paragraph IS its depth.
       for (const child of node.children) visit(child, node, parent, 0);
       const own = sites.slice(before);
-      subtreeSitesCache.set(node, own);
+      if (retainAcrossReads) subtreeSitesCache.set(node, own);
       return;
     }
     const parentName = parent?.namespaceUri === WML_NAMESPACE_URI ? parent.localName : undefined;
@@ -235,6 +253,9 @@ function collectRevisionSitesIn(part: OoxmlPart, scopeRootId?: string): Revision
       // it; naming it here is what raises the card for a paragraph that was MOVED whole.
       const markMove =
         parentName === 'rPr' && grandparentName === 'pPr' && MARK_MOVE_NAMES.has(node.localName);
+      // The broad preflight intentionally recognizes mark-move names anywhere so artifact scans
+      // do not miss hostile markup. Resolution is narrower: only the schema-valid paragraph-mark
+      // position is an actionable move decision.
       const isNamedRevision =
         isContent ||
         markMove ||
@@ -306,6 +327,11 @@ function collectRevisionSitesIn(part: OoxmlPart, scopeRootId?: string): Revision
 /** Every revision-bearing element in the part. */
 export function collectRevisionSites(part: OoxmlPart): RevisionSite[] {
   return collectRevisionSitesIn(part);
+}
+
+/** Export-only cold derivation that does not populate interactive subtree memos. @internal */
+export function collectRevisionSitesTransient(part: OoxmlPart): RevisionSite[] {
+  return collectRevisionSitesIn(part, undefined, false);
 }
 
 /**

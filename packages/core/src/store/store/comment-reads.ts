@@ -22,12 +22,9 @@
 // IT LIVES IN THE STORE LANE, so every lane reads a reviewer's remarks through one derivation.
 // The paginated surface, the review rail and the automation host all ask "what comments does
 // this document hold", and the answer is a property of the canonical tree rather than of any one
-// of their views — layout re-exports what is here rather than owning it. The walk is the store's
-// own story walk (`storyRootsOf`), which is also why a comment anchored inside a footnote is
-// found: a notes part holds a story per NORMAL note, and the reader that stopped at one root
-// per part answered nothing for it. A comment anchored inside a `w:separator` or a
-// `w:continuationSeparator` is not found — those are not stories, Word writes no comment there,
-// and a malformed file that does keeps its markup on save rather than losing it.
+// of their views — layout re-exports what is here rather than owning it. The bounded whole-part
+// walk covers body, furniture, every normal note, separator and continuation-separator content,
+// and nested textboxes without making any one layout story model the store's authority.
 
 import type { OoxmlPackage } from '../package/ooxml-package.ts';
 import {
@@ -38,13 +35,12 @@ import {
   type OoxmlPart,
 } from '../package/ooxml-tree.ts';
 import { isContentRevisionKind } from '../package/ooxml-shared.ts';
-import { collectStoryParagraphs, storyRootsOf } from '../package/story-blocks.ts';
 import {
   chargePart,
   createCommentScanBudget,
   walkCharged,
 } from '../package/comment-lifecycle-scan.ts';
-import { paragraphOffsetIndex } from './tree-op-segments.ts';
+import { paragraphOffsetIndex, transientParagraphOffsetIndex } from './tree-op-segments.ts';
 import { createRecentRootCache } from './recent-root-cache.ts';
 
 /** The `w15` namespace: `commentsExtended.xml` — thread parent and resolved state. */
@@ -136,22 +132,47 @@ interface MarkerPoint {
  * yielded no anchor at all and reported the comment orphaned; and it gave a note reference or
  * an atomic field nothing where the model gives them one unit each.
  */
-function markersInParagraph(paragraph: OoxmlParagraphNode): readonly MarkerPoint[] {
+function markersInParagraphWithPolicy(
+  paragraph: OoxmlParagraphNode,
+  retainAcrossReads: boolean
+): readonly MarkerPoint[] {
   // Paragraph-local by construction, like the offset index it reads — an unchanged
   // paragraph's markers sit at the offsets they sat at last time. Every full anchor pass
   // otherwise re-walked all paragraphs of the story, comments or none.
-  const cached = markerPointsCache.get(paragraph);
+  const cached = retainAcrossReads ? markerPointsCache.get(paragraph) : undefined;
   if (cached) return cached;
-  const points = computeMarkersInParagraph(paragraph);
-  markerPointsCache.set(paragraph, points);
+  const points = computeMarkersInParagraph(paragraph, retainAcrossReads);
+  if (retainAcrossReads) markerPointsCache.set(paragraph, points);
   return points;
 }
 
 /** Marker points per immutable paragraph node. */
 const markerPointsCache = new WeakMap<OoxmlParagraphNode, readonly MarkerPoint[]>();
 
-function computeMarkersInParagraph(paragraph: OoxmlParagraphNode): MarkerPoint[] {
-  const offsets = paragraphOffsetIndex(paragraph);
+function computeMarkersInParagraph(
+  paragraph: OoxmlParagraphNode,
+  retainAcrossReads: boolean
+): MarkerPoint[] {
+  // Nearly every paragraph has no marker. Check the exact bounded containers the real walk
+  // descends before building a full node-offset index, which is the expensive retained value.
+  const hasMarker = (children: readonly OoxmlNode[], depth: number): boolean => {
+    for (const child of children) {
+      if (child.kind === 'textValue') continue;
+      if (child.kind === 'commentRangeStart' || child.kind === 'commentRangeEnd') return true;
+      if (
+        (child.kind === 'hyperlink' || isContentRevisionKind(child.kind)) &&
+        depth < 32 &&
+        hasMarker(child.children, depth + 1)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+  if (!hasMarker(paragraph.children, 0)) return [];
+  const offsets = retainAcrossReads
+    ? paragraphOffsetIndex(paragraph)
+    : transientParagraphOffsetIndex(paragraph);
   const points: MarkerPoint[] = [];
   const walk = (children: readonly OoxmlNode[], depth: number): void => {
     for (const child of children) {
@@ -194,12 +215,24 @@ function computeMarkersInParagraph(paragraph: OoxmlParagraphNode): MarkerPoint[]
  * to text they never saw.
  */
 export function commentAnchorsOfStory(part: OoxmlPart): CommentAnchor[] {
+  return commentAnchorsOfStoryWithPolicy(part, true);
+}
+
+/** Export-only cold derivation that does not populate interactive comment memos. @internal */
+export function commentAnchorsOfStoryTransient(part: OoxmlPart): CommentAnchor[] {
+  return commentAnchorsOfStoryWithPolicy(part, false);
+}
+
+function commentAnchorsOfStoryWithPolicy(
+  part: OoxmlPart,
+  retainAcrossReads: boolean
+): CommentAnchor[] {
   const open = new Map<string, CommentPosition>();
   const anchors: CommentAnchor[] = [];
   let lastPosition: CommentPosition | null = null;
 
-  for (const paragraph of storyParagraphsOfPart(part)) {
-    for (const point of markersInParagraph(paragraph)) {
+  for (const paragraph of storyParagraphsOfPartWithPolicy(part, retainAcrossReads)) {
+    for (const point of markersInParagraphWithPolicy(paragraph, retainAcrossReads)) {
       const position: CommentPosition = { paragraphId: paragraph.id, offset: point.offset };
       lastPosition = position;
       if (point.kind === 'start') {
@@ -242,26 +275,34 @@ export function commentAnchorsOfStory(part: OoxmlPart): CommentAnchor[] {
 }
 
 /**
- * Every paragraph of every story in one part, in reading order.
+ * Every authored paragraph in one story part, in reading order.
  *
- * `storyRootsOf` rather than "the story root", because a part is not a story: a notes part holds
- * one story per note, and a reader that took the first root found answered nothing for it — so a
- * comment on a footnote was reported orphaned in a document where Word shows it anchored. The
- * paragraph walk is the store's own, table cells and block content controls included, so the
- * offsets these anchors carry are the offsets the ops and the caret use.
+ * A notes part also holds separator and continuation-separator stories. They are not editable
+ * caret roots, but layout renders them and Word can retain comment markers inside them. Export
+ * provenance therefore scans the whole supplied story part, including normal notes, separators,
+ * table cells, content controls, and nested textbox stories.
  */
-function storyParagraphsOfPart(part: OoxmlPart): readonly OoxmlParagraphNode[] {
+function storyParagraphsOfPartWithPolicy(
+  part: OoxmlPart,
+  retainAcrossReads: boolean
+): readonly OoxmlParagraphNode[] {
   // Memoized on the immutable root: the enumeration is a pure function of the tree, and the
   // anchor pass runs once per story part per derivation.
-  const cached = storyParagraphsCache.get(part.root);
+  const cached = retainAcrossReads ? storyParagraphsCache.get(part.root) : undefined;
   if (cached) return cached;
   const found: OoxmlNode[] = [];
-  for (const story of storyRootsOf(part)) {
-    if (story.root.kind === 'textValue') continue;
-    collectStoryParagraphs(story.root.children, found, 0);
-  }
+  const collect = (node: OoxmlNode, depth: number): void => {
+    if (node.kind === 'textValue' || depth > 64) return;
+    if (node.kind === 'paragraph') found.push(node);
+    // Comment ranges can live in a textbox story nested inside a host paragraph. Unlike the
+    // editable root-story walk, anchor derivation must descend into that nested story while
+    // retaining the host paragraph itself. Marker lookup remains paragraph-local, so the host
+    // never consumes the nested paragraph's markers a second time.
+    for (const child of node.children) collect(child, depth + 1);
+  };
+  collect(part.root, 0);
   const paragraphs = found.filter((node): node is OoxmlParagraphNode => node.kind === 'paragraph');
-  storyParagraphsCache.set(part.root, paragraphs);
+  if (retainAcrossReads) storyParagraphsCache.set(part.root, paragraphs);
   return paragraphs;
 }
 

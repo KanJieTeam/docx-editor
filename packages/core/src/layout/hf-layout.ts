@@ -16,7 +16,7 @@
 //
 // Scope stays furniture-only; body field projection remains deferred.
 
-import type { OoxmlPart } from '@docx-editor.dev/core/store';
+import type { OoxmlNode, OoxmlPart } from '@docx-editor.dev/core/store';
 import { stableHash } from '../store/comparators/canonical.ts';
 import { canonicalOoxmlFingerprint } from '../store/package/ooxml-tree.ts';
 import {
@@ -107,6 +107,8 @@ export interface HeaderFooterStoryLayout {
    * PAGE/NUMPAGES/SECTIONPAGES projection shares this key; page context is cached separately.
    */
   readonly contentKey: string;
+  /** Snapshot identity for projected links and live document-property fields in this story. */
+  readonly projectionEpoch?: string;
   /** Story-relative fragments; origin at the story box's top-left. */
   readonly fragments: readonly BlockFragmentRecord[];
   /** The height the blocks actually flow to — what sizes the box on every page. */
@@ -187,6 +189,15 @@ export interface HeaderFooterStoryInputs {
    * merged into the paragraph's own.
    */
   readonly numberingIndex?: NumberingIndex;
+  /** Sanitized hyperlink seams scoped to this header/footer part. */
+  readonly projectLink?: import('./field-pieces.ts').HyperlinkProjector;
+  readonly projectFieldLink?: import('./field-pieces.ts').FieldLinkProjector;
+  /** Per-paragraph identity for links and live document-property projection. */
+  readonly projectionTokenForParagraph?: (paragraph: OoxmlNode) => string;
+  /** Memoized aggregate projection identity for table subtrees. */
+  readonly projectionTokenForTable?: (table: OoxmlNode) => string;
+  /** Aggregate identity of link and live-field projections for furniture reuse keys. */
+  readonly projectionEpoch?: string;
   /** Reviewers whose changes project as accepted in this story. */
   readonly revisionAuthorFilter?: import('./revision-projection.ts').RevisionAuthorFilter;
 }
@@ -360,6 +371,14 @@ export function layoutHeaderFooterStory(
           displayMode,
           ...(revisionAuthorFilter ? { revisionAuthorFilter } : {}),
           ...(documentProperties ? { documentProperties } : {}),
+          ...(inputs?.projectLink ? { projectLink: inputs.projectLink } : {}),
+          ...(inputs?.projectFieldLink ? { projectFieldLink: inputs.projectFieldLink } : {}),
+          ...(inputs?.projectionTokenForParagraph
+            ? { projectionTokenForParagraph: inputs.projectionTokenForParagraph }
+            : {}),
+          ...(inputs?.projectionTokenForTable
+            ? { projectionTokenForTable: inputs.projectionTokenForTable }
+            : {}),
           inlineDrawingLayout,
           anchorFrameBase,
           pageContentClip: () => {
@@ -391,8 +410,16 @@ export function layoutHeaderFooterStory(
               displayMode,
               ...(revisionAuthorFilter ? { revisionAuthorFilter } : {}),
               ...(documentProperties ? { documentProperties } : {}),
+              ...(inputs?.projectLink ? { projectLink: inputs.projectLink } : {}),
+              ...(inputs?.projectFieldLink ? { projectFieldLink: inputs.projectFieldLink } : {}),
               inlineDrawingLayout,
               ...(drawingTokenForParagraph ? { drawingTokenForParagraph } : {}),
+              ...(inputs?.projectionTokenForParagraph
+                ? { projectionTokenForParagraph: inputs.projectionTokenForParagraph }
+                : {}),
+              ...(inputs?.projectionTokenForTable
+                ? { projectionTokenForTable: inputs.projectionTokenForTable }
+                : {}),
               ...(inputs?.numberingIndex ? { numberingIndex: inputs.numberingIndex } : {}),
             }),
           collectAnchoredDrawings: (drawings) => {
@@ -411,6 +438,12 @@ export function layoutHeaderFooterStory(
             : drawingLayoutToken
               ? { drawingLayoutToken }
               : {}),
+          ...(inputs?.projectionTokenForParagraph
+            ? { projectionTokenForParagraph: inputs.projectionTokenForParagraph }
+            : {}),
+          ...(inputs?.projectionTokenForTable
+            ? { projectionTokenForTable: inputs.projectionTokenForTable }
+            : {}),
         });
         const nextZones = collectExclusionZonesFromDrawings(
           pendingAnchoredDrawings,
@@ -452,6 +485,14 @@ export function layoutHeaderFooterStory(
         displayMode,
         ...(revisionAuthorFilter ? { revisionAuthorFilter } : {}),
         ...(documentProperties ? { documentProperties } : {}),
+        ...(inputs?.projectLink ? { projectLink: inputs.projectLink } : {}),
+        ...(inputs?.projectFieldLink ? { projectFieldLink: inputs.projectFieldLink } : {}),
+        ...(inputs?.projectionTokenForParagraph
+          ? { projectionTokenForParagraph: inputs.projectionTokenForParagraph }
+          : {}),
+        ...(inputs?.projectionTokenForTable
+          ? { projectionTokenForTable: inputs.projectionTokenForTable }
+          : {}),
       });
     }
 
@@ -459,6 +500,7 @@ export function layoutHeaderFooterStory(
       partName: part.name,
       part,
       contentKey,
+      ...(inputs?.projectionEpoch ? { projectionEpoch: inputs.projectionEpoch } : {}),
       fragments: flow.blocks,
       flowHeight: flow.bottom,
       pageFieldNeeds: needs,
@@ -657,6 +699,7 @@ export function framedStoryEntry(label: string, story: HeaderFooterStoryLayout):
     label,
     String(story.flowHeight),
     story.contentKey,
+    story.projectionEpoch ?? '',
     storyDrawingResourceToken(story),
     storyListMarkerToken(story),
   ]);

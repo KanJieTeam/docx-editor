@@ -7,6 +7,7 @@
 // per pass. The inputs are identity-stable when unchanged, so a hit is a handful of
 // pointer compares.
 
+import { sha256FontBytes } from '../store/package/sha256.ts';
 import { noteMarksCacheToken, type NoteMarkContext } from './note-projection.ts';
 import {
   DEFAULT_REVISION_DISPLAY_MODE,
@@ -16,22 +17,47 @@ import {
 import type { StyleCascadeTable } from './style-cascade.ts';
 
 /**
- * One retained slot. Strings only — the slot pins a few kilobytes of the last document's
- * token, never its tree — so a module slot is a bounded trade; two live editors merely
- * alternate one concat per pass instead of sharing the hit.
+ * A small retained LRU. Strings only — it pins a bounded set of control tokens, never their
+ * trees, and keeps concurrently exported documents warm without an unbounded module cache.
  */
-let controlProducerSlot: {
+interface ControlProducerSlot {
   readonly base: string | undefined;
   readonly token: string;
   readonly producer: string;
-} | null = null;
+}
+
+const MAX_CONTROL_PRODUCER_SLOTS = 8;
+const controlProducerSlots: ControlProducerSlot[] = [];
+const controlProducerEncoder = new TextEncoder();
+
+function controlProducerDigest(base: string | undefined, token: string): string {
+  // Hash the two fields independently, which is an unambiguous framing without constructing a
+  // second multi-megabyte concatenation. SHA-256 keeps paragraph keys compact while preserving
+  // deterministic identity after the exact-match LRU no longer retains the original token.
+  const baseDigest = sha256FontBytes(
+    controlProducerEncoder.encode(base === undefined ? 'undefined' : `string:${base}`)
+  );
+  const tokenDigest = sha256FontBytes(controlProducerEncoder.encode(token));
+  return `control-producer:v1:${baseDigest}:${tokenDigest}`;
+}
 
 /** The document producer with the control token folded in, identity-stable across passes. */
 export function producerWithControlContext(base: string | undefined, token: string): string {
-  const slot = controlProducerSlot;
-  if (slot && slot.base === base && slot.token === token) return slot.producer;
-  const producer = `${base ?? 'unversioned-measurer'}|cc:${token}`;
-  controlProducerSlot = { base, token, producer };
+  const slotIndex = controlProducerSlots.findIndex(
+    (candidate) => candidate.base === base && candidate.token === token
+  );
+  if (slotIndex >= 0) {
+    const [slot] = controlProducerSlots.splice(slotIndex, 1);
+    controlProducerSlots.push(slot);
+    return slot.producer;
+  }
+  // Control-heavy documents can have a multi-megabyte token. The producer reaches every
+  // paragraph cache key (often more than once at different widths), so retain only its compact
+  // collision-resistant digest there. The LRU avoids rehashing hot contexts; eviction affects
+  // CPU only, never identity or incremental reuse.
+  const producer = controlProducerDigest(base, token);
+  controlProducerSlots.push({ base, token, producer });
+  if (controlProducerSlots.length > MAX_CONTROL_PRODUCER_SLOTS) controlProducerSlots.shift();
   return producer;
 }
 

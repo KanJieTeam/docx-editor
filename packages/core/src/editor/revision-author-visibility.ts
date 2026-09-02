@@ -6,6 +6,7 @@ import {
 } from '../store/store/review-items.ts';
 import { linkRevisionReplies } from '../store/store/review-reads.ts';
 import {
+  EMPTY_REVISION_AUTHOR_SET,
   revisionAuthorFilter,
   type RevisionAttribution,
   type RevisionAuthorFilter,
@@ -143,6 +144,7 @@ export function createRevisionAuthorVisibility(
   ): void => {
     const excludedNodeIds = excludedRevisionNodeIds(predicateExcluded);
     const hiddenSnapshot = hidden;
+    const publicHiddenSnapshot = authorOnlyFilter?.hiddenAuthors ?? EMPTY_REVISION_AUTHOR_SET;
     const modeSnapshot = predicateMode;
     let nextFilter: RevisionAuthorFilter | undefined;
     if (
@@ -155,7 +157,7 @@ export function createRevisionAuthorVisibility(
       nextFilter = undefined;
     } else {
       nextFilter = Object.freeze({
-        hiddenAuthors: hiddenSnapshot,
+        hiddenAuthors: publicHiddenSnapshot,
         includes: (revision: RevisionAttribution) =>
           !hiddenSnapshot.has(revision.author) && !excludedNodeIds.has(revision.nodeId),
         includesNode: (nodeId: string, author: string) =>
@@ -248,7 +250,7 @@ export function createRevisionAuthorVisibility(
 
   return {
     get hiddenAuthors() {
-      return hidden;
+      return authorOnlyFilter?.hiddenAuthors ?? EMPTY_REVISION_AUTHOR_SET;
     },
     get hiddenAuthorList() {
       return hiddenList;

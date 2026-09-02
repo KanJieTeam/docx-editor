@@ -13,14 +13,12 @@ import {
   deepParagraphOrderOfPart,
   detectBodyTocs,
   findNode,
-  hyperlinkTargetOf,
   isContentControl,
   ORIGIN_IDS,
   parentNodeOf,
   parseTocInstruction,
   planTocEntries,
   readViewSettings,
-  relationshipTargetIn,
   resolveTocRowHeadings,
   validateTreeOp,
   type DetectedToc,
@@ -54,7 +52,7 @@ import {
   contentControlHoldingParagraph,
   contentControlRecordsInPart,
   contentControlsInLayout,
-  layoutSemanticDocument,
+  createDocumentLinkProjectors,
   resolveNumberingLevel,
   positionPastDeletion,
   withNumberingStyleLinks,
@@ -144,7 +142,6 @@ import { createSurfaceRangeEditOps } from './surface-range-edit.ts';
 import { createNextStyleWrites } from './surface-next-style.ts';
 import {
   createFurnitureSource,
-  createNotesLayoutInput,
   createSurfaceStyleDeps,
   equalPageSets,
   equalSurfaceExtents,
@@ -160,6 +157,10 @@ import {
 } from './browser-image-decode-port.ts';
 import { createBrowserPaintImageUrlPort } from './browser-paint-image-url-port.ts';
 import { createInlineDrawingLayoutBundle } from '../layout/inline-drawing-source.ts';
+import {
+  layoutDocumentView,
+  type LayoutDocumentViewOptions,
+} from '../layout/document-layout-coordinator.ts';
 import { createSurfaceCaret } from './surface-caret.ts';
 import { defaultTableLabel, type TableInteractionLabelKey } from './table-chrome.ts';
 import { createSurfaceTableInteraction } from './surface-table-interaction.ts';
@@ -848,30 +849,7 @@ export function mountPaginatedSurface(
     );
   };
 
-  const furnitureSourceFor = (authorFilter?: RevisionAuthorFilter) =>
-    createFurnitureSource({
-      session,
-      measurer,
-      producer,
-      cache: layoutCache,
-      styleCascade,
-      numberingIndex,
-      defaultTabStopPt,
-      displayMode: revisionDisplayMode(),
-      ...(authorFilter ? { revisionAuthorFilter: authorFilter } : {}),
-      inlineDrawingLayoutForPart: (partName) => drawingBundle.contextForPart(partName),
-      drawingLayoutTokenForPart: (partName) => drawingBundle.cacheTokenForPart(partName),
-      drawingTokenForParagraphForPart: (partName, paragraph) =>
-        drawingBundle.drawingTokenForParagraph(paragraph, partName),
-    });
-
-  let furnitureSource = furnitureSourceFor(revisionFilter());
-
-  interface LayoutDocumentContext {
-    readonly authorFilter?: RevisionAuthorFilter;
-    readonly layoutSession: ReturnType<typeof createLayoutSession>;
-    readonly furnitureSource: ReturnType<typeof furnitureSourceFor>;
-  }
+  let furnitureSource: ReturnType<typeof createFurnitureSource>;
 
   /**
    * The engine's ONE hyperlink trust boundary, handed to layout.
@@ -881,26 +859,7 @@ export function mountPaginatedSurface(
    * produces the sanitized projection; everything downstream — paint, click routing, the
    * popover, the clipboard — consumes only that.
    */
-  const projectLinkResolvedBy =
-    (resolveRel: Parameters<typeof hyperlinkTargetOf>[1]) =>
-    (link: Parameters<typeof hyperlinkTargetOf>[0]) => {
-      if (link.kind === 'textValue') return null;
-      const target = hyperlinkTargetOf(link, resolveRel);
-      return {
-        id: link.id,
-        kind: target.kind,
-        href: target.href,
-        ...(target.anchor !== undefined ? { anchor: target.anchor } : {}),
-        ...(target.tooltip !== undefined ? { tooltip: target.tooltip } : {}),
-      };
-    };
-  const projectLink = projectLinkResolvedBy((id) => session.relationshipTarget(id));
-  // The SAME boundary scoped to one notes part: a `w:hyperlink` in `footnotes.xml` or
-  // `endnotes.xml` declares its `r:id` in that part's own `.rels`, so resolving through the
-  // body's relationships either found nothing or — when both parts assign one id — the
-  // body's target.
-  const projectLinkForPart = (partName: string) =>
-    projectLinkResolvedBy((id) => relationshipTargetIn(session.currentPackage(), partName, id));
+  const linkProjectors = createDocumentLinkProjectors(session);
 
   /**
    * The SAME boundary for HYPERLINK fields: the raw instruction target crosses
@@ -908,6 +867,37 @@ export function mountPaginatedSurface(
    * on the painted anchor resolves through `linkById` like a typed link's does.
    */
   const fieldLinks = createFieldLinkRegistry();
+  type SurfaceFurnitureOptions = Parameters<typeof createFurnitureSource>[0];
+  const createCurrentFurnitureSource = (
+    authorFilter?: RevisionAuthorFilter
+  ): ReturnType<typeof createFurnitureSource> =>
+    createFurnitureSource({
+      session,
+      measurer,
+      producer,
+      cache: layoutCache,
+      styleCascade,
+      numberingIndex,
+      defaultTabStopPt,
+      // Furniture answers the document's display mode, like the body does — and it is named
+      // even when it is the default, because a lane that says nothing is treated as saying
+      // "not All Markup", which is what keeps markup out of the resolved views.
+      displayMode: revisionDisplayMode(),
+      revisionAuthorFilter: authorFilter,
+      inlineDrawingLayoutForPart: (partName) => drawingBundle.contextForPart(partName),
+      drawingLayoutTokenForPart: (partName) => drawingBundle.cacheTokenForPart(partName),
+      drawingTokenForParagraphForPart: (partName, paragraph) =>
+        drawingBundle.drawingTokenForParagraph(paragraph, partName),
+      linkProjectors,
+      projectFieldLink: (spec) => fieldLinks.project(spec),
+    } satisfies SurfaceFurnitureOptions & Record<keyof SurfaceFurnitureOptions, unknown>);
+  furnitureSource = createCurrentFurnitureSource(revisionFilter());
+
+  interface LayoutDocumentContext {
+    readonly authorFilter?: RevisionAuthorFilter;
+    readonly layoutSession: ReturnType<typeof createLayoutSession>;
+    readonly furnitureSource: ReturnType<typeof createCurrentFurnitureSource>;
+  }
 
   /**
    * The session as every lane sees it: the mode rules applied to `applyTreeOps`.
@@ -1224,7 +1214,6 @@ export function mountPaginatedSurface(
   pagesLayer.addEventListener('pointermove', onTocPointerMove);
   pagesLayer.addEventListener('pointerleave', onTocPointerLeave);
   let desiredX: number | null = null;
-
   function layoutDocument(
     revision: number,
     scope?: LayoutScope,
@@ -1235,54 +1224,41 @@ export function mountPaginatedSurface(
     const activeFurnitureSource = context?.furnitureSource ?? furnitureSource;
     if (scope) attachListResolveChangeEvidence(activeLayoutSession, scope);
     drawingBundle.sync(session);
-    const notes = createNotesLayoutInput({
-      session,
-      measurer,
-      producer,
-      cache: layoutCache,
-      styleCascade,
-      numberingIndex,
-      defaultTabStopPt,
-      displayMode: revisionDisplayMode(),
-      revisionAuthorFilter: activeAuthorFilter,
-      inlineDrawingLayoutForPart: (partName) => drawingBundle.contextForPart(partName),
-      drawingTokenForParagraphForPart: (partName, paragraph) =>
-        drawingBundle.drawingTokenForParagraph(paragraph, partName),
-      drawingLayoutEpochForPart: (partName) => drawingBundle.cacheTokenForPart(partName),
-      projectLinkForPart,
-    });
-    return layoutSemanticDocument(session.part(), revision, {
+    return layoutDocumentView({
+      view: session,
+      revision,
       measurer,
       cache: layoutCache,
       session: activeLayoutSession,
       producer,
-      styleCascade: styleCascade(),
+      styleCascade,
       defaultTabStopPt,
-      numberingIndex: numberingIndex(),
-      sectionFurniture: activeFurnitureSource.sectionFurniture(),
-      furniture: activeFurnitureSource.furniture(),
-      projectLink,
+      numberingIndex,
+      furniture: activeFurnitureSource,
+      linkProjectors,
       projectFieldLink: (spec) => fieldLinks.project(spec),
-      documentProperties: session.documentProperties(),
       inlineDrawingLayout: drawingBundle.bodyContext,
+      inlineDrawingLayoutForPart: (partName) => drawingBundle.contextForPart(partName),
       drawingTokenForParagraph: (paragraph) =>
         drawingBundle.drawingTokenForParagraph(paragraph, session.part().name),
+      drawingTokenForParagraphForPart: (partName, paragraph) =>
+        drawingBundle.drawingTokenForParagraph(paragraph, partName),
       // The part-level epoch that lets the section prepass memo trust the tokens above
       // without re-asking every paragraph on every pass.
       drawingLayoutEpoch: drawingBundle.cacheTokenForPart(session.part().name),
-      ...(notes ? { notes } : {}),
+      drawingLayoutEpochForPart: (partName) => drawingBundle.cacheTokenForPart(partName),
       // The layout context key already folds the mode in (`|rev:<mode>`), so a surface
       // constructed `proposed` never shares cached pages with an `all-markup` one.
       displayMode: revisionDisplayMode(),
-      ...(activeAuthorFilter ? { revisionAuthorFilter: activeAuthorFilter } : {}),
-    });
+      revisionAuthorFilter: activeAuthorFilter,
+    } satisfies LayoutDocumentViewOptions & Record<keyof LayoutDocumentViewOptions, unknown>);
   }
 
   /** Build save-time PAGEREF numbers without mutating the active filtered layout. */
   function canonicalUnfilteredLayoutForSave(): SemanticLayout {
     return layoutDocument(session.packageRevision(), undefined, {
       layoutSession: createLayoutSession(),
-      furnitureSource: furnitureSourceFor(),
+      furnitureSource: createCurrentFurnitureSource(undefined),
     });
   }
 
@@ -4584,7 +4560,7 @@ export function mountPaginatedSurface(
     if (!moved) return;
     notePropertiesCache = null;
     flushPendingInputAndLayout();
-    furnitureSource = furnitureSourceFor(revisionFilter());
+    furnitureSource = createCurrentFurnitureSource(revisionFilter());
     scheduler.invalidateAll(session.packageRevision(), 'tracked-change-filter');
     scheduler.flush();
     options.onChange?.(currentState());
@@ -4654,7 +4630,7 @@ export function mountPaginatedSurface(
         // EVERY input the mount-time source is given, not a subset. Rebuilt without the three
         // drawing hooks, a header's inline pictures lost their layout context for the rest of
         // the session the first time the user zoomed.
-        furnitureSource = furnitureSourceFor(revisionFilter());
+        furnitureSource = createCurrentFurnitureSource(revisionFilter());
         // Dropped rather than trusted: both describe a paint made at the OLD scale, and a
         // flush that publishes nothing (a revision already superseded) would otherwise leave
         // the overlay painting against them.

@@ -23,6 +23,7 @@ import {
   resolveImageResourceLimits,
   type ImageResourceLimits,
 } from '../runtime/limits.ts';
+import { createHostAbortController } from '../runtime/host-abort-controller.ts';
 
 /**
  * Raster media the decode port measures and any authoring path may write.
@@ -107,7 +108,9 @@ export interface ImageDecodePort {
   decode(
     bytes: Uint8Array,
     mime: SupportedImageMime,
-    limits: ImageResourceLimits
+    limits: ImageResourceLimits,
+    /** Aborted when the owning lookup/session is disposed. */
+    signal?: AbortSignal
   ): Promise<Readonly<{ pixelWidth: number; pixelHeight: number; dpiX: number; dpiY: number }>>;
   /**
    * Optional conversion of media an `<img>` cannot render (EMF/WMF metafiles, TIFF) into a
@@ -119,7 +122,9 @@ export interface ImageDecodePort {
   convertPreserved?(
     bytes: Uint8Array,
     mime: PreservedImageMime,
-    limits: ImageResourceLimits
+    limits: ImageResourceLimits,
+    /** Aborted when the owning lookup/session is disposed. */
+    signal?: AbortSignal
   ): Promise<Readonly<{ bytes: Uint8Array; mime: SupportedImageMime }> | null>;
 }
 
@@ -942,6 +947,25 @@ export function imageResourceLookupFor(
   return registrySlotFor(pkg, options.decodePort, limits).lookup;
 }
 
+/**
+ * Build an independently disposable lookup for a single layout owner.
+ *
+ * Unlike {@link imageResourceLookupFor}, this does not participate in the package registry:
+ * layout bundles have independent lifetimes, so disposing one must never invalidate another
+ * bundle that happens to use the same package snapshot and decoder.
+ * @internal
+ */
+export function createOwnedImageResourceLookup(
+  pkg: OoxmlPackage,
+  options: CreateImageResourceCacheOptions
+): ImageResourceLookup {
+  return createImageResourceCacheInternal(
+    pkg,
+    options.decodePort,
+    resolveImageResourceLimits(options.limits)
+  );
+}
+
 /** @deprecated Prefer {@link imageResourceLookupFor} — registry binds cache to package identity. */
 /** Build the per-document image cache. Validated bytes only; refusals are remembered too. */
 export function createImageResourceCache(
@@ -959,6 +983,7 @@ function createImageResourceCacheInternal(
   const pkg = initialPkg;
   let generation = 0;
   let disposed = false;
+  const lifetimeAbort = createHostAbortController();
   const validatedBytesRegistry = createValidatedImageBytesRegistry();
   const byRelationship = new Map<string, CachedLookupEntry>();
   const inFlightByContent = new Map<string, Promise<ImageResourceState>>();
@@ -1057,7 +1082,7 @@ function createImageResourceCacheInternal(
           try {
             let converted: Readonly<{ bytes: Uint8Array; mime: SupportedImageMime }> | null;
             try {
-              converted = await convert(convertCopy, preservedMime, limits);
+              converted = await convert(convertCopy, preservedMime, limits, lifetimeAbort.signal);
             } catch {
               resolve(unrenderable(resolvedPartName, preservedMime, 'decode-failed'));
               return;
@@ -1103,7 +1128,8 @@ function createImageResourceCacheInternal(
               decoded = await decodePort.decode(
                 snapshotBytes(converted.bytes),
                 convertedSniffed,
-                limits
+                limits,
+                lifetimeAbort.signal
               );
             } catch {
               resolve(unrenderable(resolvedPartName, preservedMime, 'decode-failed'));
@@ -1211,7 +1237,7 @@ function createImageResourceCacheInternal(
             dpiY: number;
           }>;
           try {
-            decoded = await decodePort.decode(decodeCopy, sniffed, limits);
+            decoded = await decodePort.decode(decodeCopy, sniffed, limits, lifetimeAbort.signal);
           } catch {
             resolve(unrenderable(resolvedPartName, sniffed, 'decode-failed'));
             return;
@@ -1408,7 +1434,9 @@ function createImageResourceCacheInternal(
     resolveForProjection,
     liveReferenceCount: (partName: string) => liveDrawingReferenceCount(pkg, partName),
     dispose: () => {
+      if (disposed) return;
       disposed = true;
+      lifetimeAbort.abort();
       invalidateAll();
       validatedBytesRegistry.dispose();
       unregisterLookupIfCurrent(pkg, decodePort, limits, lookup);
