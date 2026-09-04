@@ -2880,6 +2880,7 @@ export interface TextMatch {
     readonly runIndex: number;
     // (undocumented)
     readonly runOffset: number;
+    readonly scope?: ViewScope;
     readonly start: number;
     readonly text: string;
 }
