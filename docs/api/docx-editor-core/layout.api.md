@@ -2796,6 +2796,10 @@ export interface ResolvedRunStyle {
     readonly smallCaps: boolean;
     // (undocumented)
     readonly strike: boolean;
+    readonly textOutline?: {
+        readonly color: string;
+        readonly widthPt: number;
+    };
     // (undocumented)
     readonly underline: ResolvedUnderline | null;
     // (undocumented)
