@@ -33,6 +33,7 @@ import {
   type RevisionDisplayMode,
 } from './revision-projection.ts';
 import type { ParagraphLayoutCache } from './layout-cache.ts';
+import { cjkChopCutAllowedAt, lineOpenDecisionAt, wordBoundaries } from './cjk-line-break.ts';
 import {
   EMPTY_TAB_STOPS,
   nextTabDestination,
@@ -77,6 +78,7 @@ import {
   type ExclusionZone,
 } from './drawing-exclusion.ts';
 import { createEquationLayouter } from './equation-layout.ts';
+import { anchorLineStartsByModelOffset } from './anchor-line-probe.ts';
 import { isCollapsibleLineEndWhitespace } from './line-end-whitespace.ts';
 import { chopOversizedWord } from './oversized-word-break.ts';
 
@@ -251,45 +253,6 @@ export function propertiesOf(container: OoxmlNode | undefined): OoxmlProperty[] 
 }
 
 /**
- * Dashes a line may break AFTER, the way Word wraps "ALPHA-PRIME" as "ALPHA-" / "PRIME":
- * hyphen-minus, hyphen, en dash, em dash. U+2011 NON-BREAKING HYPHEN is deliberately
- * absent — its whole meaning is "no wrap here".
- */
-const BREAK_AFTER_DASH = new Set(['-', '‐', '–', '—']);
-
-/**
- * Break points inside a piece: after each run of spaces (words stay whole), after a dash
- * that sits between non-space text, and with each tab as its own atom so tab-stop
- * geometry can size `\t` independently of neighbouring text.
- *
- * A dash run breaks only after its LAST dash, mirroring how a run of spaces is one
- * boundary; a dash beside a space adds nothing the space boundary does not already give.
- */
-function wordBoundaries(text: string): number[] {
-  const boundaries: number[] = [];
-  for (let index = 0; index < text.length; index += 1) {
-    const ch = text[index]!;
-    if (ch === '\t') {
-      if (index > 0 && boundaries[boundaries.length - 1] !== index) boundaries.push(index);
-      boundaries.push(index + 1);
-    } else if (ch === ' ') {
-      boundaries.push(index + 1);
-    } else if (
-      BREAK_AFTER_DASH.has(ch) &&
-      index > 0 &&
-      text[index - 1] !== ' ' &&
-      index + 1 < text.length &&
-      text[index + 1] !== ' ' &&
-      !BREAK_AFTER_DASH.has(text[index + 1]!)
-    ) {
-      boundaries.push(index + 1);
-    }
-  }
-  if (boundaries[boundaries.length - 1] !== text.length) boundaries.push(text.length);
-  return boundaries;
-}
-
-/**
  * Measure text following a tab until the next tab or hard break, across mixed-style pieces.
  * Also reports the advance to the first decimal point for decimal-aligned stops.
  */
@@ -405,12 +368,19 @@ function positionalTabDestination(
 // The pending-line record and its budget/freeze helpers live in pending-line.ts;
 // re-exported so every existing import through this module stays stable.
 import {
+  coalesceIdeographicSpans,
   frozenLine,
   pendingLineFlowExtent,
   pendingLineFlowExtentAtPlacement,
   type PendingLine,
 } from './pending-line.ts';
-export { frozenLine, pendingLineFlowExtent, pendingLineFlowExtentAtPlacement, type PendingLine };
+export {
+  coalesceIdeographicSpans,
+  frozenLine,
+  pendingLineFlowExtent,
+  pendingLineFlowExtentAtPlacement,
+  type PendingLine,
+};
 
 /**
  * Soft ceiling on an indent, in twips (31_680 ≈ 22"), matching the paragraph-spacing and
@@ -760,58 +730,14 @@ export function breakParagraph(
     ...wrapAnchorStarts,
   ];
 
-  const anchorLineStartByOffset = (() => {
-    const out = new Map<number, number>();
-    if (sameParagraphAnchorStarts.length === 0) return out;
-    let probeLineStart = 0;
-    let probeWidth = 0;
-    let probeLineIndex = 0;
-    const probeLineOffset = (): number => (probeLineIndex === 0 ? firstLineOffset : 0);
-    const probeLineAvail = (): number => Math.max(1, available - probeLineOffset());
-    const closeProbeLine = (nextStart: number): void => {
-      probeLineStart = nextStart;
-      probeWidth = 0;
-      probeLineIndex += 1;
-    };
-    for (const piece of pieces) {
-      const equation = equationLayoutOf(piece);
-      if (equation) {
-        const width = equation.geometry.box.width;
-        if (probeWidth > 0 && probeWidth + width > probeLineAvail()) closeProbeLine(piece.start);
-        if (sameParagraphAnchorStarts.includes(piece.start)) out.set(piece.start, probeLineStart);
-        probeWidth += width;
-        continue;
-      }
-      if (piece.inlineDrawing) {
-        const width = measureInlineDrawing(piece.inlineDrawing.projection).totalWidth;
-        if (probeWidth > 0 && probeWidth + width > probeLineAvail()) closeProbeLine(piece.start);
-        if (sameParagraphAnchorStarts.includes(piece.start)) out.set(piece.start, probeLineStart);
-        probeWidth += width;
-        continue;
-      }
-      if (piece.text === '\n' || piece.text === PAGE_BREAK_CHAR) {
-        closeProbeLine(piece.end);
-        continue;
-      }
-      let consumed = 0;
-      for (const boundary of wordBoundaries(piece.text)) {
-        const candidate = piece.text.slice(consumed, boundary);
-        if (candidate.length === 0) continue;
-        const style = styleForFontSlot(piece.style, piece.fontSlot);
-        const width = measurer.measure(candidate, style);
-        const modelStart = piece.start + consumed;
-        if (probeWidth > 0 && probeWidth + width > probeLineAvail()) closeProbeLine(modelStart);
-        if (sameParagraphAnchorStarts.includes(modelStart)) out.set(modelStart, probeLineStart);
-        if (sameParagraphAnchorStarts.includes(piece.start)) out.set(piece.start, probeLineStart);
-        probeWidth += width;
-        consumed = boundary;
-      }
-    }
-    for (const anchorStart of sameParagraphAnchorStarts) {
-      if (!out.has(anchorStart)) out.set(anchorStart, probeLineStart);
-    }
-    return out;
-  })();
+  const anchorLineStartByOffset = anchorLineStartsByModelOffset({
+    pieces,
+    measurer,
+    available,
+    firstLineOffset,
+    anchorStarts: sameParagraphAnchorStarts,
+    equationLayoutOf,
+  });
 
   for (const start of wrapAnchorStarts) {
     const lineStart = anchorLineStartByOffset.get(start);
@@ -1237,6 +1163,9 @@ export function breakParagraph(
       else delete (line as { exclusionSkipBefore?: number }).exclusionSkipBefore;
     };
     finalizeTopAndBottomClearance();
+    // Before `markWrapAdvances`, so wrap-advance marking sees the merged shape — which is
+    // the shape paint gets.
+    coalesceIdeographicSpans(line);
     markWrapAdvances();
     const deleted = deletedWithin(line.start, line.end);
     if (deleted.length > 0) line.deletedRanges = deleted;
@@ -1427,21 +1356,24 @@ export function breakParagraph(
     // resolution — plus the slot, and re-resolve through the same helper.
     const faceStyle = styleForFontSlot(piece.style, piece.fontSlot);
     const metrics = measurer.lineMetrics(faceStyle);
+    // Projected PAGE/NUMPAGES digits publish the suppressed cached-result model range (or a
+    // zero-width insertion point when the cache was empty) so surrounding source offsets
+    // stay aligned with binding / paragraphTextOf.
+    // A projected field publishes the model range it stands in for; a `w:ptab` publishes
+    // its ZERO-WIDTH insertion point, because it contributes no text to the paragraph.
+    // Defensive: any piece whose display length disagrees with its model range is also
+    // layout-owned (inert DATE/TOC/REF/… cache before `projected` was set).
+    // Layout-owned pieces get no ideographic boundaries: they are documented below as
+    // staying whole, and a per-ideograph split wrapped a CJK field result mid-text with
+    // every span claiming the same model range.
+    const layoutOwned =
+      Boolean(piece.projected) ||
+      Boolean(piece.positionalTab) ||
+      piece.end - piece.start !== piece.text.length;
     let consumed = 0;
-    for (const boundary of wordBoundaries(piece.text)) {
+    for (const boundary of wordBoundaries(piece.text, !layoutOwned)) {
       const candidate = piece.text.slice(consumed, boundary);
       if (candidate.length === 0) continue;
-      // Projected PAGE/NUMPAGES digits publish the suppressed cached-result model range (or a
-      // zero-width insertion point when the cache was empty) so surrounding source offsets
-      // stay aligned with binding / paragraphTextOf.
-      // A projected field publishes the model range it stands in for; a `w:ptab` publishes
-      // its ZERO-WIDTH insertion point, because it contributes no text to the paragraph.
-      // Defensive: any piece whose display length disagrees with its model range is also
-      // layout-owned (inert DATE/TOC/REF/… cache before `projected` was set).
-      const layoutOwned =
-        Boolean(piece.projected) ||
-        Boolean(piece.positionalTab) ||
-        piece.end - piece.start !== piece.text.length;
       const spanRange = layoutOwned
         ? { paragraphId, start: piece.start, end: piece.end }
         : { paragraphId, start: piece.start + consumed, end: piece.start + boundary };
@@ -1531,19 +1463,10 @@ export function breakParagraph(
       // a wider measureText (eachPage) while painting the real digits.
       const measureSource = piece.measureText ?? candidate;
       let width = measurer.measure(displayText(measureSource, faceStyle), faceStyle);
-      // A candidate may open a line only at a real break opportunity. Within a piece,
-      // `wordBoundaries` cuts after spaces, dashes and tabs, so every candidate but the
-      // first is one. The FIRST candidate of a piece continues whatever the previous piece
-      // ended with, so it is a break opportunity only if that ended in whitespace \u2014 or in a
-      // dash, which stays a break opportunity across run boundaries (a tracked change can
-      // split "ALPHA-" and "PRIME" into different runs without gluing them).
-      const opensWord =
-        consumed > 0 ||
-        lastEmitted === '' ||
-        /[\s\u00a0]$/.test(lastEmitted) ||
-        /^[\s\u00a0]/.test(candidate) ||
-        (BREAK_AFTER_DASH.has(lastEmitted[lastEmitted.length - 1]!) &&
-          !BREAK_AFTER_DASH.has(candidate[0]!));
+      // A candidate may open a line only at a real break opportunity — the shared
+      // decision in `lineOpenDecisionAt`, which the anchor-line probe above consumes too.
+      const openDecision = lineOpenDecisionAt(lastEmitted, candidate, consumed > 0);
+      const opensWord = openDecision === 'opens';
       if (opensWord) {
         wordStartSpan = line.spans.length;
         wordStartWidth = line.width;
@@ -1560,7 +1483,14 @@ export function breakParagraph(
         line.width + width > lineAvailable() + OVERFLOW_TOLERANCE_PT &&
         (line.spans.length > 0 || line.drawings.length > 0)
       ) {
-        if (!opensWord && wordStartSpan === 0) {
+        if (openDecision === 'forbidden' && wordStartSpan <= 0) {
+          // The group starts this line and a rule forbids opening before it: a kinsoku seam,
+          // or one inside a grapheme cluster split across pieces. There is nothing to carry
+          // down, and chopping is the very break the rule forbids, so it is pushed out past
+          // the measure — Word's kinsoku push-out, and what the chop below reaches by itself
+          // when no accepted cut is left. `wordBoundaries` already cut at the next legal seam
+          // inside the piece, so what overflows is one protected group, not the clause.
+        } else if (!opensWord && wordStartSpan === 0) {
           // Prefer a later float passage; otherwise fill this one's remainder in the chop below.
           tryAdvanceToNextPassage();
         } else if (opensWord || wordStartSpan < 0) {
@@ -1616,7 +1546,8 @@ export function breakParagraph(
       const canChopWord = !layoutOwned && piece.measureText === undefined;
       if (
         canChopWord &&
-        (line.spans.length === 0 || (!opensWord && wordStartSpan === 0)) &&
+        (line.spans.length === 0 ||
+          (!opensWord && wordStartSpan === 0 && openDecision !== 'forbidden')) &&
         width > remainingLineWidth() + OVERFLOW_TOLERANCE_PT
       ) {
         const chopped = chopOversizedWord(candidate, remainingStart, width, {
@@ -1651,6 +1582,9 @@ export function breakParagraph(
           },
           closeLine,
           overflowTolerancePt: OVERFLOW_TOLERANCE_PT,
+          // The measured fit knows nothing about kinsoku: at a one-character measure
+          // 天。地。人。 chopped every other line onto a leading 。.
+          cutAllowedAt: cjkChopCutAllowedAt,
         });
         remaining = chopped.text;
         remainingStart = chopped.modelStart;
@@ -1661,25 +1595,34 @@ export function breakParagraph(
           wordStartEnd = line.end;
         }
       }
-      line.spans.push({
-        range: layoutOwned
-          ? spanRange
-          : { paragraphId, start: remainingStart, end: piece.start + boundary },
-        text: remaining,
-        props: piece.props,
-        style: piece.style,
-        box: { x: lineOrigin() + line.width, y: 0, width: remainingWidth, height: metrics.height },
-        ...(piece.link ? { link: piece.link } : {}),
-        ...(layoutOwned && !piece.positionalTab ? { projected: true as const } : {}),
-        ...(piece.noteNav ? { noteNav: piece.noteNav } : {}),
-        ...(piece.fontSlot ? { fontSlot: piece.fontSlot } : {}),
-        ...(lineEndWhitespace ? { lineEndWhitespace: true as const } : {}),
-        ...revisionsOf(piece),
-      });
-      line.width += remainingWidth;
-      line.height = Math.max(line.height, metrics.height);
-      line.baseline = Math.max(line.baseline, metrics.baseline);
-      line.end = layoutOwned ? piece.end : piece.start + boundary;
+      // A kinsoku push-out can consume the whole candidate (天。 at a one-character measure):
+      // the chop emitted it as one overflowing line and left nothing for this placement.
+      if (remaining.length > 0) {
+        line.spans.push({
+          range: layoutOwned
+            ? spanRange
+            : { paragraphId, start: remainingStart, end: piece.start + boundary },
+          text: remaining,
+          props: piece.props,
+          style: piece.style,
+          box: {
+            x: lineOrigin() + line.width,
+            y: 0,
+            width: remainingWidth,
+            height: metrics.height,
+          },
+          ...(piece.link ? { link: piece.link } : {}),
+          ...(layoutOwned && !piece.positionalTab ? { projected: true as const } : {}),
+          ...(piece.noteNav ? { noteNav: piece.noteNav } : {}),
+          ...(piece.fontSlot ? { fontSlot: piece.fontSlot } : {}),
+          ...(lineEndWhitespace ? { lineEndWhitespace: true as const } : {}),
+          ...revisionsOf(piece),
+        });
+        line.width += remainingWidth;
+        line.height = Math.max(line.height, metrics.height);
+        line.baseline = Math.max(line.baseline, metrics.baseline);
+        line.end = layoutOwned ? piece.end : piece.start + boundary;
+      }
       lastEmitted = candidate;
       consumed = boundary;
     }
