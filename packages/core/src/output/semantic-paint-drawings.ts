@@ -9,6 +9,7 @@ import type {
   ValidatedImageBytesHandle,
 } from '../store/package/image-resources.ts';
 import type { AnchoredDrawingRecord, InlineDrawingRecord } from '../layout/drawing-layout.ts';
+import { applyDrawingBilevelFilter } from './drawing-bilevel-filter.ts';
 import type { DrawingPoint } from '../layout/drawing-geometry.ts';
 import { cssTransformForDrawingImage } from '../layout/drawing-geometry.ts';
 import type {
@@ -367,6 +368,7 @@ function readyImagePaintSignature(
     content.height,
     cssClipPathFromPolygon(drawing.geometry.clipPolygon ?? [], paint) ?? '',
     filterStyleOf(drawing) ?? '',
+    drawing.effects.bilevel ?? '',
     imagePaintTransformStyle(drawing) ?? '',
     crop.width,
     crop.height,
@@ -495,6 +497,7 @@ function paintReadyImage(
   transformStage.append(cropViewport);
   inner.append(transformStage);
   outer.replaceChildren(inner);
+  applyDrawingBilevelFilter(document, outer, inner, drawing.effects.bilevel);
 
   if (drawing.hyperlinkHref && !ctx.inertLinks) {
     outer.dataset.docxDrawingLink = drawing.drawingNodeId;
