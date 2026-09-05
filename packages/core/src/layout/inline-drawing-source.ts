@@ -314,6 +314,7 @@ function drawingProjectionLayoutToken(projection: DrawingProjection): string {
     projection.compatibilityBranchNodeId ?? '',
     anchor?.simplePos ? 'sp' : 'pv',
     anchor ? String(anchor.relativeHeight) : '',
+    anchor ? (anchor.behindDocument ? '1' : '0') : '',
     anchor ? (anchor.layoutInCell ? '1' : '0') : '',
     picture
       ? framedTokenJoin([

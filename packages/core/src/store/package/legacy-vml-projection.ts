@@ -30,6 +30,14 @@ export type { LegacyGraphicProjection } from './legacy-vml-shapes.ts';
 
 const emptyEdges = Object.freeze({ top: 0, right: 0, bottom: 0, left: 0 });
 const memo = new WeakMap<OoxmlNode, DrawingProjection | null>();
+// Layer order is a signed CSS integer, not a geometric coordinate. Word routinely
+// writes 251658240 here; the coordinate reader's one-million limit rejects that.
+function layerOrder(raw = '0'): number {
+  if (raw.toLowerCase() === 'auto') return 0;
+  if (!/^[+-]?\d{1,10}$/.test(raw)) return NaN;
+  const value = Number(raw);
+  return value >= -2147483648 && value <= 2147483647 ? value : NaN;
+}
 const commonStyles = new Set([
   'position',
   'left',
@@ -167,7 +175,7 @@ function readProjection(node: OoxmlElement): DrawingProjection | null {
   ]).get(style.get('mso-position-vertical-relative') ?? 'text');
   const left = points(style.get('margin-left') ?? style.get('left') ?? '0'),
     top = points(style.get('margin-top') ?? style.get('top') ?? '0');
-  const z = numeric(style.get('z-index') ?? '0');
+  const z = layerOrder(style.get('z-index'));
   if (
     !horizontal ||
     !vertical ||
@@ -266,7 +274,9 @@ function readProjection(node: OoxmlElement): DrawingProjection | null {
     anchor: floating
       ? Object.freeze({
           simplePos: false,
-          relativeHeight: Math.max(0, z),
+          // Behind-text drawings have their own paint layer; retain their signed order
+          // in its non-negative rank instead of collapsing every negative value to zero.
+          relativeHeight: z < 0 ? z + 2147483648 : z,
           behindDocument: z < 0,
           layoutInCell: !off(a(root, 'allowincell', OFFICE)),
           allowOverlap: true,
