@@ -6,11 +6,36 @@
 // the existing algorithm until their geometry has independent coverage.
 import { WML_NAMESPACE_URI, type OoxmlElement } from '@docx-editor.dev/core/store';
 import type { SemanticTableRow, TableAlignment } from './semantic-table.ts';
-import { MAX_TABLE_COLUMNS, type PreferredWidth } from './table-widths.ts';
+import { MAX_TABLE_COLUMNS, type CellWidthClaim, type PreferredWidth } from './table-widths.ts';
 import { hasSupportedLegacyTableMargins } from './legacy-table-margins.ts';
 
 const MAX_WIDTH_PT = 31_680 / 20;
 const EPSILON_PT = 0.001;
+
+/** Reconcile the precision of legacy fiftieth-percent preferences with a verified twip grid. */
+export function legacyRoundedCellClaims(
+  claims: readonly CellWidthClaim[],
+  gridCols: readonly OoxmlElement[],
+  tableWidthPt: number
+): readonly CellWidthClaim[] {
+  // A rounded fiftieth-percent can exceed the same width rounded to a twip by this
+  // amount. Growing that column and then rescaling the whole table steals space from
+  // unrelated columns. Only suppress that representational difference, not a wider
+  // cell preference. This runs only AFTER the complete legacy grid has been verified.
+  const tolerance = tableWidthPt / 10_000 + 0.025;
+  return claims.map((claim) => {
+    if (claim.span !== 1 || claim.preferred.type !== 'pct') return claim;
+    const units = claim.preferred.value * 50;
+    if (Math.abs(units - Math.round(units)) > 1e-8) return claim;
+    const raw = attr(gridCols[claim.start], 'w');
+    if (raw === undefined || !/^\d{1,9}$/.test(raw)) return claim;
+    const gridWidth = Number(raw) / 20;
+    const delta = (tableWidthPt * claim.preferred.value) / 100 - gridWidth;
+    return delta > 0 && delta <= tolerance + EPSILON_PT
+      ? { ...claim, preferred: { type: 'dxa', value: gridWidth } }
+      : claim;
+  });
+}
 
 function child(node: OoxmlElement, name: string): OoxmlElement | undefined {
   let found: OoxmlElement | undefined;

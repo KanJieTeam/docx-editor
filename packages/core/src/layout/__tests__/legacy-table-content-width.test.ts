@@ -162,6 +162,33 @@ describe('explicit legacy full-width content alignment', () => {
     expect(structure.columnWidthsPt.reduce((a, b) => a + b, 0)).toBeCloseTo(210.8, 8);
   });
 
+  test('rounding a fiftieth-percent preference does not steal width from other columns', () => {
+    const columns =
+      '<w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="1000"/><w:gridCol w:w="3240"/></w:tblGrid>';
+    const margins =
+      '<w:tblCellMar><w:left w:w="120" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar>';
+    const rows = `<w:tr>${cell(1603, 'x')}${cell(801, 'y')}${cell(2596, 'z')}</w:tr>`;
+    const legacy = read(fixture(properties + margins, columns, rows), 11, 0, 300);
+    expect(legacy.columnWidthsPt).toEqual([100, 50, 162]);
+    expect(legacy.rows[0]!.cells[0]!.preferredWidth).toEqual({ type: 'pct', value: 32.06 });
+    const modern = read(fixture(properties + margins, columns, rows), 15, 0, 300);
+    expect(modern.columnWidthsPt.reduce((a, b) => a + b, 0)).toBeCloseTo(300, 8);
+    const wider = read(
+      fixture(properties + margins, columns, rows.replace('1603', '1610')),
+      11,
+      0,
+      300
+    );
+    expect(wider.columnWidthsPt[0]).toBeGreaterThan(100);
+    const precise = read(
+      fixture(properties + margins, columns, rows.replace('w:w="1603"', 'w:w="32.061%"')),
+      11,
+      0,
+      300
+    );
+    expect(precise.columnWidthsPt[0]).toBeGreaterThan(100);
+  });
+
   for (const margin of [
     '<foreign:left w:w="1000" w:type="dxa"/>',
     '<w:left foreign:w="1000" w:type="dxa"/>',

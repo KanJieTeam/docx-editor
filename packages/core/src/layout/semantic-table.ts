@@ -60,7 +60,7 @@ import {
 import { readCellTextDirection } from './table-cell-text-direction.ts';
 import { readCellVerticalAlign, type CellVerticalAlign } from './table-cell-vertical-align.ts';
 import { tableRowIsHeader } from './table-row-header-style.ts';
-import { legacyTableContentWidth } from './legacy-table-content-width.ts';
+import { legacyRoundedCellClaims, legacyTableContentWidth } from './legacy-table-content-width.ts';
 export { tableOriginX, tableFloatOriginX } from './table-origin.ts';
 // Cell padding is its own unit (`table-cell-margins.ts`); re-exported here because this is
 // where the published table surface lives.
@@ -1058,7 +1058,8 @@ function readTableStructureUncached(
   return {
     columnWidthsPt: resolveColumnWidthsPt({
       gridCols,
-      claims,
+      claims:
+        legacyWidth === undefined ? claims : legacyRoundedCellClaims(claims, gridCols, legacyWidth),
       columnCount,
       contentWidthPt: legacyWidth ?? contentWidthPt,
       tableWidth,
