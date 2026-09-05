@@ -443,7 +443,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'An anchored table uses tblpXSpec or tblpX across the text, margin, or page box. It uses tblpY or tblpYSpec against the selected vertical anchor. Page-anchored and margin-anchored tables do not advance body flow. Text does not wrap beside them yet.',
+      'An anchored table uses tblpXSpec or tblpX across the text, margin, or page box. It uses tblpY or tblpYSpec against the selected vertical anchor. Page-anchored and margin-anchored tables do not advance body flow. Simple text-anchored tables can share a terminal empty paragraph without adding a blank page when the complete group fits the same content box. Other text-anchored tables remain in flow. Text does not wrap beside them yet.',
   },
   {
     id: 'tables.text-direction',
