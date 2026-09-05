@@ -133,6 +133,63 @@ function svgOf(state: ImageResourceState): string {
 }
 
 describe('bounded legacy VML projections', () => {
+  test('projects colour-keyed equation previews without interpreting their source metadata', () => {
+    for (const renamed of [false, true]) {
+      const content = photo()
+        .replace(
+          'id="photo"',
+          `id="photo" ${renamed ? 'o:' : ''}equationxml="${'x'.repeat(28_000)}"`
+        )
+        .replace('o:title="photo"', 'o:title="photo" chromakey="#FFFFFF" cropleft="8192f"');
+      const part = parse(`<w:pict>${content}</w:pict>`, renamed);
+      const before = serializeOoxmlPart(part);
+      const fragment = onlyProjection(part).legacyGraphic!.fragments[0]!;
+      expect(typeof fragment).toBe('object');
+      if (typeof fragment === 'string') throw new Error('Expected image slot');
+      expect(fragment.before).toContain('color-interpolation-filters="sRGB"');
+      expect(fragment.before).toContain('filter="url(#vml-key-ffffff)"');
+      expect(fragment.before).not.toContain('equationxml');
+      expect(fragment.before).not.toContain('x'.repeat(100));
+      expect(serializeOoxmlPart(part)).toBe(before);
+    }
+  });
+
+  test('refuses invalid colour keys and retains all input budgets', () => {
+    for (const key of ['url(https://example.invalid)', '#ffff', '', 'transparent']) {
+      expect(
+        projectDrawingsInPart(
+          parse(`<w:pict>${photo().replace('o:title="photo"', `chromakey="${key}"`)}</w:pict>`)
+        )
+      ).toHaveLength(0);
+    }
+    for (const metadata of [
+      `o:equationxml="${'x'.repeat(65_537)}"`,
+      `o:title="${'x'.repeat(8193)}"`,
+      `r:equationxml="${'x'.repeat(28_000)}"`,
+    ]) {
+      expect(
+        projectDrawingsInPart(parse(`<w:pict>${photo().replace('id="photo"', metadata)}</w:pict>`))
+      ).toHaveLength(0);
+    }
+  });
+
+  test('accepts disabled equation picture decorations but not visible or custom ones', () => {
+    const decorations =
+      '<v:path/><v:fill on="f" focussize="0,0"/><v:stroke on="f"/><word:anchorlock xmlns:word="urn:schemas-microsoft-com:office:word"/>';
+    const content = `<w:pict>${photo()
+      .replace('id="photo"', 'id="photo" filled="f" stroked="f"')
+      .replace('<v:imagedata', decorations + '<v:imagedata')
+      .replace('o:title="photo"', 'chromakey="#ffffff"')}</w:pict>`;
+    expect(projectDrawingsInPart(parse(content))).toHaveLength(1);
+    for (const [from, to] of [
+      ['<v:path/>', '<v:path v="m0,0l1,1e"/>'],
+      ['<v:fill on="f"', '<v:fill on="t"'],
+      ['<v:stroke on="f"', '<v:stroke on="t"'],
+    ]) {
+      expect(projectDrawingsInPart(parse(content.replace(from!, to!)))).toHaveLength(0);
+    }
+  });
+
   test('recognizes a standalone picture by namespace, not authored prefix', () => {
     for (const renamed of [false, true]) {
       const part = parse(`<w:pict>${photo()}</w:pict>`, renamed);
@@ -272,6 +329,29 @@ describe('bounded legacy VML projections', () => {
 });
 
 describe('derived legacy graphics resources', () => {
+  test('invalidates colour-key previews without changing original XML or PNG bytes', async () => {
+    const keyed = (key: string) =>
+      `<w:pict>${photo().replace('o:title="photo"', `chromakey="${key}"`)}</w:pict>`;
+    const pkg = packageOf(keyed('#ffffff'));
+    const before = unzipSync(writeOoxmlPackage(pkg));
+    const lookup = createImageResourceCache(pkg, { decodePort: decodePort() });
+    try {
+      const white = await lookup.resolveForProjection(onlyProjection(parse(keyed('#ffffff'))));
+      const red = await lookup.resolveForProjection(onlyProjection(parse(keyed('#ff0000'))));
+      expect(svgOf(white)).toContain('vml-key-ffffff');
+      expect(svgOf(red)).toContain('vml-key-ff0000');
+      expect(svgOf(white)).toContain(`data:image/png;base64,${PNG_BASE64}`);
+      if (white.kind !== 'ready' || red.kind !== 'ready')
+        throw new Error('Expected ready previews');
+      expect(white.contentId).not.toBe(red.contentId);
+      const after = unzipSync(writeOoxmlPackage(pkg));
+      expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
+      for (const name of Object.keys(before)) expect(after[name]).toEqual(before[name]);
+    } finally {
+      lookup.dispose();
+    }
+  });
+
   test('enforces encoded, decoded, pixel and dimension budgets on derived SVG previews', async () => {
     for (const limits of [
       { maxEncodedBytes: 256 },

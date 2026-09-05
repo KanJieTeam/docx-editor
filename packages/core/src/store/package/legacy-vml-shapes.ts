@@ -1,4 +1,5 @@
 import { RELATIONSHIPS_NAMESPACE_URI, type OoxmlElement } from './ooxml-tree.ts';
+import { legacyChromaKeyFilter } from './legacy-vml-chromakey.ts';
 import {
   attribute as a,
   children,
@@ -253,7 +254,8 @@ export function legacyShapeFragment(
           ['imagedata', 'textpath', 'fill', 'stroke', 'path'].includes(n.localName)
         ) &&
         !named(n, OFFICE, 'lock') &&
-        !named(n, WORD_VML, 'wrap')
+        !named(n, WORD_VML, 'wrap') &&
+        !(named(n, WORD_VML, 'anchorlock') && n.attributes.length === 0)
     )
   )
     return null;
@@ -275,7 +277,27 @@ export function legacyShapeFragment(
     if (
       a(node, 'path') ||
       (a(node, 'stroked') && !off(a(node, 'stroked'))) ||
-      list.some((n) => n.namespaceUri === VML && ['fill', 'stroke', 'path'].includes(n.localName))
+      list.some((n) => {
+        if (named(n, VML, 'path')) return n.attributes.length !== 0;
+        if (named(n, VML, 'fill')) {
+          return (
+            !off(a(n, 'on') ?? a(node, 'filled')) ||
+            n.attributes.some(
+              (attr) =>
+                attr.namespaceUri ||
+                !['on', 'focussize'].includes(attr.localName) ||
+                (attr.localName === 'focussize' && attr.value !== '0,0')
+            )
+          );
+        }
+        if (named(n, VML, 'stroke')) {
+          return (
+            !off(a(n, 'on') ?? a(node, 'stroked')) ||
+            n.attributes.some((attr) => attr.namespaceUri || attr.localName !== 'on')
+          );
+        }
+        return false;
+      })
     )
       return null;
     const image = data[0]!,
@@ -288,11 +310,17 @@ export function legacyShapeFragment(
             (attr.namespaceUri === RELATIONSHIPS_NAMESPACE_URI && attr.localName === 'id') ||
             (attr.localName === 'title' && attr.namespaceUri === OFFICE) ||
             (!attr.namespaceUri &&
-              ['cropleft', 'croptop', 'cropright', 'cropbottom'].includes(attr.localName))
+              ['cropleft', 'croptop', 'cropright', 'cropbottom', 'chromakey'].includes(
+                attr.localName
+              ))
           )
       )
     )
       return null;
+    const key = a(image, 'chromakey');
+    const keyColor = key === undefined ? undefined : color(key, '');
+    if (keyColor === null) return null;
+    const filter = keyColor ? legacyChromaKeyFilter(keyColor) : undefined;
     const crop = ['cropleft', 'croptop', 'cropright', 'cropbottom'].map((key) => {
       const raw = a(image, key) ?? '0';
       return raw.endsWith('f') ? numeric(raw.slice(0, -1)) / 65536 : numeric(raw);
@@ -309,7 +337,7 @@ export function legacyShapeFragment(
     if (![width, height].every((value) => Number.isFinite(value) && value <= 100_000)) return null;
     return Object.freeze({
       relationshipId: id,
-      before: `<svg x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" viewBox="0 0 ${box.width} ${box.height}" overflow="hidden"><image x="${-left * width}" y="${-top * height}" width="${width}" height="${height}" preserveAspectRatio="none" href="`,
+      before: `<svg x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" viewBox="0 0 ${box.width} ${box.height}" overflow="hidden">${filter?.definition ?? ''}<image x="${-left * width}" y="${-top * height}" width="${width}" height="${height}" preserveAspectRatio="none"${filter ? ` filter="url(#${filter.id})"` : ''} href="`,
       after: '"/></svg>',
     });
   }

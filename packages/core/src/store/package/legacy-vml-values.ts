@@ -82,7 +82,14 @@ export function boundedVml(node: OoxmlNode): boolean {
       )
         return false;
       for (const attr of current.node.attributes) {
-        if (attr.value.length > 8192) return false;
+        // Equation Editor stores opaque source metadata beside its preview.
+        // Never parse or emit that metadata into SVG. It still counts against
+        // the complete 64 KiB input budget below.
+        const equationMetadata =
+          named(current.node, VML, 'shape') &&
+          attr.localName === 'equationxml' &&
+          (!attr.namespaceUri || attr.namespaceUri === OFFICE);
+        if (attr.value.length > (equationMetadata ? 65_536 : 8192)) return false;
         characters += attr.value.length;
       }
       for (const child of current.node.children)
