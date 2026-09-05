@@ -81,3 +81,47 @@ test('leaves other frame structures in ordinary flow', () => {
   const header = layoutHeaderFooterStory(partOf(body, true), 400, measurer, 'test');
   expect(header.fragments[1]!.box.y).toBeGreaterThan(0);
 });
+
+test('centers PAGE over a middle-dot anchor without moving or merging its text', () => {
+  const decorated = body.replace(
+    '</w:pPr></w:p>',
+    '<w:jc w:val="center"/><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t xml:space="preserve">·   ·</w:t></w:r></w:p>'
+  );
+  const part = partOf(decorated),
+    before = serializeOoxmlPart(part);
+  const story = layoutHeaderFooterStory(part, 400, measurer, 'decorated');
+  for (const pageNumber of [1, 12, 123]) {
+    const projected = story.withPageContext({ pageNumber, pageCount: 200, sectionPageCount: 200 });
+    const [first, second] = projected.fragments;
+    if (first?.kind !== 'paragraph' || second?.kind !== 'paragraph')
+      throw new Error('paragraphs required');
+    expect(first.lines[0]!.spans.map((span) => span.text).join('')).toBe(String(pageNumber));
+    expect(second.lines[0]!.spans.map((span) => span.text).join('')).toBe('·   ·');
+    expect(first.paragraphId).not.toBe(second.paragraphId);
+    const start = first.lines[0]!.spans[0]!.box,
+      end = first.lines[0]!.spans.at(-1)!.box;
+    expect((start.x + end.x + end.width) / 2).toBeCloseTo(200, 4);
+    expect(second.box.y).toBe(0);
+    expect(projected.flowHeight).toBeCloseTo(first.box.height + 0.05, 3);
+  }
+  expect(serializeOoxmlPart(part)).toBe(before);
+});
+
+test('does not overlay meaningful, left-aligned or field-bearing anchor content', () => {
+  for (const [content, align] of [
+    ['· note ·', 'center'],
+    ['·   ·', 'left'],
+    ['·'.repeat(40), 'center'],
+  ]) {
+    const decorated = body.replace(
+      '</w:pPr></w:p>',
+      `<w:jc w:val="${align}"/></w:pPr><w:r><w:t>${content}</w:t></w:r></w:p>`
+    );
+    const story = layoutHeaderFooterStory(partOf(decorated), 400, measurer, 'refused');
+    expect(story.fragments[1]!.box.y).toBeGreaterThan(0);
+  }
+  const fieldAnchor = body.replace('</w:pPr></w:p>', `</w:pPr>${field}</w:p>`);
+  expect(
+    layoutHeaderFooterStory(partOf(fieldAnchor), 400, measurer, 'field-anchor').fragments[1]!.box.y
+  ).toBeGreaterThan(0);
+});

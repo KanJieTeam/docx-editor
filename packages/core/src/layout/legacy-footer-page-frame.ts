@@ -79,30 +79,49 @@ function containsOnlyPageField(paragraph: OoxmlElement): boolean {
   return state === 3 && instruction === 'PAGE';
 }
 
-function framePair(part: OoxmlPart): { first: string; empty: string; y: number } | null {
+function framePair(
+  part: OoxmlPart
+): { first: string; empty: string; y: number; decoration: string } | null {
   if (!isW(part.root, 'ftr') || !bounded(part)) return null;
   const paragraphs = elements(part.root);
   if (paragraphs.length !== 2 || paragraphs.some((node) => node.kind !== 'paragraph')) return null;
   const [first, empty] = paragraphs as [OoxmlElement, OoxmlElement];
   const props = elements(first).find((node) => isW(node, 'pPr'));
-  const emptyChildren = elements(empty);
-  if (!props || emptyChildren.length !== 1 || !isW(emptyChildren[0]!, 'pPr')) return null;
-  const properties = elements(props);
+  const emptyProps = elements(empty).find((node) => isW(node, 'pPr'));
+  if (!props || !emptyProps) return null;
+  const properties = elements(props),
+    anchorProperties = elements(emptyProps);
   if (
     properties.filter((node) => isW(node, 'framePr')).length !== 1 ||
-    properties.filter((node) => isW(node, 'pStyle')).length !== 1
+    properties.filter((node) => isW(node, 'pStyle')).length !== 1 ||
+    anchorProperties.filter((node) => isW(node, 'pStyle')).length !== 1
   )
     return null;
   if (
-    properties.some((node) => !['pStyle', 'framePr', 'jc', 'rPr'].some((name) => isW(node, name)))
+    properties.some(
+      (node) => !['pStyle', 'framePr', 'jc', 'rPr'].some((name) => isW(node, name))
+    ) ||
+    anchorProperties.some((node) => !['pStyle', 'jc', 'rPr'].some((name) => isW(node, name)))
   )
     return null;
-  const style = properties.find((node) => isW(node, 'pStyle'));
-  const frame = properties.find((node) => isW(node, 'framePr'));
-  const emptyProperties = elements(emptyChildren[0]!);
-  if (!style || !frame || emptyProperties.length !== 1 || !isW(emptyProperties[0]!, 'pStyle'))
-    return null;
-  if (!attr(style, 'val') || attr(style, 'val') !== attr(emptyProperties[0]!, 'val')) return null;
+  const style = properties.find((node) => isW(node, 'pStyle'))!;
+  const anchorStyle = anchorProperties.find((node) => isW(node, 'pStyle'))!;
+  const frame = properties.find((node) => isW(node, 'framePr'))!;
+  if (!attr(style, 'val') || attr(style, 'val') !== attr(anchorStyle, 'val')) return null;
+  let decoration = '';
+  for (const run of elements(empty)) {
+    if (isW(run, 'pPr')) continue;
+    if (!isW(run, 'r')) return null;
+    for (const node of elements(run)) {
+      if (isW(node, 'rPr')) continue;
+      if (!isW(node, 't')) return null;
+      const value = text(node);
+      if (value === null) return null;
+      decoration += value;
+    }
+  }
+  // Preserve a centered middle-dot decoration as authored; do not merge or delete runs.
+  if (decoration && !/^· {1,15}·$/.test(decoration)) return null;
   const allowed = new Set(['wrap', 'vAnchor', 'hAnchor', 'xAlign', 'y']);
   if (
     frame.children.length ||
@@ -120,7 +139,7 @@ function framePair(part: OoxmlPart): { first: string; empty: string; y: number }
     return null;
   const y = attr(frame, 'y') ?? '0';
   if (!['0', '1'].includes(y) || !containsOnlyPageField(first)) return null;
-  return { first: first.id, empty: empty.id, y: Number(y) / 20 };
+  return { first: first.id, empty: empty.id, y: Number(y) / 20, decoration };
 }
 
 function simpleLine(fragment: BlockFragmentRecord): fragment is ParagraphFragmentRecord {
@@ -151,7 +170,10 @@ export function positionLegacyFooterPageFrame<
     !simpleLine(empty) ||
     first.paragraphId !== pair.first ||
     empty.paragraphId !== pair.empty ||
-    empty.lines[0]!.spans.length
+    (pair.decoration
+      ? empty.alignment !== 'center' ||
+        empty.lines[0]!.spans.map((span) => span.text).join('') !== pair.decoration
+      : empty.lines[0]!.spans.length > 0)
   )
     return flow;
   const framed = shiftParagraphFragment(first, pair.y - first.box.y);
