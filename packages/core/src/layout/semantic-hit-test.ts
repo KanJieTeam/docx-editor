@@ -42,6 +42,7 @@ import type {
 } from './semantic-records.ts';
 import type { InlineDrawingRecord, AnchoredDrawingRecord } from './drawing-layout.ts';
 import { pointInDrawingClip } from './drawing-wrap.ts';
+import { clipParagraphBox } from './paragraph-frame-clip.ts';
 import { bottomToTopCaretInLayout, pointInBottomToTopCell } from './table-cell-text-direction.ts';
 
 /** A point in the coordinate space named by the function taking it. */
@@ -562,6 +563,7 @@ function resolveParagraph(
   cell: TableCellAddress | null,
   insideBox: boolean
 ): SemanticHit | null {
+  if (fragment.clipToBox && !insideBox) return null;
   const line = lineAtY(fragment.lines, point.y);
   if (!line) return null;
   const resolved = offsetOnLine(line, point.x, point.y, context);
@@ -576,13 +578,18 @@ function resolveParagraph(
   const offset = Math.min(Math.max(resolved.offset, segment.start), segment.end);
   const position: SemanticPosition = { paragraphId: segment.paragraphId, offset };
   const box = caretBoxOnLine(line, offset, context.measurer, segment);
+  const caretBox = clipParagraphBox(
+    { ...box, x: resolved.x, width: 0 },
+    fragment.clipToBox ? fragment.box : undefined
+  );
+  if (!caretBox) return null;
   return {
     position,
     caret: {
       position,
-      x: resolved.x,
-      y: box.y,
-      height: box.height,
+      x: caretBox.x,
+      y: caretBox.y,
+      height: caretBox.height,
       lineId: line.id,
       pageIndex: context.pageIndex,
     },

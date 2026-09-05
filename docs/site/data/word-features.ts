@@ -291,7 +291,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'A centered, auto-sized PAGE footer frame over one empty paragraph of the same style renders without charging a second footer line. Both paragraphs and framePr remain intact on save. Other frames and drop caps stay in ordinary text flow.',
+      'A centered, auto-sized PAGE footer frame can overlay an empty or centered middle-dot anchor without adding a footer line. Supported single-line fixed-width PAGE frames use their page-relative horizontal position and clip overflow above a second PAGE paragraph. Both fields and paragraphs survive save. Frames that need text wrapping, unsupported positions, and drop caps stay in ordinary flow.',
   },
   {
     id: 'paragraphs.hyphenation',

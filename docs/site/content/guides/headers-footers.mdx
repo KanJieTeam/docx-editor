@@ -43,9 +43,18 @@ Other fields use separate evaluation rules. See
 [Fields and cross-references](/docs/2.x/guides/fields).
 
 Legacy footers can store a centered `PAGE` field in an auto-sized `w:framePr` over an
-empty paragraph of the same style. This two-paragraph form renders in one footer band,
-and page values are re-centered per page. Both original paragraphs and the frame survive save.
-Frames with other positions, wrapping, spacing, or additional content stay in ordinary flow.
+empty paragraph of the same style or a centered middle-dot decoration. Both paragraphs
+render in one footer band. Page values are re-centered per page, and the source structure
+survives save.
+
+A supported fixed-width frame uses a page-relative X position and text-relative vertical
+centering over a second `PAGE` paragraph. A leading tab can place its value outside the
+frame. The editor clips that value but retains both fields and their source ranges.
+Selections and pointer hits use the same clip rectangle.
+
+This support covers two simple, single-line `PAGE` paragraphs. Values must fit completely
+inside the frame or lie completely beyond it. Partial wrapping, other positions,
+paragraph spacing, and additional content keep the ordinary flow behavior.
 
 ## Per-section headers and footers
 

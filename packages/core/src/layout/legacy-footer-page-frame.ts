@@ -5,6 +5,7 @@ import {
   type OoxmlPart,
 } from '../store/package/ooxml-tree.ts';
 import { shiftParagraphFragment } from './note-fragment-geometry.ts';
+import { positionFixedFooterPageFrame } from './legacy-footer-fixed-frame.ts';
 import type { BlockFragmentRecord, ParagraphFragmentRecord } from './semantic-records.ts';
 
 const isElement = (node: OoxmlNode): node is OoxmlElement => node.kind !== 'textValue';
@@ -159,9 +160,15 @@ function simpleLine(fragment: BlockFragmentRecord): fragment is ParagraphFragmen
 /** Position the narrowly supported PAGE/empty-paragraph footer pair in derived geometry only. */
 export function positionLegacyFooterPageFrame<
   T extends { blocks: BlockFragmentRecord[]; bottom: number },
->(part: OoxmlPart, flow: T, contentWidth: number): T {
+>(
+  part: OoxmlPart,
+  flow: T,
+  contentWidth: number,
+  pageGeometry?: { readonly marginLeft: number; readonly pageWidth: number }
+): T {
   const pair = framePair(part);
-  if (!pair || flow.blocks.length !== 2) return flow;
+  if (!pair) return bounded(part) ? positionFixedFooterPageFrame(part, flow, pageGeometry) : flow;
+  if (flow.blocks.length !== 2) return flow;
   const [first, empty] = flow.blocks;
   if (
     !first ||

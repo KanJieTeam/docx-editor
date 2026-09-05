@@ -2,4 +2,4 @@
 '@docx-editor.dev/core': patch
 ---
 
-Center legacy PAGE footer frames over their empty or centered middle-dot anchor paragraph without adding an extra footer line or changing the original document structure.
+Position supported legacy PAGE footer frames without adding an extra footer line. Clip fixed-width frames while preserving fields, selections, and document structure.

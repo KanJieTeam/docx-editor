@@ -501,7 +501,7 @@ export function layoutHeaderFooterStory(
       });
     }
 
-    flow = positionLegacyFooterPageFrame(part, flow, contentWidth);
+    flow = positionLegacyFooterPageFrame(part, flow, contentWidth, hfPageContext);
     const story: HeaderFooterStoryLayout = {
       partName: part.name,
       part,
