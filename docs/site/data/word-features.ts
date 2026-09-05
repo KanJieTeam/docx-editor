@@ -287,11 +287,11 @@ export const wordFeatures: WordFeature[] = [
     name: 'Drop caps & text frames (framePr)',
     category: 'paragraphs',
     editing: 'none',
-    rendering: 'none',
+    rendering: 'partial',
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Parsed and round-tripped; text flows inline rather than as a drop cap or positioned frame.',
+      'A centered, auto-sized PAGE footer frame over one empty paragraph of the same style renders without charging a second footer line. Both paragraphs and framePr remain intact on save. Other frames and drop caps stay in ordinary text flow.',
   },
   {
     id: 'paragraphs.hyphenation',
