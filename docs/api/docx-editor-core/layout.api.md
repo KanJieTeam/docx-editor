@@ -4236,6 +4236,10 @@ export function utf16OffsetToGrapheme(text: string, utf16Offset: number): number
 
 // @public (undocumented)
 export interface VectorShapeComponent {
+    readonly arrowheadsEmu?: readonly (readonly Readonly<{
+        x: number;
+        y: number;
+    }>[])[];
     // (undocumented)
     readonly fillAlpha: number;
     // (undocumented)
@@ -4246,6 +4250,7 @@ export interface VectorShapeComponent {
     readonly strokeHex: string | null;
     // (undocumented)
     readonly strokeWidthEmu: number;
+    readonly subpathsClosed?: readonly boolean[];
     // (undocumented)
     readonly subpathsEmu: readonly (readonly Readonly<{
         x: number;
