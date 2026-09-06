@@ -2890,6 +2890,7 @@ export type OoxmlPackageResult = {
     readonly package: OoxmlPackage;
 } | {
     readonly detail?: string;
+    readonly limit?: 'zip.maxTotalBytes' | 'zip.maxRatio';
     readonly ok: false;
     readonly reason: OoxmlPackageRejection;
 };
@@ -5047,7 +5048,6 @@ export const XML_NAMESPACE_URI = "http://www.w3.org/XML/1998/namespace";
 export interface XmlLimits {
     // (undocumented)
     readonly maxBytes: number;
-    // (undocumented)
     readonly maxElements?: number;
 }
 
@@ -5091,6 +5091,7 @@ export type ZipReadResult = {
     readonly ok: true;
 } | {
     readonly detail?: string;
+    readonly limit?: 'zip.maxTotalBytes' | 'zip.maxRatio';
     readonly ok: false;
     readonly reason: ZipRejection;
 };
