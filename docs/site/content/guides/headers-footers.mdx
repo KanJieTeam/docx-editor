@@ -48,11 +48,11 @@ render in one footer band. Page values are re-centered per page, and the source 
 survives save.
 
 A supported fixed-width frame uses a page-relative X position and text-relative vertical
-centering over a second `PAGE` paragraph. A leading tab can place its value outside the
-frame. The editor clips that value but retains both fields and their source ranges.
+centering over an empty anchor or a second `PAGE` paragraph. A leading tab can place its value outside the
+frame. The editor clips that value but retains all fields, paragraphs, and source ranges.
 Selections and pointer hits use the same clip rectangle.
 
-This support covers two simple, single-line `PAGE` paragraphs. Values must fit completely
+This support covers a simple, single-line `PAGE` frame and a single-line empty or `PAGE` anchor. Values must fit completely
 inside the frame or lie completely beyond it. Partial wrapping, other positions,
 paragraph spacing, and additional content keep the ordinary flow behavior.
 

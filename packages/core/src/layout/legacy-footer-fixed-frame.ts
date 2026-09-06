@@ -94,6 +94,16 @@ function simple(fragment: BlockFragmentRecord): fragment is ParagraphFragmentRec
   );
 }
 
+function emptyAnchor(paragraph: OoxmlElement, fragment: ParagraphFragmentRecord): boolean {
+  return (
+    fragment.lines[0]!.spans.length === 0 &&
+    elements(paragraph).every(
+      (node) =>
+        isW(node, 'pPr') || (isW(node, 'r') && elements(node).every((child) => isW(child, 'rPr')))
+    )
+  );
+}
+
 function supportedProperties(fragment: ParagraphFragmentRecord, framed: boolean): boolean {
   const allowed = new Set([
     'pStyle',
@@ -169,7 +179,11 @@ export function positionFixedFooterPageFrame<
   )
     return flow;
   const decoration = pageText(paragraphs[0]!, true);
-  if (decoration === undefined || pageText(paragraphs[1]!, false) === undefined) return flow;
+  if (
+    decoration === undefined ||
+    (pageText(paragraphs[1]!, false) === undefined && !emptyAnchor(paragraphs[1]!, anchor))
+  )
+    return flow;
   const frame = one(firstProps, 'framePr');
   const allowed = new Set(['w', 'wrap', 'vAnchor', 'hAnchor', 'x', 'yAlign']);
   if (

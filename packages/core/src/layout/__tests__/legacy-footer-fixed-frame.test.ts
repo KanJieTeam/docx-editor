@@ -144,6 +144,68 @@ test('supports fully contained fields and independent valid anchor decoration', 
   expect(paragraphs(layout(differentDecoration))[0]!.clipToBox).toBe(true);
 });
 
+test('an empty anchor retains its line and clips the fixed frame without deleting its PAGE field', () => {
+  const split = body.indexOf('</w:p>') + 6;
+  const empty = body.slice(0, split) + body.slice(split).replace(decorated, '');
+  const source = part(empty),
+    before = serializeOoxmlPart(source);
+  for (const pageNumber of [1, 49, 123]) {
+    const projected = layout(empty).withPageContext({
+      pageNumber,
+      pageCount: 200,
+      sectionPageCount: 200,
+    });
+    const [framed, anchor] = paragraphs(projected);
+    expect(framed!.clipToBox).toBe(true);
+    expect(framed!.box.width).toBe(20);
+    expect(anchor!.box.y).toBe(0);
+    expect(anchor!.box.height).toBe(14);
+    expect(projected.flowHeight).toBe(14);
+    expect(anchor!.lines[0]!.spans).toHaveLength(0);
+    expect(framed!.lines[0]!.spans.map((span) => span.text).join('')).toBe(`\t- ${pageNumber} -`);
+    expect(
+      framed!.lines[0]!.spans.filter((span) => span.text.trim()).every(
+        (span) => span.box.x >= framed!.box.x + framed!.box.width
+      )
+    ).toBe(true);
+    expect(
+      caretAt(documentOf(projected), { paragraphId: anchor!.paragraphId, offset: 0 })
+    ).not.toBeNull();
+    expect(serializeOoxmlPart(projected.part)).toBe(before);
+  }
+  expect(serializeOoxmlPart(source)).toBe(before);
+  expect(before.match(/fldCharType="begin"/g)).toHaveLength(1);
+});
+
+test('empty formatting runs do not turn an empty anchor into visible content', () => {
+  const split = body.indexOf('</w:p>') + 6;
+  for (const emptyContent of ['', '<w:r/>', '<w:r><w:rPr><w:b/></w:rPr></w:r>']) {
+    const empty = body.slice(0, split) + body.slice(split).replace(decorated, emptyContent);
+    expect(paragraphs(layout(empty))[0]!.clipToBox).toBe(true);
+    const contained = paragraphs(layout(empty.replace('w:w="400"', 'w:w="5000"')))[0]!;
+    expect(contained.clipToBox).toBe(true);
+    expect(contained.lines[0]!.spans.at(-1)!.box.x).toBeLessThan(
+      contained.box.x + contained.box.width
+    );
+  }
+});
+
+test('unknown, hidden, whitespace and non-PAGE anchors are not mistaken for an empty anchor', () => {
+  const split = body.indexOf('</w:p>') + 6;
+  for (const content of [
+    '<w:r><w:t> </w:t></w:r>',
+    '<w:r><w:tab/></w:r>',
+    '<w:r><w:br/></w:r>',
+    '<w:r><w:rPr><w:vanish/></w:rPr><w:t>hidden</w:t></w:r>',
+    '<w:bookmarkStart w:id="1" w:name="kept"/><w:bookmarkEnd w:id="1"/>',
+    '<x:r/>',
+    field.replace(' PAGE ', ' NUMPAGES '),
+  ]) {
+    const variant = body.slice(0, split) + body.slice(split).replace(decorated, content);
+    expect(paragraphs(layout(variant))[0]!.clipToBox).toBeUndefined();
+  }
+});
+
 test('defers partial-width reflow and rejects unknown or unsafe frame structures', () => {
   const variants = [
     body.replace('w:w="400"', 'w:w="4000"'),
