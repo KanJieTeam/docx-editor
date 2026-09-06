@@ -65,11 +65,7 @@ const EMPTY_CROP: SourceCrop = Object.freeze({ left: 0, top: 0, right: 0, bottom
 
 function drawingPaintFields(projection: DrawingProjection): {
   readonly hyperlinkHref: string | null;
-  readonly effects: Readonly<{
-    readonly grayscale: boolean;
-    readonly brightness: number;
-    readonly contrast: number;
-  }>;
+  readonly effects: DrawingProjection['effects'];
   readonly crop: SourceCrop;
   readonly transform: DrawingTransform;
   readonly placeholderGraphicKind: string | null;
@@ -321,11 +317,7 @@ export interface InlineDrawingRecord {
   readonly accessibility: DrawingAccessibility;
   /** Sanitized external hyperlink projection; inert until an explicit gesture activates it. */
   readonly hyperlinkHref: string | null;
-  readonly effects: Readonly<{
-    readonly grayscale: boolean;
-    readonly brightness: number;
-    readonly contrast: number;
-  }>;
+  readonly effects: DrawingProjection['effects'];
   readonly crop: SourceCrop;
   readonly transform: DrawingTransform;
   /** Fixed non-picture graphic kind for refusal labels (`chart`, `group`, …); null for pictures. */
