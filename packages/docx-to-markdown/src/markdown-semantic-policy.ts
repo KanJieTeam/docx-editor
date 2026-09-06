@@ -143,6 +143,7 @@ const MARKDOWN_SEMANTIC_POLICY_RATCHETS = Object.freeze({
     tabStops: 'layout-only',
     lines: 'represented',
     box: 'layout-only',
+    clipToBox: 'layout-only',
   } satisfies Record<keyof ParagraphFragmentRecord, MarkdownFieldPolicy>,
   listMarker: {
     text: 'explicitly-omitted',

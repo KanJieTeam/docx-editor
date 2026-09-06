@@ -2378,6 +2378,7 @@ export interface ParagraphFragmentRecord {
     readonly bottomBorder?: ParagraphBottomBorderRecord;
     // (undocumented)
     readonly box: LayoutBox;
+    readonly clipToBox?: true;
     readonly fragmentIndex: number;
     // (undocumented)
     readonly id: string;

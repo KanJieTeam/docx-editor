@@ -1624,6 +1624,7 @@ function paintFragment(
   const scale = ctx.scale;
   const element = positioned(document, 'div', fragment.box, scale);
   element.className = 'docx-paragraph-fragment layout-paragraph';
+  if (fragment.clipToBox) element.style.overflow = 'hidden';
   element.dataset.paragraphId = fragment.paragraphId;
   element.dataset.fragmentIndex = String(fragment.fragmentIndex);
   if (ctx.readOnlyParagraphIds?.has(fragment.paragraphId)) {

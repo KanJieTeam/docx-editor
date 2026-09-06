@@ -300,11 +300,11 @@ export const wordFeatures: WordFeature[] = [
     name: 'Drop caps & text frames (framePr)',
     category: 'paragraphs',
     editing: 'none',
-    rendering: 'none',
+    rendering: 'partial',
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Parsed and round-tripped; text flows inline rather than as a drop cap or positioned frame.',
+      'A centered, auto-sized PAGE footer frame can overlay an empty or centered middle-dot anchor without adding a footer line. Supported single-line fixed-width PAGE frames use their page-relative horizontal position and clip overflow above an empty anchor or a second PAGE paragraph. All fields and paragraphs survive save. Frames that need text wrapping, unsupported positions, and drop caps stay in ordinary flow.',
   },
   {
     id: 'paragraphs.hyphenation',
