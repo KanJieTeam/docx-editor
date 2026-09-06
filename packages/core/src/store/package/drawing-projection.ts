@@ -5,6 +5,7 @@
 
 import { sanitizeHref } from './sinks.ts';
 import { readBlipEffects } from './drawing-image-effects.ts';
+import { freezeVectorShapeComponent } from './drawing-vector-freeze.ts';
 import { HYPERLINK_RELATIONSHIP_TYPE, type RelationshipTargetResolver } from './hyperlink.ts';
 import { resolveRelationship } from './relationships.ts';
 import {
@@ -1271,16 +1272,7 @@ function freezeDrawingProjection(projection: DrawingProjection): DrawingProjecti
           // `components` is required and non-empty: paint iterates it, so a conditional
           // spread that ever took the empty branch would strip the field and throw.
           components: Object.freeze(
-            projection.vectorShape.components.map((component) =>
-              Object.freeze({
-                ...component,
-                subpathsEmu: Object.freeze(
-                  component.subpathsEmu.map((points) =>
-                    Object.freeze(points.map((point) => Object.freeze({ ...point })))
-                  )
-                ),
-              })
-            )
+            projection.vectorShape.components.map(freezeVectorShapeComponent)
           ),
         })
       : null,
