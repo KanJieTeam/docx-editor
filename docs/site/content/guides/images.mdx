@@ -19,6 +19,10 @@ DrawingML pictures (`w:drawing` with `pic:pic`) lay out, paint, and round-trip t
 
 Insert accepts PNG/JPEG/GIF only. Other payloads stay in the package and affect pagination through their authored extent.
 
+JPEG validation accepts large EXIF and ICC metadata segments before the frame header.
+Intrinsic dimensions account for EXIF orientation, matching the browser's decoded image.
+The original photo bytes and the authored drawing extent remain unchanged.
+
 BMP and WebP decode in the browser and paint like PNG or JPEG. BMP support includes top-down
 bitmaps and the 12-byte `BITMAPCOREHEADER`. WebP support includes lossy, lossless, and extended
 containers.
