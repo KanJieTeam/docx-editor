@@ -1,9 +1,4 @@
-// Paragraph measuring and breaking, shared between the body flow and table cells.
-//
-// Extracted from `semantic-layout.ts` unchanged so a cell paragraph breaks exactly like a
-// body paragraph: same pieces, same word boundaries, same cache discipline. The BREAK is
-// position-independent — span x offsets are relative to the paragraph origin — which is
-// what lets one cached break serve the same content at any x (body or any cell).
+// Shared body/cell line breaking. Paragraph-relative spans keep cached breaks position-independent.
 
 import {
   PAGE_BREAK_CHAR,
@@ -1496,9 +1491,13 @@ export function breakParagraph(
         wordStartEnd = line.end;
       }
       advancePastAnchorExclusionForPlacement(piece.start + consumed);
-      // Trailing fill spaces occupy the remaining band but never open continuation lines.
+      // Hang overflowing space runs on this line, preserving text/ranges and authored leading spaces.
       const lineEndWhitespace =
-        isCollapsibleLineEndWhitespace(candidate) && placeableSuffixes[pieceIndex]![boundary] !== 1;
+        isCollapsibleLineEndWhitespace(candidate) &&
+        (placeableSuffixes[pieceIndex]![boundary] !== 1 ||
+          (!layoutOwned &&
+            line.spans.length > 0 &&
+            line.width + width > lineAvailable() + OVERFLOW_TOLERANCE_PT));
       if (lineEndWhitespace) {
         width = Math.min(width, Math.max(0, lineAvailable() - line.width));
       }
