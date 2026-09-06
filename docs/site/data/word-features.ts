@@ -1048,7 +1048,8 @@ export const wordFeatures: WordFeature[] = [
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
-    notes: 'Searches headers, footers, footnotes, endnotes, table cells, and saved field results.',
+    notes:
+      'Searches headers, footers, footnotes, endnotes, body, header, and footer text boxes, table cells, and saved field results. Only anchored text boxes are searched, because an inline one paints no story. Note-owned text boxes are excluded until their drawings are selectable. A text-box match selects the text box instead of placing the caret inside it.',
   },
   {
     id: 'collab.clipboard',
