@@ -18,6 +18,8 @@ import {
   isRunLevelMcAlternateContent,
 } from '../store/package/drawing-projection.ts';
 import type { OoxmlNode } from '../store/package/ooxml-tree.ts';
+import { pageClipRegion } from './drawing-page-clip.ts';
+export { pageClipRegion } from './drawing-page-clip.ts';
 import type { ImageResourceState } from '../store/package/image-resources.ts';
 import {
   DEFAULT_REVISION_DISPLAY_MODE,
@@ -829,29 +831,6 @@ function positionFromVertical(
   return edges.top + offset;
 }
 
-/**
- * Full page clip including margin bands — page-relative anchors may paint into margins.
- *
- * Width MUST be {@link DrawingAnchorFrameContext.pageWidth}, not `contentWidth`: in a
- * multi-column section `contentWidth` is the active column, and page-relative drawings that
- * sit outside that column must still paint. Height stays the physical content band plus
- * margin bands (furniture-shrunk `contentHeight` must not clip page-relative paint).
- */
-export function pageClipRegion(
-  frameBase: Pick<
-    DrawingAnchorFrameContext,
-    'pageWidth' | 'marginLeft' | 'contentInsetTop' | 'contentInsetBottom' | 'contentBandHeight'
-  >
-): LayoutBox {
-  const bandHeight = frameBase.contentBandHeight;
-  return Object.freeze({
-    x: -frameBase.marginLeft,
-    y: -frameBase.contentInsetTop,
-    width: frameBase.pageWidth,
-    height: bandHeight + frameBase.contentInsetTop + frameBase.contentInsetBottom,
-  });
-}
-
 /** Resolve anchored x/y in page-content coordinates. */
 export function resolveAnchoredDrawingPosition(
   projection: DrawingProjection,
@@ -1296,6 +1275,8 @@ export function publishAnchoredDrawingsForParagraph(options: {
     });
     const resolved = resolveAnchoredDrawingPosition(projection, frameContext);
     const clipToCell =
+      projection.wrap !== 'inFront' &&
+      projection.wrap !== 'behind' &&
       layoutInCell &&
       options.cellBox !== null &&
       Number.isFinite(options.cellBox.height) &&
