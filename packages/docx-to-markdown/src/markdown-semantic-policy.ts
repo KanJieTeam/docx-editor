@@ -92,6 +92,7 @@ const MARKDOWN_SEMANTIC_POLICY_RATCHETS = Object.freeze({
     horizontalScalePercent: 'layout-only',
     kerningMinPt: 'layout-only',
     hidden: 'layout-only',
+    textOutline: 'layout-only',
   } satisfies Record<keyof ResolvedRunStyle, MarkdownFieldPolicy>,
   link: {
     id: 'layout-only',
