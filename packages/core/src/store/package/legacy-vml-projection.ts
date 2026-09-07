@@ -39,6 +39,14 @@ function layerOrder(raw = '0'): number {
   return value >= -2147483648 && value <= 2147483647 ? value : NaN;
 }
 const commonStyles = new Set([
+  'text-align',
+  'mso-wrap-edited',
+  'mso-width-percent',
+  'mso-height-percent',
+  'mso-position-horizontal',
+  'mso-position-vertical',
+  'mso-wrap-style',
+  'visibility',
   'position',
   'left',
   'top',
@@ -60,6 +68,20 @@ function supportedStyle(node: OoxmlElement, root: boolean): ReadonlyMap<string, 
   const styles = styleOf(node);
   if (!styles || a(node, 'opacity') || a(node, 'href') || a(node, 'src')) return null;
   for (const key of styles.keys()) if (!commonStyles.has(key)) return null;
+  const inertValues: Record<string, readonly string[]> = {
+    'text-align': ['left'],
+    'mso-wrap-edited': ['f', 't'],
+    'mso-width-percent': ['0'],
+    'mso-height-percent': ['0'],
+    'mso-position-horizontal': ['absolute'],
+    'mso-position-vertical': ['absolute'],
+    'mso-wrap-style': ['square'],
+    visibility: ['visible', 'hidden'],
+  };
+  for (const [key, allowed] of Object.entries(inertValues)) {
+    const value = styles.get(key);
+    if (value !== undefined && !allowed.includes(value)) return null;
+  }
   if (styles.has('position') && !['absolute', 'relative'].includes(styles.get('position')!))
     return null;
   if (
@@ -153,10 +175,19 @@ function readProjection(node: OoxmlElement): DrawingProjection | null {
     if (fragment === null) return null;
     fragments.push(fragment);
   }
+  const wrapNodes = children(root).filter((n) => named(n, WORD_VML, 'wrap'));
+  if (wrapNodes.length > 1) return null;
+  const wrapNode = wrapNodes[0];
+  const anchorX = wrapNode ? a(wrapNode, 'anchorx') : undefined;
+  const anchorY = wrapNode ? a(wrapNode, 'anchory') : undefined;
+  if (anchorX && !['page', 'margin', 'text', 'char'].includes(anchorX)) return null;
+  if (anchorY && !['page', 'margin', 'text', 'line'].includes(anchorY)) return null;
   const floating =
     style.get('position') === 'absolute' ||
     style.has('mso-position-horizontal-relative') ||
-    style.has('mso-position-vertical-relative');
+    style.has('mso-position-vertical-relative') ||
+    !!anchorX ||
+    !!anchorY;
   const horizontal = new Map<string, DrawingHorizontalReferenceFrame>([
     ['text', 'column'],
     ['char', 'character'],
@@ -164,7 +195,7 @@ function readProjection(node: OoxmlElement): DrawingProjection | null {
     ['margin', 'margin'],
     ['left-margin-area', 'leftMargin'],
     ['right-margin-area', 'rightMargin'],
-  ]).get(style.get('mso-position-horizontal-relative') ?? 'text');
+  ]).get(style.get('mso-position-horizontal-relative') ?? anchorX ?? 'text');
   const vertical = new Map<string, DrawingVerticalReferenceFrame>([
     ['text', 'paragraph'],
     ['line', 'line'],
@@ -172,7 +203,7 @@ function readProjection(node: OoxmlElement): DrawingProjection | null {
     ['margin', 'margin'],
     ['top-margin-area', 'topMargin'],
     ['bottom-margin-area', 'bottomMargin'],
-  ]).get(style.get('mso-position-vertical-relative') ?? 'text');
+  ]).get(style.get('mso-position-vertical-relative') ?? anchorY ?? 'text');
   const left = points(style.get('margin-left') ?? style.get('left') ?? '0'),
     top = points(style.get('margin-top') ?? style.get('top') ?? '0');
   const z = layerOrder(style.get('z-index'));
@@ -184,15 +215,13 @@ function readProjection(node: OoxmlElement): DrawingProjection | null {
     Math.abs(top) > 100_000
   )
     return null;
-  const wrapNodes = children(root).filter((n) => named(n, WORD_VML, 'wrap'));
-  if (wrapNodes.length > 1) return null;
-  const wrapNode = wrapNodes[0],
-    wrap = wrapNode ? (a(wrapNode, 'type') ?? 'none') : 'none';
+  const wrap = wrapNode ? (a(wrapNode, 'type') ?? 'none') : 'none';
   if (
     !['none', 'square', 'topAndBottom', 'tight'].includes(wrap) ||
     (wrapNode &&
       wrapNode.attributes.some(
-        (attr) => !['type', 'side'].includes(attr.localName) || attr.namespaceUri
+        (attr) =>
+          !['type', 'side', 'anchorx', 'anchory'].includes(attr.localName) || attr.namespaceUri
       ))
   )
     return null;
@@ -219,17 +248,24 @@ function readProjection(node: OoxmlElement): DrawingProjection | null {
     if (!Number.isFinite(value) || value < 0 || value > 1000) return null;
     distances[side] = Math.round(value * 12700);
   }
+  const photo =
+    root.localName !== 'group' &&
+    fragments.length === 1 &&
+    typeof fragments[0] !== 'string' &&
+    fragments[0]?.nativeCrop
+      ? fragments[0]
+      : undefined;
   return Object.freeze({
     drawingNodeId: node.id,
     ownerPartName: '',
     kind: floating ? 'anchored' : 'inline',
-    relationshipId: null,
+    relationshipId: photo?.relationshipId ?? null,
     docPrId: null,
     name: a(root, 'id') ?? 'Legacy graphic',
     title: a(root, 'title') ?? '',
     description: a(root, 'alt') ?? '',
     hyperlinkHref: null,
-    hidden: false,
+    hidden: style.get('visibility') === 'hidden',
     extentEmu: Object.freeze({ cx: Math.round(width * 12700), cy: Math.round(height * 12700) }),
     effectExtentEmu: emptyEdges,
     inlineDistancesEmu: emptyEdges,
@@ -282,10 +318,30 @@ function readProjection(node: OoxmlElement): DrawingProjection | null {
           allowOverlap: true,
         })
       : null,
-    picture: null,
+    picture: photo
+      ? Object.freeze({
+          embeddedRelationshipId: photo.relationshipId,
+          linkedRelationshipId: null,
+          crop: photo.nativeCrop!,
+          fillMode: 'stretch' as const,
+          presetGeometry: null,
+          transform: Object.freeze({
+            rotationDegrees: 0,
+            flipHorizontal: false,
+            flipVertical: false,
+            offsetEmu: Object.freeze({ x: 0, y: 0 }),
+            extentEmu: Object.freeze({
+              cx: Math.round(width * 12700),
+              cy: Math.round(height * 12700),
+            }),
+          }),
+        })
+      : null,
     vectorShape: null,
     textboxStory: null,
-    legacyGraphic: Object.freeze({ width, height, fragments: Object.freeze(fragments) }),
+    ...(!photo
+      ? { legacyGraphic: Object.freeze({ width, height, fragments: Object.freeze(fragments) }) }
+      : {}),
     locks: Object.freeze({ select: true, move: true, resize: true, changeAspect: true }),
     effects: Object.freeze({ grayscale: false, brightness: 0, contrast: 0 }),
     compatibilityBranchNodeId: null,

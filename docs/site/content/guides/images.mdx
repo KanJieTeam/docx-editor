@@ -19,6 +19,10 @@ DrawingML pictures (`w:drawing` with `pic:pic`) lay out, paint, and round-trip t
 
 Insert accepts PNG/JPEG/GIF only. Other payloads stay in the package and affect pagination through their authored extent.
 
+JPEG validation accepts large EXIF and ICC metadata segments before the frame header.
+Intrinsic dimensions account for EXIF orientation, matching the browser's decoded image.
+The original photo bytes and the authored drawing extent remain unchanged.
+
 BMP and WebP decode in the browser and paint like PNG or JPEG. BMP support includes top-down
 bitmaps and the 12-byte `BITMAPCOREHEADER`. WebP support includes lossy, lossless, and extended
 containers.
@@ -78,6 +82,10 @@ editor.snapshot().image; // reference-stable until selection or image fields mov
 | `topAndBottom` | Keeps text above and below                      | `wrapTopAndBottom`           |
 | `behind`       | Places the picture behind document content      | `wrapNone`, `@behindDoc="1"` |
 | `inFront`      | Places the picture in front of document content | `wrapNone`, `@behindDoc="0"` |
+
+Images in front of or behind text can paint beyond their anchor cells. Their cell-relative
+position is preserved, but the cell does not crop these overlays. Page-relative images are
+clipped to the physical sheet, including its margins.
 
 The `resourceStatus` field reports image availability:
 
@@ -156,6 +164,8 @@ Floating pictures: select in the canvas, drag to move (`setImagePosition`), eigh
 
 Wrap changes are **layout-structural**: exclusion zones feed line breaking before paint. Square/tight/through use authored polygons (with distances and `effectExtent`); top-and-bottom and square variants reflow body text accordingly. Header/footer rule: page-relative anchored letterheads do **not** inflate the header box. Body flow height still sizes the furniture band.
 
+Text distances inherit each missing side from `wp:anchor`; an explicit wrap-child value, including zero, overrides that side. When square or rectangular tight wrapping leaves no passage wide enough for the next glyph, text clears the image before continuing. The clearance participates in pagination without repeating the gap on subsequent lines. Nonrectangular contours keep their existing scanline behavior.
+
 ## Accessibility
 
 Alt text uses `@descr`, then `@title`; `@name` is never announced. A picture with neither description nor title is exposed as decorative. Hidden drawings (`@hidden`) suppress paint, hit-testing, and handles while remaining preserved on save.
@@ -168,6 +178,10 @@ Alt text uses `@descr`, then `@title`; `@name` is never announced. A picture wit
 - Optional explicit download-and-embed path for external targets is user-initiated only (bounded size/content-type).
 
 ## Drawing limits
+
+The editor renders brightness, contrast, grayscale, and bilevel black-and-white picture adjustments.
+It preserves image alpha and adjustment markup when you save.
+PDF export does not apply these adjustments.
 
 | Drawing content                                         | Status                                               |
 | ------------------------------------------------------- | ---------------------------------------------------- |
@@ -199,7 +213,7 @@ rotation, and mixed unsupported members are not partially rendered. Only recogni
 standard shape templates are accepted. An already-selected DrawingML MC branch never
 paints its dead VML fallback too; VML-only MC fallback support is unchanged.
 
-Generated previews use bounded static SVG resources. Embedded members still pass the
+Standalone photos reuse validated image resources and retain their authored crop. Groups, WordArt, and color-key previews use bounded static SVG resources. Embedded members still pass the
 normal image validation and decode limits; an external or missing member never triggers
 a fetch or a misleading partial group preview.
 

@@ -48,10 +48,13 @@ export function anchoredDrawingAtomsInParagraph(
     projection: DrawingProjection;
     revisions: readonly RevisionAttribution[];
   }[] = [];
-  const visit = (node: OoxmlNode, revisions: readonly RevisionAttribution[]): void => {
-    // Every anchor consumer uses this walk. Hidden runs cannot add wrapping,
-    // paint, or page bounds, but the separate model-offset walk still counts them.
-    if (isDirectlyHiddenRun(node)) return;
+  const visit = (
+    node: OoxmlNode,
+    revisions: readonly RevisionAttribution[],
+    hidden = false
+  ): void => {
+    // Apply direct-run hiding only to the new VML projection.
+    const inHiddenRun = hidden || isDirectlyHiddenRun(node);
     if (node.kind === 'drawing') {
       const projection =
         context.projectionForAtom?.(node.id) ??
@@ -60,6 +63,7 @@ export function anchoredDrawingAtomsInParagraph(
       return;
     }
     if (isRunLevelMcAlternateContent(node) || isLegacyVmlAtom(node)) {
+      if (inHiddenRun && isLegacyVmlAtom(node)) return;
       const projection = context.projectionForAtom?.(node.id) ?? null;
       if (projection?.kind === 'anchored') atoms.push({ atomId: node.id, projection, revisions });
       return;
@@ -67,7 +71,7 @@ export function anchoredDrawingAtomsInParagraph(
     if ('children' in node) {
       const attribution = isRevisionWrapper(node) ? revisionAttributionOf(node) : null;
       const enclosing = attribution ? withRevision(revisions, attribution) : revisions;
-      for (const child of node.children) visit(child, enclosing);
+      for (const child of node.children) visit(child, enclosing, inHiddenRun);
     }
   };
   for (const child of paragraph.children) visit(child, NO_REVISIONS);

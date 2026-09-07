@@ -45,8 +45,9 @@ export function styleOf(node: OoxmlElement): ReadonlyMap<string, string> | null 
     const i = part.indexOf(':');
     if (i < 1 || styles.size >= 48) return null;
     const key = part.slice(0, i).trim().toLowerCase();
-    if (styles.has(key)) return null;
-    styles.set(key, part.slice(i + 1).trim());
+    const value = part.slice(i + 1).trim();
+    if (styles.has(key) && styles.get(key) !== value) return null;
+    styles.set(key, value);
   }
   return styles;
 }

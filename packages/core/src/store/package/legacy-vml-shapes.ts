@@ -1,3 +1,4 @@
+import type { SourceCrop } from './drawing-projection.ts';
 import { RELATIONSHIPS_NAMESPACE_URI, type OoxmlElement } from './ooxml-tree.ts';
 import { legacyChromaKeyFilter } from './legacy-vml-chromakey.ts';
 import {
@@ -19,7 +20,7 @@ import {
 /** Only generated, escaped SVG and relationship slots; never authored markup. */
 export type LegacyGraphicFragment =
   | string
-  | Readonly<{ relationshipId: string; before: string; after: string }>;
+  | Readonly<{ relationshipId: string; before: string; after: string; nativeCrop?: SourceCrop }>;
 export interface LegacyGraphicProjection {
   readonly width: number;
   readonly height: number;
@@ -337,6 +338,7 @@ export function legacyShapeFragment(
     if (![width, height].every((value) => Number.isFinite(value) && value <= 100_000)) return null;
     return Object.freeze({
       relationshipId: id,
+      ...(!filter ? { nativeCrop: Object.freeze({ left, top, right, bottom }) } : {}),
       before: `<svg x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" viewBox="0 0 ${box.width} ${box.height}" overflow="hidden">${filter?.definition ?? ''}<image x="${-left * width}" y="${-top * height}" width="${width}" height="${height}" preserveAspectRatio="none"${filter ? ` filter="url(#${filter.id})"` : ''} href="`,
       after: '"/></svg>',
     });

@@ -151,7 +151,7 @@ test('does not paint VML graphics in a hidden run', () => {
   }
 });
 
-test('direct vanish suppresses VML and DrawingML anchors without moving model offsets', () => {
+test('direct vanish suppresses VML anchors and preserves existing DrawingML behavior', () => {
   const wp = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
   const a = 'http://schemas.openxmlformats.org/drawingml/2006/main';
   const pic = 'http://schemas.openxmlformats.org/drawingml/2006/picture';
@@ -175,14 +175,14 @@ test('direct vanish suppresses VML and DrawingML anchors without moving model of
         expect(paragraphTextOf(reader.part(), paragraph.id)).toBe('A\uFFFCZ');
         expect([...drawingModelOffsetsInParagraph(paragraph).values()]).toEqual([1]);
         expect(anchoredDrawingAtomsInParagraph(paragraph, bundle.bodyContext)).toHaveLength(
-          hidden ? 0 : 1
+          hidden && drawing === legacy ? 0 : 1
         );
         const result = layoutSemanticDocument(reader.part(), 1, {
           measurer: createFixedMeasurer(6, 14),
           inlineDrawingLayout: bundle.bodyContext,
         });
         expect(result.pages.flatMap((page) => page.anchoredDrawings ?? [])).toHaveLength(
-          hidden ? 0 : 1
+          hidden && drawing === legacy ? 0 : 1
         );
         const trailing = linesOf(result)
           .flatMap((line) => line.spans)

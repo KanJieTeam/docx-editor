@@ -65,6 +65,21 @@ function commit(part: OoxmlPart, doc: PMNode): OoxmlPart {
 }
 
 describe('native VML binding model offsets', () => {
+  test.each([
+    '<w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="914400" cy="914400"/><wp:docPr id="1" name="Photo"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="urn:clip"/></a:graphic></wp:inline></w:drawing>',
+    '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Fallback><w:pict/></mc:Fallback></mc:AlternateContent>',
+  ])('replacing text also preserves existing drawing atom offsets: %s', (atom) => {
+    const part = load(`<w:p><w:r>${atom}<w:t>A</w:t></w:r></w:p>`);
+    const projected = treeToDoc(part).child(0);
+    const changed = document([paragraph(projected, [projected.child(0), treeSchema.text('B')])]);
+    const mapped = docToTreeOps(part, changed);
+    expect(mapped.ok && mapped.ops).toEqual([
+      { op: 'deleteText', paragraphId: projected.attrs.nodeId, start: 1, end: 2 },
+      { op: 'insertText', paragraphId: projected.attrs.nodeId, offset: 1, text: 'B' },
+    ]);
+    expect(paragraphTextOf(commit(part, changed), projected.attrs.nodeId)).toBe('\ufffcB');
+  });
+
   test('replacing text after a VML atom does not delete the picture', () => {
     const part = load(),
       projected = treeToDoc(part).child(0);

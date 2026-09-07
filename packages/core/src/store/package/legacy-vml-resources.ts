@@ -1,7 +1,10 @@
 import type { DrawingProjection } from './drawing-projection.ts';
 import type { ImageResourceState } from './image-resources.ts';
 import type { ImageResourceLimits } from '../runtime/limits.ts';
-import type { ValidatedImageBytesRegistry } from './validated-image-bytes.ts';
+import type {
+  ValidatedImageBytesRegistry,
+  ValidatedImageBytesReleaseToken,
+} from './validated-image-bytes.ts';
 import { sha256FontBytes } from './sha256.ts';
 import type { LegacyGraphicProjection } from './legacy-vml-shapes.ts';
 
@@ -34,6 +37,7 @@ export function createLegacyGraphicResolver(options: {
   readonly limits: ImageResourceLimits;
   readonly ensureActive: () => void;
 }): (projection: DrawingProjection) => Promise<ImageResourceState> {
+  const retained = new Map<string, ValidatedImageBytesReleaseToken>();
   const cached = new WeakMap<
     LegacyGraphicProjection,
     { contentId: string; state: ImageResourceState }
@@ -100,14 +104,26 @@ export function createLegacyGraphicResolver(options: {
       previous.state.resourceKey ===
         `${projection.ownerPartName}\0legacy:${projection.drawingNodeId}:${contentId}\0${contentId}` &&
       registry.mint(previous.state.validatedHandle, contentId)
-    )
+    ) {
+      const ownerKey = `${projection.ownerPartName}\0${projection.drawingNodeId}`;
+      const current = retained.get(ownerKey);
+      if (current?.resourceKey !== previous.state.resourceKey) {
+        const token = registry.retain(previous.state.validatedHandle);
+        if (current) registry.release(current);
+        retained.set(ownerKey, token);
+      }
       return previous.state;
+    }
     // The source XML part is provenance, not a fabricated media part. Include
     // content in the derived resource base so a new preview cannot invalidate
     // already-retained photo handles while a paint frame still owns them.
     const resourceKey = `${projection.ownerPartName}\0legacy:${projection.drawingNodeId}:${contentId}\0${contentId}`;
     const validatedHandle = registry.acquire(resourceKey, contentId, bytes);
-    registry.retain(validatedHandle);
+    const token = registry.retain(validatedHandle);
+    const ownerKey = `${projection.ownerPartName}\0${projection.drawingNodeId}`;
+    const previousToken = retained.get(ownerKey);
+    if (previousToken) registry.release(previousToken);
+    retained.set(ownerKey, token);
     const state: ImageResourceState = Object.freeze({
       kind: 'ready',
       partName: projection.ownerPartName,

@@ -22,7 +22,11 @@ import {
   type OoxmlPart,
   type OoxmlParagraphNode,
 } from '../package/ooxml-tree.ts';
-import { mintValidatedImageBytes } from '../package/validated-image-bytes.ts';
+import {
+  mintValidatedImageBytes,
+  retainValidatedImageBytes,
+  releaseValidatedImageBytesToken,
+} from '../package/validated-image-bytes.ts';
 import { paragraphLength, segmentsOf } from '../store/tree-op-segments.ts';
 import { paragraphTextOf } from '../store/tree-ops.ts';
 import { TreeDocumentStore } from '../store/tree-store.ts';
@@ -198,10 +202,29 @@ describe('bounded legacy VML projections', () => {
       expect(projection.kind).toBe('inline');
       expect(projection.extentEmu).toEqual({ cx: 914400, cy: 457200 });
       expect(projection.ownerPartName).toBe('/word/document.xml');
-      expect(projection.legacyGraphic?.fragments).toHaveLength(1);
-      expect(projection.legacyGraphic?.fragments[0]).toMatchObject({ relationshipId: 'rPhoto' });
+      expect(projection.legacyGraphic).toBeUndefined();
+      expect(projection.picture?.embeddedRelationshipId).toBe('rPhoto');
       expect(serializeOoxmlPart(part)).toBe(before);
     }
+  });
+
+  test('accepts inert Word styles but refuses unsupported layout or conflicting duplicates', () => {
+    const style =
+      'position:absolute;width:72pt;height:36pt;mso-width-percent:0;mso-width-percent:0;text-align:left;mso-position-horizontal:absolute;mso-position-vertical:absolute';
+    const content = `<w:pict>${photo(style).replace('</v:shape>', '<w10:wrap xmlns:w10="urn:schemas-microsoft-com:office:word" anchorx="page" anchory="margin"/></v:shape>')}</w:pict>`;
+    const projection = onlyProjection(parse(content));
+    expect(projection.picture).not.toBeNull();
+    expect(projection.position?.horizontal.relativeFrom).toBe('page');
+    expect(projection.position?.vertical.relativeFrom).toBe('margin');
+    for (const altered of [
+      content.replace(
+        'mso-width-percent:0;mso-width-percent:0',
+        'mso-width-percent:0;mso-width-percent:50'
+      ),
+      content.replace('mso-position-horizontal:absolute', 'mso-position-horizontal:center'),
+      content.replace('anchorx="page"', 'anchorx="unknown"'),
+    ])
+      expect(projectDrawingsInPart(parse(altered))).toHaveLength(0);
   });
 
   test('does not project a dead VML fallback beside the selected DrawingML picture', () => {
@@ -329,6 +352,23 @@ describe('bounded legacy VML projections', () => {
 });
 
 describe('derived legacy graphics resources', () => {
+  test('plain photos reuse validated raster resources and retain authored crops', async () => {
+    const content = `<w:pict>${photo().replace('o:title="photo"', 'cropleft="8192f"')}</w:pict>`;
+    const pkg = packageOf(content);
+    const lookup = createImageResourceCache(pkg, { decodePort: decodePort() });
+    try {
+      const projection = projectDrawingsInPackage(pkg)[0]!;
+      expect(projection.picture?.crop.left).toBe(0.125);
+      expect(projection.legacyGraphic).toBeUndefined();
+      const state = await lookup.resolveForProjection(projection);
+      const original = await lookup.resolveEmbedded(projection.ownerPartName, 'rPhoto');
+      expect(state).toBe(original);
+      expect(state.kind === 'ready' && state.mime).toBe('image/png');
+    } finally {
+      lookup.dispose();
+    }
+  });
+
   test('invalidates colour-key previews without changing original XML or PNG bytes', async () => {
     const keyed = (key: string) =>
       `<w:pict>${photo().replace('o:title="photo"', `chromakey="${key}"`)}</w:pict>`;
@@ -337,6 +377,8 @@ describe('derived legacy graphics resources', () => {
     const lookup = createImageResourceCache(pkg, { decodePort: decodePort() });
     try {
       const white = await lookup.resolveForProjection(onlyProjection(parse(keyed('#ffffff'))));
+      if (white.kind !== 'ready') throw new Error('Expected white preview');
+      const whitePaint = retainValidatedImageBytes(white.validatedHandle);
       const red = await lookup.resolveForProjection(onlyProjection(parse(keyed('#ff0000'))));
       expect(svgOf(white)).toContain('vml-key-ffffff');
       expect(svgOf(red)).toContain('vml-key-ff0000');
@@ -344,6 +386,8 @@ describe('derived legacy graphics resources', () => {
       if (white.kind !== 'ready' || red.kind !== 'ready')
         throw new Error('Expected ready previews');
       expect(white.contentId).not.toBe(red.contentId);
+      releaseValidatedImageBytesToken(whitePaint);
+      expect(mintValidatedImageBytes(white.validatedHandle, white.contentId)).toBeNull();
       const after = unzipSync(writeOoxmlPackage(pkg));
       expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
       for (const name of Object.keys(before)) expect(after[name]).toEqual(before[name]);
@@ -444,10 +488,12 @@ describe('derived legacy graphics resources', () => {
       expect(resizedProjection.drawingNodeId).toBe(oldProjection.drawingNodeId);
       expect(editedProjection.drawingNodeId).toBe(oldProjection.drawingNodeId);
       const oldState = await lookup.resolveForProjection(oldProjection);
+      if (oldState.kind !== 'ready') throw new Error('Expected old preview');
+      const oldPaint = retainValidatedImageBytes(oldState.validatedHandle);
       const resized = await lookup.resolveForProjection(resizedProjection);
+      expect(svgOf(resized)).toContain('viewBox="0 0 240 30"');
       const edited = await lookup.resolveForProjection(editedProjection);
       expect(svgOf(oldState)).toContain('>Old</text>');
-      expect(svgOf(resized)).toContain('viewBox="0 0 240 30"');
       expect(svgOf(edited)).toContain('>New</text>');
       if (oldState.kind !== 'ready' || resized.kind !== 'ready' || edited.kind !== 'ready')
         throw new Error('Expected ready resources');
@@ -455,6 +501,9 @@ describe('derived legacy graphics resources', () => {
       expect(edited.contentId).not.toBe(resized.contentId);
       // A new resource must not revoke a previously retained paint frame.
       expect(svgOf(oldState)).toContain('>Old</text>');
+      releaseValidatedImageBytesToken(oldPaint);
+      expect(mintValidatedImageBytes(oldState.validatedHandle, oldState.contentId)).toBeNull();
+      expect(mintValidatedImageBytes(resized.validatedHandle, resized.contentId)).toBeNull();
     } finally {
       lookup.dispose();
     }

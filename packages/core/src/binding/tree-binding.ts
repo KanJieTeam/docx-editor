@@ -1,3 +1,4 @@
+import { isRunLevelMcAlternateContent } from '../store/package/drawing-projection.ts';
 // Canonical tree <-> ProseMirror binding (tasks 6.1, 6.2, 6.3).
 //
 // Forward: project one revision of the tree into a ProseMirror doc.
@@ -165,7 +166,10 @@ function tokensOfParagraph(paragraph: OoxmlNode): Token[] {
         kind: 'unknown',
         nodeId: grand.id,
         label: unknownLabel(grand),
-        modelLength: isLegacyVmlAtom(grand) ? 1 : 0,
+        modelLength:
+          grand.kind === 'drawing' || isRunLevelMcAlternateContent(grand) || isLegacyVmlAtom(grand)
+            ? 1
+            : 0,
       });
     }
   };
@@ -288,7 +292,7 @@ export function treeToDoc(part: OoxmlPart): PMNode {
 }
 
 /** Read a PM paragraph back into the same token shape, for comparison. */
-function tokensOfNode(node: PMNode, legacyAtomIds: ReadonlySet<string>): Token[] {
+function tokensOfNode(node: PMNode, modelAtomIds: ReadonlySet<string>): Token[] {
   const tokens: Token[] = [];
   node.forEach((child) => {
     if (child.isText && child.text) {
@@ -303,7 +307,7 @@ function tokensOfNode(node: PMNode, legacyAtomIds: ReadonlySet<string>): Token[]
         kind: 'unknown',
         nodeId: String(child.attrs.nodeId ?? ''),
         label: String(child.attrs.label ?? ''),
-        modelLength: legacyAtomIds.has(String(child.attrs.nodeId ?? '')) ? 1 : 0,
+        modelLength: modelAtomIds.has(String(child.attrs.nodeId ?? '')) ? 1 : 0,
       });
     }
   });
@@ -507,13 +511,13 @@ export function docToTreeOps(part: OoxmlPart, doc: PMNode): MapResult {
   const treeParagraphs = bodyParagraphs(part);
   // Only canonical run tokens decide which unknown nodes occupy one model unit.
   // A projection cannot forge a length, or promote an opaque descendant to an atom.
-  const legacyAtomIds = new Set<string>();
+  const modelAtomIds = new Set<string>();
   for (const paragraph of treeParagraphs) {
     for (const token of tokensOfParagraph(paragraph)) {
-      if (token.kind === 'unknown' && token.modelLength === 1) legacyAtomIds.add(token.nodeId);
+      if (token.kind === 'unknown' && token.modelLength === 1) modelAtomIds.add(token.nodeId);
     }
   }
-  const readTokens: TokenReader = (node) => tokensOfNode(node, legacyAtomIds);
+  const readTokens: TokenReader = (node) => tokensOfNode(node, modelAtomIds);
   const docParagraphs: PMNode[] = [];
   doc.forEach((node) => {
     if (node.type.name === 'paragraph') docParagraphs.push(node);
