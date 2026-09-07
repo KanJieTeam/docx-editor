@@ -166,7 +166,7 @@ export function pendingLineFlowExtent(
 
 /** Recompute topAndBottom skip at placement time from live page zones and absolute line top. */
 export function pendingLineExclusionSkipAtPlacement(
-  line: PendingLine,
+  line: Pick<PendingLine, 'height' | 'exclusionSkipBefore'>,
   lineTopY: number,
   zones: readonly ExclusionZone[]
 ): number {
