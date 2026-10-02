@@ -43,6 +43,10 @@ import { DocumentHandle } from '@docx-editor.dev/core/contracts/editor';
 import { DocumentRefresh } from '@docx-editor.dev/core/editor';
 import { DocumentRefreshError } from '@docx-editor.dev/core/editor';
 import { DocumentRefreshState } from '@docx-editor.dev/core/editor';
+import { DocumentSearchFindOptions } from '@docx-editor.dev/core/editor';
+import { DocumentSearchHighlight } from '@docx-editor.dev/core/editor';
+import { DocumentSearchNavigateOptions } from '@docx-editor.dev/core/editor';
+import { DocumentSearchOptions } from '@docx-editor.dev/core/editor';
 import { DocumentSource } from '@docx-editor.dev/core/contracts/editor';
 import * as _docx_editor_dev_core from '@docx-editor.dev/core';
 import * as _docx_editor_dev_i18n from '@docx-editor.dev/i18n';
@@ -75,6 +79,13 @@ import { FontSourceSubstitution } from '@docx-editor.dev/core/contracts/editor';
 import { FontUrlSource } from '@docx-editor.dev/core/editor';
 import { FunctionalComponent } from 'vue';
 import { generateRulerTicks } from '@docx-editor.dev/core/editor';
+import { HIGHLIGHT_REFRESH_MS } from '@docx-editor.dev/core/editor';
+import { HighlightHit } from '@docx-editor.dev/core/contracts/editor';
+import { HighlightOptions } from '@docx-editor.dev/core/contracts/editor';
+import { HighlightRange } from '@docx-editor.dev/core/contracts/editor';
+import { HighlightRect } from '@docx-editor.dev/core/contracts/editor';
+import { HighlightResult } from '@docx-editor.dev/core/contracts/editor';
+import { HighlightSource } from '@docx-editor.dev/core/editor';
 import { HistoryGroupBindingOptions } from '@docx-editor.dev/core/editor';
 import { ImageDecodePort } from '@docx-editor.dev/core/editor';
 import { ImageWrapTarget } from '@docx-editor.dev/core/editor';
@@ -124,6 +135,10 @@ import { RulerTick } from '@docx-editor.dev/core/editor';
 import { RulerUnit } from '@docx-editor.dev/core/editor';
 import { runToolbarCommand } from '@docx-editor.dev/core/editor';
 import { ScrollToAnchorOptions } from '@docx-editor.dev/core/contracts/editor';
+import { SEARCH_DEBOUNCE_MS } from '@docx-editor.dev/core/editor';
+import { SEARCH_HIGHLIGHT_PRIORITY } from '@docx-editor.dev/core/editor';
+import { SEARCH_HIGHLIGHT_SET } from '@docx-editor.dev/core/editor';
+import { SEARCH_MATCH_LIMIT } from '@docx-editor.dev/core/editor';
 import { SectionProperties } from '@docx-editor.dev/core/editor';
 import { ShallowRef } from 'vue';
 import { SupportedImageMime } from '@docx-editor.dev/core/editor';
@@ -2208,6 +2223,14 @@ export { DocumentRefreshError }
 
 export { DocumentRefreshState }
 
+export { DocumentSearchFindOptions }
+
+export { DocumentSearchHighlight }
+
+export { DocumentSearchNavigateOptions }
+
+export { DocumentSearchOptions }
+
 export { DocxDocument }
 
 // @public (undocumented)
@@ -3111,6 +3134,7 @@ export interface DocxEditorNavigationProps extends UseNavigationPaneOptions {
     children?: DocxEditorChildren;
     // (undocumented)
     className?: string;
+    searchHighlight?: DocumentSearchHighlight;
     // (undocumented)
     style?: CSSProperties;
     // (undocumented)
@@ -4327,6 +4351,20 @@ export { generateRulerTicks }
 
 // @public (undocumented)
 export type HeaderFooterState = Exclude<ReturnType<Editor['getHeaderFooterState']>, null>;
+
+export { HIGHLIGHT_REFRESH_MS }
+
+export { HighlightHit }
+
+export { HighlightOptions }
+
+export { HighlightRange }
+
+export { HighlightRect }
+
+export { HighlightResult }
+
+export { HighlightSource }
 
 // @public (undocumented)
 export const HorizontalRuler: vue.DefineComponent<vue.ExtractPropTypes<{
@@ -5696,11 +5734,13 @@ export interface ScopedChromeAnchor {
 
 export { ScrollToAnchorOptions }
 
-// @public (undocumented)
-export const SEARCH_DEBOUNCE_MS = 150;
+export { SEARCH_DEBOUNCE_MS }
 
-// @public (undocumented)
-export const SEARCH_MATCH_LIMIT = 2000;
+export { SEARCH_HIGHLIGHT_PRIORITY }
+
+export { SEARCH_HIGHLIGHT_SET }
+
+export { SEARCH_MATCH_LIMIT }
 
 // @public
 export const Slot: vue.DefineComponent<{}, () => VNode<vue.RendererNode, vue.RendererElement, {
@@ -5828,6 +5868,8 @@ export interface TextFormFieldDialogFields {
     // (undocumented)
     type: string;
 }
+
+export { TextMatch }
 
 // @public @deprecated (undocumented)
 export const TitleBar: vue.DefineComponent<{}, () => vue.VNode<vue.RendererNode, vue.RendererElement, {
@@ -6341,36 +6383,34 @@ export interface UseDocumentOutlineResult {
     readonly selectedBlockId: ComputedRef<string | null>;
 }
 
-// @public (undocumented)
-export function useDocumentSearch(): UseDocumentSearchResult;
+// @public
+export function useDocumentSearch(options?: MaybeRefOrGetter<UseDocumentSearchOptions>): UseDocumentSearchResult;
 
-// @public (undocumented)
+// @public
+export interface UseDocumentSearchOptions {
+    readonly highlight?: DocumentSearchHighlight;
+}
+
+// @public
 export interface UseDocumentSearchResult {
-    // (undocumented)
     readonly activeIndex: ComputedRef<number>;
-    // (undocumented)
+    readonly activeMatch: ComputedRef<TextMatch | null>;
     readonly clear: () => void;
-    // (undocumented)
-    readonly goTo: (index: number) => void;
-    // (undocumented)
+    readonly find: (query: string, options?: DocumentSearchFindOptions) => readonly TextMatch[];
+    readonly goTo: (index: number) => boolean;
     readonly isPending: ComputedRef<boolean>;
     // (undocumented)
     readonly matchCase: ComputedRef<boolean>;
-    // (undocumented)
     readonly matches: ComputedRef<readonly TextMatch[]>;
+    readonly next: () => boolean;
     // (undocumented)
-    readonly next: () => void;
-    // (undocumented)
-    readonly previous: () => void;
-    // (undocumented)
+    readonly previous: () => boolean;
     readonly query: ComputedRef<string>;
     // (undocumented)
     readonly setMatchCase: (value: boolean) => void;
-    // (undocumented)
     readonly setQuery: (query: string) => void;
     // (undocumented)
     readonly setWholeWord: (value: boolean) => void;
-    // (undocumented)
     readonly truncated: ComputedRef<boolean>;
     // (undocumented)
     readonly wholeWord: ComputedRef<boolean>;
@@ -6443,6 +6483,12 @@ export function useFonts(...origins: readonly MaybeRefOrGetter<FontOrigin>[]): M
 
 // @public (undocumented)
 export function useHeaderFooterState(): ShallowRef<HeaderFooterState | null>;
+
+// @public
+export function useHighlightAt<R extends HighlightRange = HighlightRange>(name?: MaybeRefOrGetter<string>): Readonly<ShallowRef<HighlightHit<R> | null>>;
+
+// @public
+export function useHighlights(name: MaybeRefOrGetter<string>, source: MaybeRefOrGetter<HighlightSource>, options?: MaybeRefOrGetter<HighlightOptions>): ComputedRef<HighlightResult>;
 
 // @public
 export function useHistoryGroup(input: HistoryGroupBindingOptions): UseHistoryGroupReturn;

@@ -1,10 +1,10 @@
 ---
 title: 'Navigate a document'
-description: 'Build page controls, search, and paragraph highlights with the editor API.'
+description: 'Build page controls, search, paragraph highlights, and text highlights with the editor API.'
 category: 'Guides'
 ---
 
-Use the editor API to build page controls, an outline, a search panel, or review findings. These methods scroll, select text, and highlight paragraphs without direct DOM access.
+Use the editor API to build page controls, an outline, a search panel, a glossary, or review findings. These methods scroll, select text, and highlight paragraphs or text without direct DOM access.
 
 These methods belong to the browser `Editor` API, separate from the Office.js-shaped document model.
 
@@ -18,6 +18,9 @@ These methods belong to the browser `Editor` API, separate from the Office.js-sh
 | `clearAnchorHighlight(options)` | Dismiss the paragraph highlight. | No |
 | `findMatches(query, options)` | Find text in every document region. | No |
 | `selectMatch(match)` | Select a match and show it. | Yes |
+| `setHighlights(name, ranges, options)` | Mark text ranges, such as search results or glossary terms. | No |
+| `clearHighlights(name)` | Remove one set of text highlights, or all of them. | No |
+| `getHighlightsAt(clientX, clientY)` | Read the text highlights under a pointer position. | No |
 | `exec({ type: 'setSelection', anchor })` | Move the caret to a paragraph reference. | Yes |
 
 ## Try document navigation
@@ -311,6 +314,316 @@ Each `TextMatch` includes the matched `text`. It can include `contextBefore` and
 `selectMatch()` selects the match and shows it. If the match is in a header, footer, or note, the editor opens that region first. A match in a text box selects the text box drawing. The method does not move focus. It returns an `ExecResult`; check `ok` before you update your interface.
 
 Matches refer to positions in the open document. After the document changes, search again.
+
+## Search and highlight
+
+The **Find** tab highlights every match while it is open, and the active match in a second color. Enter and Shift+Enter move between matches. To highlight only the active match, or none, set `searchHighlight`:
+
+```tsx
+<DocxEditor.Navigation searchHighlight="active" />
+```
+
+<Callout>
+  <kbd>Ctrl</kbd>+<kbd>F</kbd> and <kbd>Cmd</kbd>+<kbd>F</kbd> open the browser's search by default,
+  so a page that embeds the editor keeps its own search. To open **Find** with the shortcut instead,
+  see [Open Find with Ctrl+F](#open-find-with-ctrlf).
+</Callout>
+
+### Search from code
+
+The **Find** tab, `useDocumentSearch()`, and `createDocumentSearch(editor)` share one search session per editor. A search you start from code also shows in the open **Find** tab.
+
+This button highlights every occurrence of a term and selects the first one:
+
+<FrameworkTabs>
+<Framework value="react">
+
+```tsx
+import { useDocumentSearch } from '@docx-editor.dev/react';
+
+function ShowOccurrences({ term }: { term: string }) {
+  const search = useDocumentSearch();
+
+  return (
+    <>
+      <button onClick={() => search.find(term, { selectFirst: true })}>Show “{term}”</button>
+      <button onClick={search.previous}>Previous</button>
+      <button onClick={search.next}>Next</button>
+      <span>
+        {search.activeIndex + 1} of {search.matches.length}
+      </span>
+    </>
+  );
+}
+```
+
+</Framework>
+<Framework value="vue">
+
+```vue
+<script setup lang="ts">
+import { useDocumentSearch } from '@docx-editor.dev/vue';
+
+defineProps<{ term: string }>();
+const search = useDocumentSearch();
+</script>
+
+<template>
+  <button @click="search.find(term, { selectFirst: true })">Show “{{ term }}”</button>
+  <button @click="search.previous">Previous</button>
+  <button @click="search.next">Next</button>
+  <span>{{ search.activeIndex.value + 1 }} of {{ search.matches.value.length }}</span>
+</template>
+```
+
+</Framework>
+</FrameworkTabs>
+
+Without React or Vue:
+
+```ts
+import { createDocumentSearch } from '@docx-editor.dev/core/editor';
+
+const search = createDocumentSearch(editor);
+search.find('Supplier', { highlight: 'all', selectFirst: true });
+nextButton.onclick = () => search.next();
+search.subscribe(() => {
+  const { activeIndex, matches } = search.getState();
+  counter.textContent = `${activeIndex + 1} of ${matches.length}`;
+});
+```
+
+| Member                                  | Description                                            |
+| --------------------------------------- | ------------------------------------------------------ |
+| `find(query, options)`                  | Searches now and returns the matches.                  |
+| `setQuery(query)`                       | Searches after the user stops typing.                  |
+| `next()`, `previous()`, `goTo(index)`   | Selects a match and scrolls to it. Focus doesn't move. |
+| `clear()`                               | Clears the query, the results, and their highlights.   |
+| `matches`, `activeIndex`, `activeMatch` | The results and the current match.                     |
+
+`find()` options:
+
+| Option | Description |
+| --- | --- |
+| `matchCase`, `wholeWord` | Narrow the search. |
+| `selectFirst` | Selects the first match. |
+| `highlight` | `'all'`, `'active'`, or `'none'`. Highlights the results until `clear()`. |
+
+`useDocumentSearch()` highlights results by default. If a component only reads results, pass `useDocumentSearch({ highlight: 'none' })`.
+
+### Open Find with Ctrl+F
+
+The editor doesn't handle <kbd>Ctrl</kbd>+<kbd>F</kbd> or <kbd>Cmd</kbd>+<kbd>F</kbd>, so a page that embeds it keeps browser search. To open **Find** with the shortcut, control the pane:
+
+```tsx
+import { useEffect, useState } from 'react';
+import { DocxEditor } from '@docx-editor.dev/react';
+
+function NavigationWithFindShortcut() {
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<'headings' | 'find'>('headings');
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        setOpen(true);
+        setTab('find');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  return (
+    <DocxEditor.Navigation open={open} onOpenChange={setOpen} tab={tab} onTabChange={setTab} />
+  );
+}
+```
+
+## Highlight text ranges
+
+Highlight your own ranges, such as glossary terms or review findings, as a named set. Each set is independent of the others and of search.
+
+To keep a set current as the document changes, pass a function. It runs again after edits:
+
+<FrameworkTabs>
+<Framework value="react">
+
+```tsx
+import { useCallback } from 'react';
+import { useHighlights, type Editor } from '@docx-editor.dev/react';
+
+function Glossary({ terms }: { terms: readonly string[] }) {
+  const findTerms = useCallback(
+    (editor: Editor) => editor.findMatches(terms, { wholeWord: true }).flat(),
+    [terms]
+  );
+  useHighlights('glossary', findTerms, { color: 'var(--glossary-color)' });
+  return null;
+}
+```
+
+</Framework>
+<Framework value="vue">
+
+```vue
+<script setup lang="ts">
+import { useHighlights } from '@docx-editor.dev/vue';
+
+const props = defineProps<{ terms: readonly string[] }>();
+useHighlights('glossary', (editor) => editor.findMatches(props.terms, { wholeWord: true }).flat(), {
+  color: 'var(--glossary-color)',
+});
+</script>
+```
+
+</Framework>
+</FrameworkTabs>
+
+Without React or Vue:
+
+```ts
+import { watchHighlights } from '@docx-editor.dev/core/editor';
+
+const glossary = watchHighlights(editor, 'glossary', (editor) =>
+  editor.findMatches(terms, { wholeWord: true }).flat()
+);
+// Later:
+glossary.stop();
+```
+
+`findMatches()` with an array searches the document once and returns one list per term.
+
+For a one-time set, call `setHighlights()` directly:
+
+```ts
+editor.setHighlights('findings', editor.findMatches('Supplier'));
+editor.clearHighlights('findings'); // Or clearHighlights() for every set.
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `color` | `var(--doc-text-highlight-color)` | CSS color for every range. |
+| `activeIndex` | `-1` | Index of the active range. `-1` means none. |
+| `activeColor` | `var(--doc-text-highlight-active-color)` | CSS color for the active range. |
+| `className` | None | CSS classes for every highlight. |
+| `priority` | `0` | Integer from `-1000` to `1000`. Higher sets paint on top. |
+
+`setHighlights()` returns `{ applied, unavailable }`. Invalid input throws `TypeError` or `RangeError` and changes nothing. For ranges you compute yourself, pass `blockId`, `start`, and `length`. If you compute them outside the editor, add `expectedText`.
+
+### Style highlights
+
+Set colors as tokens, with a value for dark mode:
+
+```css
+.docx-editor {
+  --doc-text-highlight-color: #c7f0d8;
+  --glossary-color: #dbeafe;
+}
+
+.docx-editor.dark {
+  --doc-text-highlight-color: rgba(80, 200, 120, 0.35);
+  --glossary-color: rgba(96, 165, 250, 0.35);
+}
+```
+
+Each set renders in a `[data-highlight-set]` element. Highlights have the `docx-text-highlight` class, and the active one also has `docx-text-highlight--active`. To underline glossary terms:
+
+```css
+.docx-editor [data-highlight-set='glossary'] .docx-text-highlight {
+  background: transparent;
+  border-bottom: 2px dotted #2563eb;
+}
+```
+
+If a highlight carries meaning, also show that meaning as text.
+
+### Show details on hover
+
+Add your own fields to each range. `useHighlightAt(name)` returns the highlight under the pointer, with your range and a `rect` in client coordinates:
+
+<FrameworkTabs>
+<Framework value="react">
+
+```tsx
+import { useCallback } from 'react';
+import { useHighlightAt, useHighlights, type Editor, type TextMatch } from '@docx-editor.dev/react';
+
+type GlossaryRange = TextMatch & { readonly definition: string };
+
+function Glossary({ entries }: { entries: readonly { term: string; definition: string }[] }) {
+  const findTerms = useCallback(
+    (editor: Editor): GlossaryRange[] =>
+      editor
+        .findMatches(
+          entries.map((entry) => entry.term),
+          { wholeWord: true }
+        )
+        .flatMap((matches, index) =>
+          matches.map((match) => ({ ...match, definition: entries[index]!.definition }))
+        ),
+    [entries]
+  );
+  useHighlights('glossary', findTerms);
+
+  const hit = useHighlightAt<GlossaryRange>('glossary');
+  if (!hit) return null;
+  return (
+    <div role="tooltip" style={{ position: 'fixed', left: hit.rect.left, top: hit.rect.bottom }}>
+      {hit.range.definition}
+    </div>
+  );
+}
+```
+
+</Framework>
+<Framework value="vue">
+
+```vue
+<script setup lang="ts">
+import { useHighlightAt, useHighlights, type TextMatch } from '@docx-editor.dev/vue';
+
+type GlossaryRange = TextMatch & { readonly definition: string };
+const props = defineProps<{ entries: readonly { term: string; definition: string }[] }>();
+
+useHighlights('glossary', (editor): GlossaryRange[] =>
+  editor
+    .findMatches(
+      props.entries.map((entry) => entry.term),
+      { wholeWord: true }
+    )
+    .flatMap((matches, index) =>
+      matches.map((match) => ({ ...match, definition: props.entries[index]!.definition }))
+    )
+);
+const hit = useHighlightAt<GlossaryRange>('glossary');
+</script>
+
+<template>
+  <div
+    v-if="hit"
+    role="tooltip"
+    :style="{ position: 'fixed', left: `${hit.rect.left}px`, top: `${hit.rect.bottom}px` }"
+  >
+    {{ hit.range.definition }}
+  </div>
+</template>
+```
+
+</Framework>
+</FrameworkTabs>
+
+Without React or Vue, call `editor.getHighlightsAt(clientX, clientY)` from a `pointermove` handler.
+
+### Edits, saving, and limits
+
+- A highlight moves with its text when you edit before it. An edit inside a range hides it; undo shows it again.
+- Highlights don't change the document, selection, or undo history, and they aren't saved or shared with collaborators.
+- Loading, refreshing, or recovering the document removes all highlights. `useHighlights` and `watchHighlights` apply them again.
+- Ranges can be in the body, tables, headers, footers, notes, and text boxes in the body.
+- Up to 32 sets can exist. A set highlights up to 10,000 ranges and counts the rest as unavailable.
+- The set name `search` is reserved for search.
 
 ## Move the caret to a reference
 

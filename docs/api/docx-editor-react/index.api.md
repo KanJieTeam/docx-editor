@@ -40,6 +40,10 @@ import { DocumentHandle } from '@docx-editor.dev/core/contracts/editor';
 import { DocumentRefresh } from '@docx-editor.dev/core/editor';
 import { DocumentRefreshError } from '@docx-editor.dev/core/editor';
 import { DocumentRefreshState } from '@docx-editor.dev/core/editor';
+import { DocumentSearchFindOptions } from '@docx-editor.dev/core/editor';
+import { DocumentSearchHighlight } from '@docx-editor.dev/core/editor';
+import { DocumentSearchNavigateOptions } from '@docx-editor.dev/core/editor';
+import { DocumentSearchOptions } from '@docx-editor.dev/core/editor';
 import { DocumentSource } from '@docx-editor.dev/core/contracts/editor';
 import { DocxDocument } from '@docx-editor.dev/core/contracts/types';
 import { DocxEditorInstance } from '@docx-editor.dev/core/editor';
@@ -70,6 +74,13 @@ import { FontSourceSubstitution } from '@docx-editor.dev/core/contracts/editor';
 import { FontUrlSource } from '@docx-editor.dev/core/editor';
 import { ForwardRefExoticComponent } from 'react';
 import { generateRulerTicks } from '@docx-editor.dev/core/editor';
+import { HIGHLIGHT_REFRESH_MS } from '@docx-editor.dev/core/editor';
+import { HighlightHit } from '@docx-editor.dev/core/contracts/editor';
+import { HighlightOptions } from '@docx-editor.dev/core/contracts/editor';
+import { HighlightRange } from '@docx-editor.dev/core/contracts/editor';
+import { HighlightRect } from '@docx-editor.dev/core/contracts/editor';
+import { HighlightResult } from '@docx-editor.dev/core/contracts/editor';
+import { HighlightSource } from '@docx-editor.dev/core/editor';
 import { HistoryGroupBindingOptions } from '@docx-editor.dev/core/editor';
 import { HTMLAttributes } from 'react';
 import { ImageDecodePort } from '@docx-editor.dev/core/editor';
@@ -121,6 +132,10 @@ import { RulerTick } from '@docx-editor.dev/core/editor';
 import { RulerUnit } from '@docx-editor.dev/core/editor';
 import { runToolbarCommand } from '@docx-editor.dev/core/editor';
 import { ScrollToAnchorOptions } from '@docx-editor.dev/core/contracts/editor';
+import { SEARCH_DEBOUNCE_MS } from '@docx-editor.dev/core/editor';
+import { SEARCH_HIGHLIGHT_PRIORITY } from '@docx-editor.dev/core/editor';
+import { SEARCH_HIGHLIGHT_SET } from '@docx-editor.dev/core/editor';
+import { SEARCH_MATCH_LIMIT } from '@docx-editor.dev/core/editor';
 import { SectionProperties } from '@docx-editor.dev/core/editor';
 import { SupportedImageMime } from '@docx-editor.dev/core/editor';
 import { SurfaceFormatting } from '@docx-editor.dev/core/editor';
@@ -471,6 +486,14 @@ export { DocumentRefresh }
 export { DocumentRefreshError }
 
 export { DocumentRefreshState }
+
+export { DocumentSearchFindOptions }
+
+export { DocumentSearchHighlight }
+
+export { DocumentSearchNavigateOptions }
+
+export { DocumentSearchOptions }
 
 export { DocxDocument }
 
@@ -956,6 +979,7 @@ export interface DocxEditorNavigationProps extends UseNavigationPaneOptions {
     children?: DocxEditorChildren;
     // (undocumented)
     className?: string;
+    searchHighlight?: DocumentSearchHighlight;
     // (undocumented)
     style?: CSSProperties;
     t?: (key: string, params?: Record<string, string | number>) => string;
@@ -1591,6 +1615,20 @@ export { generateRulerTicks }
 
 // @public
 export type HeaderFooterState = Exclude<ReturnType<Editor['getHeaderFooterState']>, null>;
+
+export { HIGHLIGHT_REFRESH_MS }
+
+export { HighlightHit }
+
+export { HighlightOptions }
+
+export { HighlightRange }
+
+export { HighlightRect }
+
+export { HighlightResult }
+
+export { HighlightSource }
 
 // @public (undocumented)
 export function HorizontalRuler(input: HorizontalRulerProps): react__default.ReactElement;
@@ -2297,11 +2335,13 @@ export interface ScopedChromeAnchor {
 
 export { ScrollToAnchorOptions }
 
-// @public
-export const SEARCH_DEBOUNCE_MS = 150;
+export { SEARCH_DEBOUNCE_MS }
 
-// @public
-export const SEARCH_MATCH_LIMIT = 2000;
+export { SEARCH_HIGHLIGHT_PRIORITY }
+
+export { SEARCH_HIGHLIGHT_SET }
+
+export { SEARCH_MATCH_LIMIT }
 
 // @public
 export function Slot(input: SlotProps): ReactElement<unknown, string | react.JSXElementConstructor<any>> | null;
@@ -2393,6 +2433,8 @@ export interface TextFormFieldDialogFields {
     // (undocumented)
     type: string;
 }
+
+export { TextMatch }
 
 // @public @deprecated (undocumented)
 export function TitleBar(input: TitleBarProps): react__default.JSX.Element;
@@ -2695,24 +2737,30 @@ export interface UseDocumentOutlineResult {
 }
 
 // @public
-export function useDocumentSearch(): UseDocumentSearchResult;
+export function useDocumentSearch(options?: UseDocumentSearchOptions): UseDocumentSearchResult;
+
+// @public
+export interface UseDocumentSearchOptions {
+    readonly highlight?: DocumentSearchHighlight;
+}
 
 // @public
 export interface UseDocumentSearchResult {
     readonly activeIndex: number;
+    readonly activeMatch: TextMatch | null;
     readonly clear: () => void;
-    readonly goTo: (index: number) => void;
+    readonly find: (query: string, options?: DocumentSearchFindOptions) => readonly TextMatch[];
+    readonly goTo: (index: number) => boolean;
     readonly isPending: boolean;
     // (undocumented)
     readonly matchCase: boolean;
     readonly matches: readonly TextMatch[];
-    readonly next: () => void;
+    readonly next: () => boolean;
     // (undocumented)
-    readonly previous: () => void;
+    readonly previous: () => boolean;
     readonly query: string;
     // (undocumented)
     readonly setMatchCase: (value: boolean) => void;
-    // (undocumented)
     readonly setQuery: (query: string) => void;
     // (undocumented)
     readonly setWholeWord: (value: boolean) => void;
@@ -2779,6 +2827,12 @@ export function useFonts(...origins: readonly FontOrigin[]): MarkedFontResolver;
 
 // @public
 export function useHeaderFooterState(): HeaderFooterState | null;
+
+// @public
+export function useHighlightAt<R extends HighlightRange = HighlightRange>(name?: string): HighlightHit<R> | null;
+
+// @public
+export function useHighlights(name: string, source: HighlightSource, options?: HighlightOptions): HighlightResult;
 
 // @public
 export function useHistoryGroup(input: HistoryGroupBindingOptions): UseHistoryGroupReturn;

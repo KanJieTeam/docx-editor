@@ -28,7 +28,7 @@ import {
   navigationPaneReservation,
 } from './navigation-geometry';
 import { useDocumentOutline } from './useDocumentOutline';
-import { useDocumentSearch } from './useDocumentSearch';
+import { useDocumentSearch, type DocumentSearchHighlight } from './useDocumentSearch';
 import { useNavigationPane, type UseNavigationPaneOptions } from './useNavigationPane';
 import type { NavigationPartProps } from './parts';
 import {
@@ -59,6 +59,12 @@ export interface DocxEditorNavigationProps extends UseNavigationPaneOptions {
    * exactly when the disc has to be clickable.
    */
   toggle?: boolean | NavigationPartProps;
+  /**
+   * Which Find matches to highlight while the Find tab is open: `'all'` (default),
+   * `'active'`, or `'none'`. The pane stops requesting highlights when it closes or leaves the
+   * tab; another `useDocumentSearch` consumer can still request them.
+   */
+  searchHighlight?: DocumentSearchHighlight;
   className?: string;
   style?: CSSProperties;
   /** Replaces the default composition (header, tabs, both panels). */
@@ -73,11 +79,21 @@ export interface DocxEditorNavigationProps extends UseNavigationPaneOptions {
 export function DocxEditorNavigation(props: DocxEditorNavigationProps): ReactElement {
   // Skip the scope class when the packaged wrapper already carries it.
   const scopeClassName = useScopeClassName();
-  const { t: hostT, toggle = true, className, style, children, ...paneOptions } = props;
+  const {
+    t: hostT,
+    toggle = true,
+    searchHighlight = 'all',
+    className,
+    style,
+    children,
+    ...paneOptions
+  } = props;
 
   const pane = useNavigationPane(paneOptions);
   const outline = useDocumentOutline();
-  const search = useDocumentSearch();
+  // Matches are marked only while the Find tab is on screen.
+  const highlight = pane.open && pane.tab === 'find' ? searchHighlight : 'none';
+  const search = useDocumentSearch({ highlight });
 
   // Same precedence as `<DocxEditor>`: the host's resolver, else the active catalogue.
   // The cast bridges the two signatures — `TFunction` is keyed by the union derived from

@@ -19,6 +19,15 @@ export type {
   EditorAnchorNavigation,
   ScrollToAnchorOptions,
 } from './editor-anchor.ts';
+import type { EditorHighlights } from './editor-highlights.ts';
+export type {
+  EditorHighlights,
+  HighlightHit,
+  HighlightOptions,
+  HighlightRange,
+  HighlightRect,
+  HighlightResult,
+} from './editor-highlights.ts';
 export type { DocumentChange, EditorEvents } from './editor-events.ts';
 import type { ResolveReviewChangesOptions } from './editor-review.ts';
 import type { ReviewDisplayMode } from '../layout/revision-projection.ts';
@@ -300,7 +309,7 @@ export type CanResult = { ok: true } | { ok: false; code: ExecErrorCode; reason:
  * const bytesOut = await editor.save();
  * ```
  */
-export interface Editor extends EditorAnchorNavigation {
+export interface Editor extends EditorAnchorNavigation, EditorHighlights {
   /**
    * Load a new document (DOCX bytes, `'blank'`, or a handle), replacing the current one.
    *
@@ -439,6 +448,11 @@ export interface Editor extends EditorAnchorNavigation {
     query: string,
     options?: { readonly matchCase?: boolean; readonly wholeWord?: boolean }
   ): readonly TextMatch[];
+  /** Find many terms in one pass, such as a glossary: one result list per term, in order. */
+  findMatches(
+    queries: readonly string[],
+    options?: { readonly matchCase?: boolean; readonly wholeWord?: boolean }
+  ): readonly (readonly TextMatch[])[];
 
   /**
    * Move the selection to a found match — what a find dialog's next/previous do.

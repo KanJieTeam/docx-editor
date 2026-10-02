@@ -51,7 +51,6 @@ import {
   relationshipTargetIn,
   normalizeParagraphIdentity,
   paragraphTextOf,
-  collectNoteReferences,
   collectRevisionSites,
   type BookmarkIndex,
   type EmbeddedFont,
@@ -79,7 +78,7 @@ import {
   type DocumentOutlineEntry,
 } from './document-outline.ts';
 import { collectRenderedFontFamilies } from './document-rendered-fonts.ts';
-import { collectTextMatches, type DocumentSearchResult } from './document-search.ts';
+import { createSessionTextSearch } from './session-text-search.ts';
 import {
   collectDocumentThemeColors,
   collectDocumentThemeFonts,
@@ -539,14 +538,6 @@ export function openTreeSession(
     readonly revision: number;
     readonly outline: readonly DocumentOutlineEntry[];
   } | null = null;
-  // Last search answered, keyed on the revision AND the exact question. A find panel asks
-  // the same question repeatedly — a re-render, a tick, a next/previous press — and one
-  // entry is enough to make those free; a different query simply replaces it.
-  let searchCache: {
-    readonly revision: number;
-    readonly key: string;
-    readonly result: DocumentSearchResult;
-  } | null = null;
   let anchorsCache: {
     readonly revision: number;
     readonly openStories: string;
@@ -951,32 +942,12 @@ export function openTreeSession(
         return outlineCache.outline;
       },
 
-      findText(query, options) {
-        const store = bodyStore();
-        const revision = packageStore.packageRevision;
-        const key = `${options?.matchCase === true ? 'c' : ''}${
-          options?.wholeWord === true ? 'w' : ''
-        }${options?.limit ?? ''}:${options?.stories ?? 'all'}${'\u0000'}${query}`;
-        if (searchCache && searchCache.revision === revision && searchCache.key === key) {
-          return searchCache.result;
-        }
-        const pkg = currentPackage();
-        const referencedNoteIds = {
-          footnote: new Set<number>(),
-          endnote: new Set<number>(),
-        };
-        for (const reference of collectNoteReferences(store.part)) {
-          referencedNoteIds[reference.noteKind].add(reference.noteId);
-        }
-        const result = collectTextMatches(store.part, query, options ?? {}, {
-          headerFooterBySection: resolvedHeaderFooterBySection().resolution,
-          footnotes: resolveNotesPart(pkg, 'footnote') ?? null,
-          endnotes: resolveNotesPart(pkg, 'endnote') ?? null,
-          referencedNoteIds,
-        });
-        searchCache = { revision, key, result };
-        return result;
-      },
+      findText: createSessionTextSearch({
+        revision: () => packageStore.packageRevision,
+        bodyPart: () => bodyStore().part,
+        currentPackage,
+        headerFooterBySection: () => resolvedHeaderFooterBySection().resolution,
+      }),
 
       embeddedFonts: resolveEmbeddedFonts,
 

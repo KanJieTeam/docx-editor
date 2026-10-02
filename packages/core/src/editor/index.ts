@@ -415,6 +415,27 @@ export {
 } from './toolbar-values.ts';
 
 export { createDocumentRefresh, DocumentRefreshError } from './document-refresh.ts';
+export { HIGHLIGHT_REFRESH_MS, watchHighlights } from './watch-highlights.ts';
+export type {
+  HighlightSource,
+  HighlightWatch,
+  WatchHighlightsOptions,
+} from './watch-highlights.ts';
+export {
+  createDocumentSearch,
+  SEARCH_DEBOUNCE_MS,
+  SEARCH_HIGHLIGHT_PRIORITY,
+  SEARCH_HIGHLIGHT_SET,
+  SEARCH_MATCH_LIMIT,
+} from './document-search.ts';
+export type {
+  DocumentSearch,
+  DocumentSearchFindOptions,
+  DocumentSearchHighlight,
+  DocumentSearchNavigateOptions,
+  DocumentSearchOptions,
+  DocumentSearchState,
+} from './document-search.ts';
 export type {
   DocumentRefresh,
   DocumentRefreshState,
@@ -434,6 +455,11 @@ export type {
   AnchorHighlightAnimation,
   AnchorHighlightOptions,
   ClearAnchorHighlightOptions,
+  HighlightHit,
+  HighlightOptions,
+  HighlightRange,
+  HighlightRect,
+  HighlightResult,
   ScrollToAnchorOptions,
 } from '../contracts/editor.ts';
 

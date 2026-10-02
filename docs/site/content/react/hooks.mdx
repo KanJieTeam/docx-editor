@@ -277,7 +277,7 @@ Each item has the shape `{ heading, depth }`. `heading` has the shape `{ text, l
 
 ## `useDocumentSearch`
 
-`useDocumentSearch` provides delayed search and match navigation:
+`useDocumentSearch` returns the editor's search session, which the **Find** pane also uses. This toolbar searches as you type, and Enter moves to the next match:
 
 ```tsx
 import { useDocumentSearch } from '@docx-editor.dev/react';
@@ -287,11 +287,18 @@ function Find() {
 
   return (
     <>
-      <input value={search.query} onChange={(event) => search.setQuery(event.target.value)} />
+      <input
+        value={search.query}
+        onChange={(event) => search.setQuery(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter') return;
+          if (search.isPending) search.find(search.query);
+          if (event.shiftKey) search.previous();
+          else search.next();
+        }}
+      />
       <span>
-        {search.matches.length === 0 ? 0 : search.activeIndex + 1}
-        {' / '}
-        {search.matches.length}
+        {search.activeIndex + 1} / {search.matches.length}
         {search.truncated && '+'}
       </span>
       <button onClick={search.previous}>Prev</button>
@@ -301,10 +308,31 @@ function Find() {
 }
 ```
 
-The result also includes these pairs:
+`find(query, { selectFirst: true })` searches and selects the first match, and `activeMatch` is the current match. The `highlight` option is `'all'` (default), `'active'`, or `'none'`. If a component only reads results, pass `'none'`. The editor doesn't handle Ctrl+F or Cmd+F by default. To open **Find** with the shortcut, see [Open Find with Ctrl+F](/docs/2.x/guides/navigation#open-find-with-ctrlf). For more information, see [Search from code](/docs/2.x/guides/navigation#search-from-code).
 
-- `matchCase` and `setMatchCase`
-- `wholeWord` and `setWholeWord`
+## `useHighlights`
+
+`useHighlights(name, source, options)` highlights ranges while the component is mounted and returns `{ applied, unavailable }`. If `source` is a function, it runs again after the document changes. Wrap it in `useCallback`:
+
+```tsx
+import { useCallback } from 'react';
+import { useHighlights, type Editor } from '@docx-editor.dev/react';
+
+function GlossaryHighlights({ terms }: { terms: readonly string[] }) {
+  const findTerms = useCallback(
+    (editor: Editor) => editor.findMatches(terms, { wholeWord: true }).flat(),
+    [terms]
+  );
+  useHighlights('glossary', findTerms);
+  return null;
+}
+```
+
+For options, see [Highlight text ranges](/docs/2.x/guides/navigation#highlight-text-ranges).
+
+## `useHighlightAt`
+
+`useHighlightAt(name)` returns the highlight under the pointer, or `null`. For an example, see [Show details on hover](/docs/2.x/guides/navigation#show-details-on-hover).
 
 ## `useHistoryGroup`
 

@@ -288,33 +288,57 @@ Each item has `{ heading, depth }`. A heading has `text`, `level`, and `blockId`
 
 ## `useDocumentSearch`
 
-Search the document and move between matches:
+`useDocumentSearch` returns the editor's search session, which the **Find** pane also uses. This toolbar searches as you type, and Enter moves to the next match:
 
 ```vue
 <script setup lang="ts">
 import { useDocumentSearch } from '@docx-editor.dev/vue';
 
 const search = useDocumentSearch();
+
+function onEnter(event: KeyboardEvent) {
+  if (search.isPending.value) search.find(search.query.value);
+  if (event.shiftKey) search.previous();
+  else search.next();
+}
 </script>
 
 <template>
-  <label>
-    Find
-    <input
-      :value="search.query.value"
-      @input="search.setQuery(($event.target as HTMLInputElement).value)"
-    />
-  </label>
-  <span aria-live="polite">
-    {{ search.matches.value.length === 0 ? 0 : search.activeIndex.value + 1 }}
-    / {{ search.matches.value.length }}{{ search.truncated.value ? '+' : '' }}
+  <input
+    :value="search.query.value"
+    @input="search.setQuery(($event.target as HTMLInputElement).value)"
+    @keydown.enter="onEnter"
+  />
+  <span>
+    {{ search.activeIndex.value + 1 }} / {{ search.matches.value.length
+    }}{{ search.truncated.value ? '+' : '' }}
   </span>
-  <button :disabled="search.matches.value.length === 0" @click="search.previous">Previous</button>
-  <button :disabled="search.matches.value.length === 0" @click="search.next">Next</button>
+  <button @click="search.previous">Previous</button>
+  <button @click="search.next">Next</button>
 </template>
 ```
 
-The composable waits 150 milliseconds before it searches. `isPending` reports that delay. It also provides `goTo`, `clear`, `matchCase`, `setMatchCase`, `wholeWord`, and `setWholeWord`. `truncated` becomes true at the 2,000-match limit.
+`find(query, { selectFirst: true })` searches and selects the first match, and `activeMatch` is the current match. The `highlight` option is `'all'` (default), `'active'`, or `'none'`, as a value, ref, or getter. If a component only reads results, pass `'none'`. The editor doesn't handle Ctrl+F or Cmd+F by default. To open **Find** with the shortcut, see [Open Find with Ctrl+F](/docs/2.x/guides/navigation#open-find-with-ctrlf). For more information, see [Search from code](/docs/2.x/guides/navigation#search-from-code).
+
+## `useHighlights`
+
+`useHighlights(name, source, options)` highlights ranges while the component is mounted and returns a computed `{ applied, unavailable }`. If `source` is a function, it runs again after the document changes and when the refs it reads change:
+
+```vue
+<script setup lang="ts">
+import { ref } from 'vue';
+import { useHighlights } from '@docx-editor.dev/vue';
+
+const terms = ref(['Supplier', 'Effective Date']);
+useHighlights('glossary', (editor) => editor.findMatches(terms.value, { wholeWord: true }).flat());
+</script>
+```
+
+For options, see [Highlight text ranges](/docs/2.x/guides/navigation#highlight-text-ranges).
+
+## `useHighlightAt`
+
+`useHighlightAt(name)` returns a ref with the highlight under the pointer, or `null`. For an example, see [Show details on hover](/docs/2.x/guides/navigation#show-details-on-hover).
 
 ## `useNavigationPane`
 
