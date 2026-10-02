@@ -15,11 +15,7 @@
 // Table cells do not snap unless the document sets the `w:adjustLineHeightInTable`
 // compatibility option (§17.15.3.1).
 
-import {
-  WML_NAMESPACE_URI,
-  type OoxmlElement,
-  type OoxmlProperty,
-} from '@docx-editor.dev/core/store';
+import type { OoxmlProperty } from '@docx-editor.dev/core/store';
 import type { ParagraphLineSpacing } from './paragraph-style.ts';
 
 /**
@@ -46,31 +42,6 @@ export function paragraphSnapsToLineGrid(props: readonly OoxmlProperty[]): boole
     if (property.localName === 'snapToGrid') snaps = isOn(property.attributes?.val);
   }
   return snaps;
-}
-
-/** Whether settings turn on `w:compat/w:adjustLineHeightInTable`. */
-export function adjustLineHeightInTable(settingsRoot: OoxmlElement | null): boolean {
-  if (
-    !settingsRoot ||
-    settingsRoot.namespaceUri !== WML_NAMESPACE_URI ||
-    settingsRoot.localName !== 'settings'
-  )
-    return false;
-  let enabled = false;
-  for (const compat of settingsRoot.children) {
-    if (compat.kind === 'textValue' || compat.localName !== 'compat') continue;
-    if (compat.namespaceUri !== WML_NAMESPACE_URI) continue;
-    for (const setting of compat.children) {
-      if (setting.kind === 'textValue' || setting.namespaceUri !== WML_NAMESPACE_URI) continue;
-      if (setting.localName !== 'adjustLineHeightInTable') continue;
-      enabled = isOn(
-        setting.attributes.find(
-          (entry) => entry.namespaceUri === WML_NAMESPACE_URI && entry.localName === 'val'
-        )?.value
-      );
-    }
-  }
-  return enabled;
 }
 
 /**

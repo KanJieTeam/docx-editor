@@ -281,15 +281,7 @@ export function holdOutReserveNeed(args: HoldOutArgs): number {
   // in that paragraph do not require their notes until their own body lines return.
   // Price complete notes here; split notes and kept successors retain the existing policy.
   const keeps = paragraphKeeps(owningBlock.props);
-  if (
-    returningPrefix > 0 &&
-    paragraphSplitsAllowed &&
-    !keeps.keepLines &&
-    !keeps.keepNext &&
-    (args.opts.compatibilityMode === undefined ||
-      args.opts.compatibilityMode === 14 ||
-      args.opts.compatibilityMode === 15)
-  ) {
+  if (returningPrefix > 0 && paragraphSplitsAllowed && !keeps.keepLines && !keeps.keepNext) {
     const openingBottom = noteReferenceOpeningBottom(nextBody, frontierRef, frontier);
     let demand = args.existingAreaHeight > 0 ? args.existingAreaHeight : args.plainSeparatorHeight;
     let complete = true;
@@ -384,12 +376,7 @@ export function holdOutReserveNeed(args: HoldOutArgs): number {
       band.tableRow !== true &&
       joinedOffset < columnBudget &&
       laid.flowHeight > remaining + 0.001 &&
-      splitNoteKeepsParagraphReference(
-        laid,
-        room,
-        columnBudget - noticeHeight,
-        args.opts.compatibilityMode
-      )
+      splitNoteKeepsParagraphReference(laid, room, columnBudget - noticeHeight)
     ) {
       pulledNotesHeight +=
         splitNoteHead(laid, room, columnBudget - noticeHeight).height + noticeHeight;

@@ -22,7 +22,6 @@ export interface EvictionGuardContext {
   /** The whole note column below the separator, for the split's retreat rule. */
   readonly fullNoteColumn: number;
   readonly evictionAllowed?: boolean;
-  readonly compatibilityMode?: number;
   readonly paragraphSplitAllowed?: boolean;
   readonly allowOrphanDeferral?: boolean;
   /** The page after this one, which shows whether a row ending this page continues there. */
@@ -73,12 +72,7 @@ export function evictsReferenceLine(
     !(band.tableRow === true
       ? splitNoteKeepsTableRow(laid, room, context.fullNoteColumn)
       : context.paragraphSplitAllowed !== false &&
-        splitNoteKeepsParagraphReference(
-          laid,
-          room,
-          context.fullNoteColumn,
-          context.compatibilityMode
-        ))
+        splitNoteKeepsParagraphReference(laid, room, context.fullNoteColumn))
   );
 }
 
@@ -111,11 +105,8 @@ export function splitNoteHead(
 export function splitNoteKeepsParagraphReference(
   laid: NoteStoryLayout,
   room: number,
-  fullNoteColumn: number,
-  compatibilityMode?: number
+  fullNoteColumn: number
 ): boolean {
-  if (compatibilityMode !== undefined && compatibilityMode !== 14 && compatibilityMode !== 15)
-    return false;
   // Splitting does not yet enforce keep-with-next across note paragraphs. Preserve
   // whole-note admission for those stories until their split boundaries support it.
   if (
