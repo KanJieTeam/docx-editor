@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
- * The per-file max-lines caps in eslint.config.js stay honest.
+ * The per-file max-lines caps in .oxlintrc.json stay honest.
  *
- * Three checks. The first two run over the imported config (imported, not regex-parsed, so a
- * config the linter would reject fails here too):
+ * Three checks. The first two run over the config's `overrides`:
  *
  * 1. Every non-glob `files` path exists — a cap for a deleted file is dead weight.
  * 2. Every per-file cap is a RATCHET, not a permanent ceiling: the cap must sit within
@@ -19,7 +18,8 @@
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import ts from 'typescript';
+import { disablesMaxLines, isMaxLinesRule } from './lib/max-lines-directives.mjs';
 
 // 150, not 100: with caps set ~100 over their file, a tighter slack made ONE deleted line
 // in a capped file a lint failure until the config moved too. 150 keeps the ratchet and
@@ -49,17 +49,30 @@ const BLANKET_DISABLES = new Map([
   ['packages/core/src/store/package/note-lifecycle.ts', 1320],
 ]);
 
-/** A file-level `eslint-disable` naming max-lines. `-next-line` is one statement, not a file. */
-const BLANKET_DISABLE = /\/\*\s*eslint-disable\s(?![^*]*-next-line)[^*]*max-lines/;
-
 const SOURCE_FILE = /\.tsx?$/;
-const SKIP_DIRECTORIES = new Set(['node_modules', 'dist', 'dist-types', 'temp', '.turbo']);
+const VUE_FILE = /\.vue$/;
+// Build output and vendored code, which oxlint does not lint (see `ignorePatterns`).
+const SKIP_DIRECTORIES = new Set([
+  'node_modules',
+  'dist',
+  'dist-types',
+  'temp',
+  '.turbo',
+  'vendor',
+  '.next',
+  '.nuxt',
+  '.output',
+  '.astro',
+  'build',
+  'coverage',
+]);
 
-function sourceFilesUnder(directory, found = []) {
+function sourceFilesUnder(directory, pattern = SOURCE_FILE, found = []) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (entry.isDirectory()) {
-      if (!SKIP_DIRECTORIES.has(entry.name)) sourceFilesUnder(join(directory, entry.name), found);
-    } else if (SOURCE_FILE.test(entry.name)) {
+      if (!SKIP_DIRECTORIES.has(entry.name))
+        sourceFilesUnder(join(directory, entry.name), pattern, found);
+    } else if (pattern.test(entry.name)) {
       found.push(join(directory, entry.name));
     }
   }
@@ -67,14 +80,28 @@ function sourceFilesUnder(directory, found = []) {
 }
 
 const root = join(import.meta.dirname, '..');
-const configs = (await import(pathToFileURL(join(root, 'eslint.config.js')).href)).default;
+// TypeScript's JSON-with-comments reader: the config has comments and trailing commas.
+const { config, error } = ts.parseConfigFileTextToJson(
+  '.oxlintrc.json',
+  readFileSync(join(root, '.oxlintrc.json'), 'utf8')
+);
+if (error) throw new Error(ts.flattenDiagnosticMessageText(error.messageText, '\n'));
+const configs = config.overrides ?? [];
 
 const failures = [];
 let checked = 0;
 let blanketChecked = 0;
 
+/** The block's max-lines cap, under either name oxlint accepts. */
+function capOf(block) {
+  const key = Object.keys(block.rules ?? {}).find(isMaxLinesRule);
+  return key === undefined ? undefined : block.rules[key]?.[1]?.max;
+}
+
+/** Per-file caps by path. A later block wins, as it does in oxlint. */
+const fileCaps = new Map();
 for (const block of configs) {
-  const cap = block.rules?.['max-lines']?.[1]?.max;
+  const cap = capOf(block);
   if (cap === undefined || !Array.isArray(block.files)) continue;
   for (const path of block.files) {
     if (path.includes('*')) continue;
@@ -84,9 +111,10 @@ for (const block of configs) {
       continue;
     }
     checked += 1;
+    fileCaps.set(path, cap);
     const lines = readFileSync(absolute, 'utf8').split('\n').length - 1;
     if (lines > cap) {
-      // eslint reports this too; repeating it keeps this script self-contained.
+      // oxlint reports this too; repeating it keeps this script self-contained.
       failures.push(`over cap: ${path} is ${lines} lines, cap ${cap}`);
     } else if (cap - lines > SLACK && !SLACK_EXEMPT.has(path)) {
       failures.push(
@@ -100,7 +128,7 @@ for (const block of configs) {
 const seenBlanket = new Set();
 for (const absolute of sourceFilesUnder(join(root, 'packages'))) {
   const text = readFileSync(absolute, 'utf8');
-  if (!BLANKET_DISABLE.test(text)) continue;
+  if (!disablesMaxLines(text)) continue;
   const path = relative(root, absolute).split(sep).join('/');
   seenBlanket.add(path);
   const lines = text.split('\n').length - 1;
@@ -108,7 +136,7 @@ for (const absolute of sourceFilesUnder(join(root, 'packages'))) {
   if (declared === undefined) {
     failures.push(
       `undeclared blanket disable: ${path} turns max-lines off for the whole file (${lines} lines). ` +
-        `Add it to BLANKET_DISABLES with its length, or give it a capped block in eslint.config.js`
+        `Add it to BLANKET_DISABLES with its length, or give it a capped block in .oxlintrc.json`
     );
     continue;
   }
@@ -133,13 +161,48 @@ for (const path of BLANKET_DISABLES.keys()) {
   }
 }
 
+// oxlint counts only the <script> block of a single-file component, so a template-heavy
+// `.vue` file can pass max-lines at any length. Hold the whole file to the cap here.
+const globalCap = capOf(configs.find((block) => block.files?.includes('**/*.{ts,tsx,vue}')) ?? {});
+if (globalCap === undefined) failures.push('no global max-lines cap for **/*.{ts,tsx,vue}');
+/** The directories `bun run lint` passes to oxlint that can hold `.vue` files. */
+function lintedDirectories() {
+  const children = (parent, child) =>
+    readdirSync(join(root, parent), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(root, parent, entry.name, child))
+      .filter((directory) => existsSync(directory));
+  return [
+    ...children('packages', 'src'),
+    ...children('examples', 'src'),
+    ...children('examples', 'app'),
+    join(root, 'examples', 'shared'),
+  ];
+}
+
+let vueChecked = 0;
+for (const directory of lintedDirectories()) {
+  for (const absolute of sourceFilesUnder(directory, VUE_FILE)) {
+    const path = relative(root, absolute).split(sep).join('/');
+    const cap = fileCaps.get(path) ?? globalCap;
+    const lines = readFileSync(absolute, 'utf8').split('\n').length - 1;
+    vueChecked += 1;
+    if (lines > cap) {
+      failures.push(
+        `over cap: ${path} is ${lines} lines, cap ${cap} (whole single-file component)`
+      );
+    }
+  }
+}
+
 if (failures.length > 0) {
-  console.error('eslint.config.js max-lines caps are stale or broken:');
+  console.error('.oxlintrc.json max-lines caps are stale or broken:');
   for (const failure of failures) console.error(`  - ${failure}`);
   process.exit(1);
 }
 
 console.log(
-  `eslint max-lines caps: ${checked} file-specific paths present and within ${SLACK} lines of their cap; ` +
-    `${blanketChecked} blanket disables at their declared length`
+  `max-lines caps: ${checked} file-specific paths present and within ${SLACK} lines of their cap; ` +
+    `${blanketChecked} blanket disables at their declared length; ` +
+    `${vueChecked} single-file components within the cap`
 );
