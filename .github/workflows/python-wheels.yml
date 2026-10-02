@@ -162,6 +162,7 @@ jobs:
     if: always() && github.event_name == 'workflow_dispatch' && inputs.publish && needs.publish.result == 'failure'
     needs: [wheel, publish]
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
     permissions: {}
     steps:
       - name: Notify Slack
