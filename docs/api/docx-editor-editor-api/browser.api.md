@@ -43,8 +43,10 @@ class Body_2 extends ModelObject {
     get bookmarks(): BookmarkCollection;
     clear(): void;
     get contentControls(): ContentControlCollection;
+    get endnotes(): NoteItemCollection;
     get fields(): FieldCollection;
     get font(): Font;
+    get footnotes(): NoteItemCollection;
     getComments(): CommentCollection;
     getRange(rangeLocation?: 'Whole' | 'Content' | 'Start' | 'End' | 'Before' | 'After'): Range_2;
     // @internal
@@ -373,6 +375,10 @@ class Document_2 extends ModelObject {
     // @internal
     static open(context: RequestContext): Document_2;
     get paragraphs(): ParagraphCollection;
+    get properties(): DocumentProperties;
+    removeDocumentInformation(removeDocInfoType: RemoveDocInfoType): void;
+    // (undocumented)
+    removeDocumentInformation(removeDocInfoType: 'Comments' | 'Revisions' | 'Versions' | 'RemovePersonalInformation' | 'EmailHeader' | 'RoutingSlip' | 'SendForReview' | 'DocumentProperties' | 'Template' | 'DocumentWorkspace' | 'InkAnnotations' | 'DocumentServerProperties' | 'DocumentManagementPolicy' | 'ContentType' | 'TaskpaneWebExtensions' | 'AtMentions' | 'DocumentTasks' | 'DocumentIntelligence' | 'CommentReactions' | 'All'): void;
     get revisions(): RevisionCollection;
     get sections(): SectionCollection;
 }
@@ -394,6 +400,27 @@ export interface DocumentLimits {
     readonly maxXmlParts?: number;
     readonly xml?: DocumentXmlLimits;
     readonly zip?: DocumentZipLimits;
+}
+
+// @public
+export class DocumentProperties extends ModelObject {
+    get author(): string;
+    set author(value: string);
+    get category(): string;
+    set category(value: string);
+    get comments(): string;
+    set comments(value: string);
+    get keywords(): string;
+    set keywords(value: string);
+    get lastAuthor(): string;
+    // @internal (undocumented)
+    static of(context: RequestContext, owner: ObjectPath): DocumentProperties;
+    // (undocumented)
+    protected onLoad(request: ResolvedLoadOptions): void;
+    get subject(): string;
+    set subject(value: string);
+    get title(): string;
+    set title(value: string);
 }
 
 // @public
@@ -1093,9 +1120,7 @@ class Range_2 extends ModelObject implements PromisedItem {
     insertBreak(breakType: BreakType | 'Page' | 'SectionNext' | 'Next' | 'Line' | 'SectionContinuous' | 'SectionEven' | 'SectionOdd', insertLocation: InsertLocation.before | InsertLocation.after | 'Before' | 'After'): void;
     insertComment(commentText: string): Comment_2;
     insertContentControl(contentControlType?: ContentControlType.richText | ContentControlType.plainText | ContentControlType.buildingBlockGallery | ContentControlType.checkBox | ContentControlType.comboBox | ContentControlType.datePicker | ContentControlType.dropDownList | ContentControlType.group | ContentControlType.picture | ContentControlType.repeatingSection | 'RichText' | 'PlainText' | 'BuildingBlockGallery' | 'CheckBox' | 'ComboBox' | 'DatePicker' | 'DropDownList' | 'Group' | 'Picture' | 'RepeatingSection'): ContentControl;
-    // (undocumented)
     insertField(insertLocation: InsertLocation | 'Before' | 'After' | 'Start' | 'End' | 'Replace', fieldType?: FieldType, text?: string, removeFormatting?: boolean): Field;
-    // (undocumented)
     insertField(insertLocation: InsertLocation | 'Before' | 'After' | 'Start' | 'End' | 'Replace', fieldType?: FieldTypeLiteral, text?: string, removeFormatting?: boolean): Field;
     insertInlinePictureFromBase64(base64EncodedImage: string, insertLocation: InsertLocation | 'Before' | 'After' | 'Start' | 'End' | 'Replace'): InlinePicture;
     insertParagraph(paragraphText: string, insertLocation: InsertLocation.before | InsertLocation.after | 'Before' | 'After'): Paragraph;
@@ -1138,6 +1163,50 @@ export class RangeCollection extends ItemCollection<Range_2> {
 
 // @public
 export type RangeInsertTextLocation = 'Replace' | 'Start' | 'End' | 'Before' | 'After';
+
+// @public
+export enum RemoveDocInfoType {
+    // (undocumented)
+    all = "All",
+    // (undocumented)
+    atMentions = "AtMentions",
+    // (undocumented)
+    commentReactions = "CommentReactions",
+    // (undocumented)
+    comments = "Comments",
+    // (undocumented)
+    contentType = "ContentType",
+    // (undocumented)
+    documentIntelligence = "DocumentIntelligence",
+    // (undocumented)
+    documentManagementPolicy = "DocumentManagementPolicy",
+    // (undocumented)
+    documentProperties = "DocumentProperties",
+    // (undocumented)
+    documentServerProperties = "DocumentServerProperties",
+    // (undocumented)
+    documentTasks = "DocumentTasks",
+    // (undocumented)
+    documentWorkspace = "DocumentWorkspace",
+    // (undocumented)
+    emailHeader = "EmailHeader",
+    // (undocumented)
+    inkAnnotations = "InkAnnotations",
+    // (undocumented)
+    removePersonalInformation = "RemovePersonalInformation",
+    // (undocumented)
+    revisions = "Revisions",
+    // (undocumented)
+    routingSlip = "RoutingSlip",
+    // (undocumented)
+    sendForReview = "SendForReview",
+    // (undocumented)
+    taskpaneWebExtensions = "TaskpaneWebExtensions",
+    // (undocumented)
+    template = "Template",
+    // (undocumented)
+    versions = "Versions"
+}
 
 // @public
 export class RequestContext {
@@ -1347,6 +1416,7 @@ export class TableRow extends ModelObject implements PromisedItem {
     hydrateAddress(address: ObjectAddress): void;
     // @internal (undocumented)
     hydrateNull(): void;
+    insertRows(insertLocation: InsertLocation.before | InsertLocation.after | 'Before' | 'After', rowCount: number, values?: string[][]): TableRowCollection;
     // @internal (undocumented)
     static promised(context: RequestContext, label: string, nullable?: boolean): TableRow;
 }

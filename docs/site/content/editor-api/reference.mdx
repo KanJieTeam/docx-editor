@@ -32,8 +32,10 @@ Every model object inherits the common `ClientObject` members. Each collection a
 
 | Object | Public members beyond inherited members | Guide |
 | --- | --- | --- |
-| `Document` | `body`, `paragraphs`, `sections`, `contentControls`, `comments`, `revisions`, `footnotes`, `endnotes`, `changeTrackingMode` | [Text and ranges](/docs/2.x/editor-api/text-and-ranges), [Page layout and stories](/docs/2.x/editor-api/page-layout-and-stories), [Tracked changes](/docs/2.x/editor-api/revisions) |
-| `Body` | `text`, `paragraphs`, `getRange`, `search`, `clear`, `insertText`, `insertParagraph`; `font`, `style`, `lists`, `bookmarks`, `contentControls`, `getComments`, `revisions`, `tables`, `inlinePictures`, `fields` | [Text and ranges](/docs/2.x/editor-api/text-and-ranges) |
+| `Document` | `removeDocumentInformation`, `properties`, `body`, `paragraphs`, `sections`, `contentControls`, `comments`, `revisions`, `footnotes`, `endnotes`, `changeTrackingMode` | [Text and ranges](/docs/2.x/editor-api/text-and-ranges), [Page layout and stories](/docs/2.x/editor-api/page-layout-and-stories), [Tracked changes](/docs/2.x/editor-api/revisions) |
+| `RemoveDocInfoType` | All standard enum values; only `documentProperties` removal is supported | [Remove document properties](#remove-document-properties) |
+| `DocumentProperties` | `author`, `title`, `subject`, `keywords`, `comments`, `category`, read-only `lastAuthor` | [Document properties](#document-properties) |
+| `Body` | `text`, `footnotes`, `endnotes`, `paragraphs`, `getRange`, `search`, `clear`, `insertText`, `insertParagraph`; `font`, `style`, `lists`, `bookmarks`, `contentControls`, `getComments`, `revisions`, `tables`, `inlinePictures`, `fields` | [Text and ranges](/docs/2.x/editor-api/text-and-ranges) |
 | `Paragraph` | `text`, `uniqueLocalId`, `getRange`, `insertText`, `insertParagraph`, `split`, `clear`, `delete`; `font`, `style`, paragraph formatting; `list`, `listItem`, `startNewList`, `attachToList`, `detachFromList` | [Text and ranges](/docs/2.x/editor-api/text-and-ranges), [Formatting and styles](/docs/2.x/editor-api/formatting), [Lists and numbering](/docs/2.x/editor-api/lists) |
 | `Range` | `text`, `paragraphs`, `search`, `insertText`, `insertParagraph`, `clear`, `delete`, `select`; `font`, `style`, `hyperlink`, `bookmarks`, `tables`, `inlinePictures`, `fields`; `insertTable`, `insertInlinePictureFromBase64`, `insertField`, `insertBreak`, `insertContentControl`, `insertComment` | [Text and ranges](/docs/2.x/editor-api/text-and-ranges) and the dedicated insertion guides |
 | `ParagraphCollection` | `getFirst`, `getLast`, `getFirstOrNullObject`, `getLastOrNullObject` | [Search and navigation](/docs/2.x/editor-api/search-and-navigation) |
@@ -55,13 +57,15 @@ Font writes honor inherited complex-script properties. Font reads return authore
 | `ListCollection`, `ListItem` | Collection `getFirst`, `getById`; item `level` | [Lists and numbering](/docs/2.x/editor-api/lists) |
 | `ListBullet`, `ListNumbering` | Bullet and number marker values | [Lists and numbering](/docs/2.x/editor-api/lists) |
 | `Table` | `values`, `style`, `headerRowCount`, `rowCount`, `columnCount`, `rows`, `getCell`, `addRows`, `addColumns`, `deleteRows`, `deleteColumns`, `delete` | [Tables and cells](/docs/2.x/editor-api/tables) |
-| `TableRow`, `TableCell` | Row `cells`; cell `body`, `value`, `columnWidth`, `shadingColor`, `verticalAlignment` | [Tables and cells](/docs/2.x/editor-api/tables) |
+| `TableRow`, `TableCell` | Row `cells`, `insertRows`; cell `body`, `value`, `columnWidth`, `shadingColor`, `verticalAlignment` | [Tables and cells](/docs/2.x/editor-api/tables) |
 | `TableCollection`, `TableRowCollection`, `TableCellCollection` | `getFirst`, `getFirstOrNullObject` | [Tables and cells](/docs/2.x/editor-api/tables) |
 | `VerticalAlignment` | Cell alignment values | [Tables and cells](/docs/2.x/editor-api/tables) |
 | `InlinePicture` | `width`, `height`, `lockAspectRatio`, `altTextDescription`, `delete` | [Inline pictures](/docs/2.x/editor-api/pictures) |
 | `InlinePictureCollection` | `getFirst`, `getLast`, `getFirstOrNullObject`, `getLastOrNullObject` | [Inline pictures](/docs/2.x/editor-api/pictures) |
 
 ## Fields, stories, and controls
+
+`Range.insertContentControl()` creates `RichText`, `PlainText`, and `DatePicker` controls.
 
 | Object or type | Public members beyond inherited members | Guide |
 | --- | --- | --- |
@@ -76,6 +80,8 @@ Font writes honor inherited complex-script properties. Font reads return authore
 | `ContentControlType`, `ContentControlSubtype`, `ContentControlValue`, `ContentControlLockState` | Creation vocabulary, DOCX subtype terms, typed values, and lock vocabulary | [Content controls](/docs/2.x/editor-api/content-controls) |
 
 ## Comments and revisions
+
+`Document.changeTrackingMode = "TrackMineOnly"` tracks supported text, font, paragraph, and list edits. Table row tracking supports additions and partial deletions. Complete table insertion supports native row revisions. Column changes and page setup refuse while tracking. TrackMineOnly can wrap nonempty ordinary text in PlainText, RichText, or DatePicker controls outside collaboration. Accept keeps the control; Reject restores the original formatted text. The author can set the pending control’s tag and title. Empty ranges, existing review markup, and other control structure changes refuse.
 
 | Object or type | Public members beyond inherited members | Guide |
 | --- | --- | --- |
@@ -99,3 +105,34 @@ For integration patterns, see [Connect an agent to a document](/docs/2.x/build-a
 ## External document refresh
 
 The refresh controller belongs to the browser host, outside the Office.js document model. `RefreshHighlightOptions` controls change selection and decoration. `NavigateToChangeOptions` controls scroll alignment, motion, padding, and focus. For more information, see [Document refresh API](/docs/2.x/guides/document-refresh).
+
+`RefreshChangeInput.description` supplies a processor review summary. `RefreshChange.diagnostic` reports unavailable locations with stable codes and the requested anchor. Refresh resets selection and undo history. It refuses collaborative sessions.
+
+## Document properties
+
+`Document.properties` returns a `DocumentProperties` proxy. It exposes the string properties `author`, `title`, `subject`, `keywords`, `comments`, and `category`. Load each property before reading it. Assignments commit at `context.sync()`. Missing properties read as empty strings. An empty assignment clears that value. Writes preserve unrelated document properties and accept XML-safe strings up to 4096 UTF-16 code units. `TrackMineOnly` refuses these writes with `NotSupported`. Individual dates and custom properties are unsupported. `lastAuthor` reads `cp:lastModifiedBy` and has no setter.
+
+```ts
+await runtime.run(async (context) => {
+  const properties = context.document.properties;
+  properties.author = 'Public Records Office';
+  properties.title = 'Release packet';
+  properties.subject = 'Public information';
+  properties.keywords = '';
+  properties.comments = '';
+  await context.sync();
+});
+```
+
+Collaborative writes require an existing core-properties part. If the input omits this part, set properties before joining collaboration. Concurrent creation of this package part cannot merge safely.
+
+### Remove document properties
+
+Call `document.removeDocumentInformation('DocumentProperties')` in a separate sync to remove standard core, extended, and custom property parts. This also removes last-author information and property relationships. It preserves document content, comments, revisions, and media. Ambiguous parts, incorrect roots or types, and unknown dependencies refuse with `NotSupported`. The method refuses all other `RemoveDocInfoType` modes, tracked writes, and collaboration. This subset does not anonymize text, cached field results, images, or review authors.
+
+```ts
+await runtime.run(async (context) => {
+  context.document.removeDocumentInformation('DocumentProperties');
+  await context.sync();
+});
+```

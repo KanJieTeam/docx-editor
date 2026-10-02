@@ -62,6 +62,29 @@ Supported read-derived proxies can share one `sync()` with their edits. For exam
 
 Proxies returned by insertions require a completed `sync()` before dependent operations. Do not configure a newly inserted table, image, list, or text range before that sync. If a prerequisite fails, the runtime commits no queued writes. Completed prerequisite reads can remain loaded after a later command fails.
 
+## Keep writes within one story
+
+A story is the main body, a header, a footer, or another document text container. One `context.sync()` can write only one story. Writes across stories fail with `ConflictingChanges`. Reads from different stories can share a sync.
+
+If the document has a primary header and footer, resolve both objects before formatting them. Then commit each story's writes separately:
+
+```ts
+await runtime.run(async (context) => {
+  const section = context.document.sections.getFirst();
+  await context.sync();
+  const stories = [section.getHeader('Primary'), section.getFooter('Primary')];
+  await context.sync();
+
+  for (const story of stories) {
+    story.font.name = 'Calibri';
+    story.font.size = 10;
+    await context.sync();
+  }
+});
+```
+
+Each write sync creates a separate transaction. Earlier successful transactions remain if a later transaction fails. Linked headers or footers can share content. Re-read that content before making a dependent edit through another section.
+
 ## Preserve Office.js enum property types
 
 Like Office.js, `Document.changeTrackingMode` and `PageSetup.orientation` use unions of the enum and its string literals for both reads and writes. Enum constants and the corresponding string literals are accepted by the type system. This matches Microsoft's [change-tracking declaration](https://learn.microsoft.com/en-us/javascript/api/word/word.document#word-word-document-changetrackingmode-member) and [page-orientation declaration](https://learn.microsoft.com/en-us/javascript/api/word/word.pagesetup#word-word-pagesetup-orientation-member).
@@ -119,13 +142,19 @@ Use `isDocxEditorError(error)` and branch on `error.code`. `error.target` identi
 | Read the current mode | `document.load('changeTrackingMode')`, then sync and read the property |
 | Make an intentional permanent edit | Explicitly set `changeTrackingMode = 'Off'` |
 
-`Off` is the initial runtime mode. Browser tracked writes require the review module; this property does not change the editor UI mode. `TrackMineOnly` needs a configured author and persists for that host session. It does not change peers' editing modes or persist a document-wide policy. `TrackAll` fails with `NotSupported`. Browser UI modes remain controlled by the editor host. Tracked edits support inline text in one paragraph, including table cells. The runtime rejects targets that touch pending revisions. The runtime rejects tracked deletion or replacement of simple fields containing nested fields or other result containers. Direct result runs remain supported. The runtime rejects structural and formatting edits while tracking changes. Comments and revision decisions remain available. Never silently fall back to `Off` when an edit cannot be tracked.
+`Off` is the initial runtime mode. Browser tracked writes require the review module; this property does not change the editor UI mode. `TrackMineOnly` needs a configured author and persists for that host session. It does not change peers' editing modes or persist a document-wide policy. `TrackAll` fails with `NotSupported`. Browser UI modes remain controlled by the editor host. Tracked range edits support adjacent sibling paragraphs, including paragraphs within one cell. They refuse table and wrapper boundaries. Ranges across paragraphs refuse in collaboration. The runtime rejects targets that touch foreign pending revisions. Continuation can extend the runtime author’s text and paragraph proposals. The runtime rejects tracked deletion or replacement of simple fields containing nested fields or other result containers. Direct result runs remain supported. The runtime tracks font, paragraph-format, and paragraph-style edits as property revisions. Paragraph insertion tracks text and paragraph marks. List creation, membership, and level changes produce paragraph-property revisions. New proposed list definitions can change. Complete table insertion, table value replacement, row additions, and partial row deletions support native revisions. An author can configure a complete proposed table while it has no foreign revisions. Existing table properties and columns require direct edits. Tracked table value replacement and ranges across paragraphs refuse in collaboration. Established list definitions and page setup refuse. TrackMineOnly can wrap nonempty ordinary text in PlainText, RichText, or DatePicker controls outside collaboration. Accept keeps the control; Reject restores the original formatted text. The author can set the pending control’s tag and title. Empty ranges, existing review markup, and other control structure changes refuse. Comments and revision decisions remain available. Never silently fall back to `Off` when an edit cannot be tracked.
 
 Standard `insertText('', 'Replace')` means deletion, and an empty insertion is a no-op. Agent tools should require nonempty insertion/replacement text and expose deletion as an explicit model decision. The shipped worker does this. The [compatibility manifest](https://github.com/eigenpal/docx-editor/blob/main/packages/editor-api/compat/manifest.json) records measured members and behavioral differences.
+
+## Insert table rows
+
+`TableRow.insertRows('Before', count, values)` and `'After'` support ordinary source rows beside unrelated merged headers. Merged source rows and crossing vertical merges refuse.
 
 ## Pictures and page fields
 
 Insert PNG or JPEG images with `range.insertInlinePictureFromBase64(data, 'After')`. Sync before setting properties on the returned picture. Width and height use points. New pictures lock the aspect ratio. Set `lockAspectRatio = false` before setting independent dimensions. Set `altTextDescription` to describe the image. Deletion preserves shared media relationships.
+
+Use `range.insertField('Before', 'TOC', '\\o "1-3" \\h')` to insert an inert TOC instruction. This call saves no calculated entries. TOC evaluation and code writes refuse.
 
 Insert a page field with `range.insertField('After', 'Page')` or `'NumPages'`. Sync before using the returned field. `field.code = 'NUMPAGES'` changes its instruction; `field.updateResult()` computes and stores its result. These calls use separate syncs. Field updates can share a sync with other field updates. They cannot share a sync with layout-changing writes.
 
@@ -134,3 +163,11 @@ Headless field calculation requires an explicit `pagination.measurer` when creat
 Character formatting also supports underline, strikethrough, exact Word-palette highlighting, subscript, and superscript. `font.underline = 'None'` removes an underline. Setting one script mode to `true` clears the other mode. The highlight setter keeps Office's pinned `string` type, although Microsoft documents runtime `null` for clearing. The runtime accepts this clearing value. The runtime rejects unsupported highlight colors.
 
 The workflow tests cover both hosts and save/reopen: `model-font-editing.test.ts`, `model-pictures.test.ts`, `model-fields.test.ts`, and `model-picture-field-parity.test.ts`. The final test includes primary footer creation and a saved `NUMPAGES` result.
+
+## Set document metadata
+
+Use `context.document.properties` for core metadata. The supported string properties are `author`, `title`, `subject`, `keywords`, `comments`, and `category`. Batch independent assignments, then call `context.sync()`. Load explicit property names before reading them. Metadata writes require tracking mode `Off`. Do not substitute revision author settings for document author metadata. Other document information and custom properties remain unchanged.
+
+Collaborative writes require an existing core-properties part. If the input omits this part, set properties before joining collaboration. Concurrent creation of this package part cannot merge safely.
+
+Load `properties.lastAuthor` to read the last saved author. This property has no setter. To remove all standard property parts, call `document.removeDocumentInformation('DocumentProperties')`, then `context.sync()`. Run this command alone. It removes core, extended, and custom properties, including the last author. It preserves document text, comments, revisions, and media. It does not anonymize their content. Other removal modes, tracked removal, and removal during collaboration refuse with `NotSupported`.

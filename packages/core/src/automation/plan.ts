@@ -1,3 +1,5 @@
+import { planDocumentProperties } from './plan-document-properties.ts';
+import { referencedNoteIds } from './note-references.ts';
 import { settingsPartOf } from '../store/package/note-properties.ts';
 import { stylesPartOf } from '../store/package/ooxml-indexes.ts';
 import { createContextualRunFormatting } from '../layout/complex-script-formatting.ts';
@@ -14,6 +16,8 @@ import type { ContentControlLock } from '../store/package/content-control-nodes.
 import type { PlannedOperation } from './plan-types.ts';
 export type { PlannedOperation } from './plan-types.ts';
 import { delimiterOccurrences, anchorForSection, placeable, trimmed } from './plan-read-helpers.ts';
+import { planContentControlInsertion } from './plan-content-control-insert.ts';
+import { ownsInsertedControl } from './tracked-content-controls.ts';
 import { planFields } from './plan-fields.ts';
 import { planTableOperation } from './plan-tables.ts';
 import { planVirtualFurniture } from './virtual-furniture.ts';
@@ -112,7 +116,7 @@ import type { NoteKind } from '../store/package/note-nodes.ts';
 import { paragraphStyleName, styleIdFor } from './styles.ts';
 import type { StoryScope } from '../store/store/tree-package-store.ts';
 import { commentReads, revisionReads, type AutomationRevisionRead } from './review.ts';
-import { planProposal } from './plan-proposal.ts';
+import { planProposal, trackedParagraphInsertError } from './plan-proposal.ts';
 import { planRevisionDecision, revisionItemOps } from './revision-operations.ts';
 import type { ReviewCommentItem } from '../store/store/review-items.ts';
 import {
@@ -133,8 +137,8 @@ import { contentControlPropertiesOf } from '../store/package/content-control-nod
 import {
   CONTENT_CONTROL_LOCKS,
   CONTENT_CONTROL_RANGE_LOCATIONS,
-  CONTENT_CONTROL_SUBTYPES,
   allControlsUnder,
+  contentControlTextInsertionError,
   contentControlValueOf,
 } from './content-control-input.ts';
 import {
@@ -158,6 +162,8 @@ interface Slot {
 }
 
 export interface BatchPlannerHost {
+  readonly collaborative?: boolean;
+  readonly trackedRangeReplacement?: boolean;
   readonly fieldPageContext?: (
     story: AutomationStoryId,
     paragraphId: string,
@@ -1534,6 +1540,8 @@ export function createBatchPlanner(host: BatchPlannerHost): BatchPlanner {
       return virtual;
     }
     const table = planTableOperation(operation, {
+      trackingAuthor,
+      trackedRangeReplacement: host.trackedRangeReplacement,
       handles,
       reads: packageReads,
       admitWrite: (reads, count, paragraphIds) => {
@@ -1622,7 +1630,17 @@ export function createBatchPlanner(host: BatchPlannerHost): BatchPlanner {
                 numbering ? `list:${numbering.numId}:${numbering.level}` : 'paragraph'
               )
             );
-          }
+          },
+          trackingAuthor
+        );
+      case 'removeDocumentInformation':
+      case 'getDocumentProperty':
+      case 'setDocumentProperties':
+        return planDocumentProperties(
+          operation,
+          packageReads,
+          () => pinWrite(planFor(packageReads.body!)),
+          !host.collaborative
         );
       case 'getDocument':
         return query({ kind: 'handle', handle: handles.document() });
@@ -1745,10 +1763,17 @@ export function createBatchPlanner(host: BatchPlannerHost): BatchPlanner {
       case 'proposeInsertion':
       case 'proposeDeletion':
       case 'proposeReplacement':
-        return planProposal(operation, tracked, handles, packageReads, (story, paragraphId) => {
-          const storyPlan = planFor(story);
-          return pinWrite(storyPlan) ?? claim(storyPlan, paragraphId);
-        });
+        return planProposal(
+          operation,
+          tracked,
+          handles,
+          packageReads,
+          (story, paragraphId) => {
+            const storyPlan = planFor(story);
+            return pinWrite(storyPlan) ?? claim(storyPlan, paragraphId);
+          },
+          host.trackedRangeReplacement !== false
+        );
 
       case 'insertText': {
         const at = resolvePoint(operation.at, handles, packageReads);
@@ -1806,6 +1831,9 @@ export function createBatchPlanner(host: BatchPlannerHost): BatchPlanner {
           );
         const story = packageReads.story(anchor.value.story);
         if (!story) return refuse('invalid-handle', 'that story is not in this document');
+        const error =
+          tracked && trackedParagraphInsertError(story, anchor.value.paragraphId, trackingAuthor!);
+        if (error) return { ok: false, error };
         return planInsertParagraph(planFor(story), anchor.value, operation.where, operation.text);
       }
 
@@ -1967,9 +1995,20 @@ export function createBatchPlanner(host: BatchPlannerHost): BatchPlanner {
             `${kind} identities are not completely and unambiguously enumerable`,
             listing.reason === 'duplicates' ? listing.duplicateIds.join(',') : listing.reason
           );
+        let ids = listing.ids;
+        if (operation.scope) {
+          const scope = storyOfHandle(operation.scope, 'body', handles, packageReads);
+          if (!scope.ok)
+            return refuse(scope.code, 'that handle does not name a body', scope.detail);
+          const referenced = referencedNoteIds(scope.value.root, kind);
+          const available = new Set(listing.ids);
+          if (referenced.some((id) => !available.has(id)))
+            return refuse('ambiguous-document', 'a note reference has no matching note');
+          ids = referenced;
+        }
         return query({
           kind: 'handles',
-          handles: listing.ids.map((noteId) => handles.note(kind, noteId)),
+          handles: ids.map((noteId) => handles.note(kind, noteId)),
         });
       }
 
@@ -2597,6 +2636,17 @@ export function createBatchPlanner(host: BatchPlannerHost): BatchPlanner {
         const found = controlOf(operation.contentControl);
         if (!('control' in found)) return found;
         if (
+          tracked &&
+          (!ownsInsertedControl(found.reads.part, found.control.nodeId, trackingAuthor!) ||
+            operation.lock !== undefined ||
+            operation.cannotEdit !== undefined ||
+            operation.cannotDelete !== undefined)
+        )
+          return refuse(
+            'unsupported-capability',
+            'tracked control metadata requires an own pending insertion; locks require direct edits'
+          );
+        if (
           operation.tag === undefined &&
           operation.title === undefined &&
           operation.lock === undefined &&
@@ -2664,16 +2714,12 @@ export function createBatchPlanner(host: BatchPlannerHost): BatchPlanner {
       case 'insertContentControlText': {
         const found = controlOf(operation.contentControl);
         if (!('control' in found)) return found;
-        if (typeof operation.text !== 'string') {
-          return refuse('unsupported-content', 'text is required', 'text');
-        }
-        if (operation.at !== 'replace' && operation.at !== 'start' && operation.at !== 'end') {
-          return refuse(
-            'unsupported-content',
-            'that is not a place to insert at',
-            String(operation.at)
-          );
-        }
+        const error = contentControlTextInsertionError(
+          found.control.properties.type,
+          operation.text,
+          operation.at
+        );
+        if (error) return { ok: false, error };
         const plan = planFor(found.reads);
         const pin = pinWrite(plan);
         if (pin) return pin;
@@ -2769,63 +2815,18 @@ export function createBatchPlanner(host: BatchPlannerHost): BatchPlanner {
         };
       }
 
-      case 'insertContentControl': {
-        const resolved = resolveSpanRef(operation.span, handles, packageReads);
-        if (!resolved.ok) return refuse(resolved.code, 'that span is not a place', resolved.detail);
-        if (!resolved.value)
-          return refuse('invalid-offset', 'that story holds nothing to wrap', 'empty-story');
-        const story = storyReadsOf(resolved.value);
-        if (!story) return refuse('invalid-handle', 'that story is not in this document');
-        const range = resolved.value;
-        // ONE PARAGRAPH: a control that starts in one paragraph and ends in another is a BLOCK
-        // control over both, which is a different wrapper than the inline one this operation
-        // authors. Refused rather than guessed, so a caller learns which they asked for.
-        if (range.start.paragraphId !== range.end.paragraphId) {
-          return refuse(
-            'unsupported-content',
-            'wrapping several paragraphs in one control is not supported here',
-            'multi-paragraph'
-          );
-        }
-        if (!CONTENT_CONTROL_SUBTYPES.has(operation.subtype)) {
-          return refuse(
-            'unsupported-content',
-            'that control type cannot be inserted',
-            operation.subtype
-          );
-        }
-        const existingControlIds = new Set(allControlsUnder(story.root).map((node) => node.id));
-        const plan = planFor(story);
-        const pin = pinWrite(plan);
-        if (pin) return pin;
-        const conflict = claim(plan, range.start.paragraphId);
-        if (conflict) return conflict;
-        return {
-          ok: true,
-          kind: 'command',
-          story: story.story,
-          ops: [
-            {
-              op: 'insertContentControl',
-              paragraphId: range.start.paragraphId,
-              start: range.start.offset,
-              end: range.end.offset,
-              type: operation.subtype,
-              ...(operation.tag === undefined ? {} : { tag: operation.tag }),
-              ...(operation.title === undefined ? {} : { alias: operation.title }),
-            },
-          ],
-          answer: (post) => {
-            if (!operation.returnHandle) return APPLIED;
-            const after = post.story(story.story);
-            const created =
-              after &&
-              allControlsUnder(after.root).find((node) => !existingControlIds.has(node.id));
-            if (!created) throw new Error('content control insertion did not create a control');
-            return { kind: 'handle', handle: handles.contentControl(created.id, story.story) };
-          },
-        };
-      }
+      case 'insertContentControl':
+        return planContentControlInsertion(
+          operation,
+          handles,
+          packageReads,
+          trackingAuthor,
+          host.trackedRangeReplacement,
+          (story, paragraphId) => {
+            const plan = planFor(story);
+            return pinWrite(plan) ?? claim(plan, paragraphId);
+          }
+        );
 
       case 'insertCustomNode': {
         // Everything that can be judged from the request alone, before a handle is resolved.

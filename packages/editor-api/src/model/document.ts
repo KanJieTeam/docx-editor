@@ -9,11 +9,6 @@ Production use requires a commercial agreement: licensing@eigenpal.com
 // stories, and this slice publishes one of them (`body`) plus the main story's paragraphs as a
 // convenience, because `document.paragraphs` is how source-compatible code walks a document.
 //
-// WHAT IS NOT HERE IS NOT HERE ON PURPOSE. `contentControls`, `comments` and `sections` are declared
-// in the compatibility surface and are not implemented in this slice; a getter that answered an
-// empty collection would be indistinguishable from a document that has none, which is exactly the
-// kind of quiet wrong answer this lane is built to avoid. They arrive with the slices that can read
-// them.
 
 import {
   ObjectPath,
@@ -22,6 +17,7 @@ import {
   type RequestContext,
   type ResolvedLoadOptions,
 } from '../runtime/model-support.ts';
+import { DocumentProperties } from './document-properties.ts';
 import { Body } from './body.ts';
 import type { ParagraphCollection } from './collections.ts';
 import { ContentControlCollection } from './content-controls.ts';
@@ -32,7 +28,7 @@ import { SectionCollection } from './sections.ts';
 
 /** Office.js tracking mode names. TrackAll is recognized but currently refused. @public */
 export { ChangeTrackingMode } from './editing-enums.ts';
-import { ChangeTrackingMode } from './editing-enums.ts';
+import { ChangeTrackingMode, RemoveDocInfoType } from './editing-enums.ts';
 
 /**
  * The document: the root every other object is reached from.
@@ -64,6 +60,7 @@ import { ChangeTrackingMode } from './editing-enums.ts';
  * @public
  */
 export class Document extends ModelObject {
+  #properties: DocumentProperties | undefined;
   #body: Body | undefined;
   #paragraphs: ParagraphCollection | undefined;
   #sections: SectionCollection | undefined;
@@ -115,6 +112,48 @@ export class Document extends ModelObject {
   get body(): Body {
     this.#body ??= Body.main(this.context, 'document.body');
     return this.#body;
+  }
+
+  /**
+   * Remove standard core, extended, and custom document-property parts in one sync.
+   * Only DocumentProperties is supported. Tracking and collaboration refuse with NotSupported.
+   * This command must be the only write in its sync. It does not anonymize document content.
+   */
+  removeDocumentInformation(removeDocInfoType: RemoveDocInfoType): void;
+  removeDocumentInformation(
+    removeDocInfoType:
+      | 'Comments'
+      | 'Revisions'
+      | 'Versions'
+      | 'RemovePersonalInformation'
+      | 'EmailHeader'
+      | 'RoutingSlip'
+      | 'SendForReview'
+      | 'DocumentProperties'
+      | 'Template'
+      | 'DocumentWorkspace'
+      | 'InkAnnotations'
+      | 'DocumentServerProperties'
+      | 'DocumentManagementPolicy'
+      | 'ContentType'
+      | 'TaskpaneWebExtensions'
+      | 'AtMentions'
+      | 'DocumentTasks'
+      | 'DocumentIntelligence'
+      | 'CommentReactions'
+      | 'All'
+  ): void;
+  removeDocumentInformation(removeDocInfoType: string): void {
+    this.command(`${this.path.label}.removeDocumentInformation`, () => ({
+      op: 'removeDocumentInformation',
+      removeDocInfoType,
+    }));
+  }
+
+  /** Core document metadata. Reads require load; writes commit at sync. */
+  get properties(): DocumentProperties {
+    this.#properties ??= DocumentProperties.of(this.context, this.path);
+    return this.#properties;
   }
 
   /** The main story's paragraphs, in reading order. */
@@ -174,9 +213,7 @@ export class Document extends ModelObject {
   /**
    * The document's footnotes, in the order its notes part writes them.
    *
-   * DocxEditor's own accessor: upstream reaches notes through `Body#footnotes`, whose collection type
-   * the pinned reference fixture does not carry — see `compat/manifest.json`. Without an accessor a
-   * note would be unreachable, so it is published here and recorded as unmeasured.
+   * Legacy document-wide accessor. Prefer the Office.js-shaped `body.footnotes` accessor.
    */
   get footnotes(): NoteItemCollection {
     const document = this.path.handle();

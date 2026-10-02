@@ -1950,7 +1950,7 @@ export interface PaginatedSurface {
     activeReviewKey(): string | null;
     activeScope(): ViewScope;
     adjustIndent(direction: 'increase' | 'decrease'): boolean;
-    applyAutomationOps(staged: (relate: (url: string) => string | null) => readonly TreeDocOp[] | null, scope?: StoryScope, packageEdits?: readonly ((pkg: OoxmlPackage) => OoxmlPackage)[]): TreeApplyResult;
+    applyAutomationOps(staged: (relate: (url: string) => string | null) => readonly TreeDocOp[] | null, scope?: StoryScope, packageEdits?: readonly ((pkg: OoxmlPackage) => OoxmlPackage)[], requiresReview?: boolean): TreeApplyResult;
     // (undocumented)
     applyDrawingOps(ops: readonly DrawingTreeDocOp[]): TreeApplyResult;
     applyHeaderFooterLifecycle(op: {
@@ -2493,6 +2493,11 @@ export const PX_PER_INCH = 96;
 
 // @public
 export interface RefreshChange {
+    readonly description?: string;
+    readonly diagnostic?: {
+        readonly code: 'missing-location' | 'deleted' | 'invalid-selector' | 'invalid-paragraph-id' | 'paragraph-not-found' | 'ambiguous-paragraph-id' | 'invalid-offsets' | 'text-mismatch' | 'not-rendered' | 'unsupported-story' | 'multiple-paragraphs';
+        readonly location?: RefreshLocation;
+    };
     // (undocumented)
     readonly id: string;
     readonly isNew: boolean;
@@ -2505,6 +2510,7 @@ export interface RefreshChange {
 
 // @public
 export interface RefreshChangeInput {
+    readonly description?: string;
     // (undocumented)
     readonly id: string;
     // (undocumented)

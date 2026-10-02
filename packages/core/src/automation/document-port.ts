@@ -94,6 +94,10 @@ export interface AutomationDocumentPort {
   ): { pageNumber: number; pageNumberText?: string; pageCount: number } | null;
   /** This owner supports host-local Office-shaped tracking independently of browser UI modes. */
   readonly localChangeTracking?: true;
+  /** True when a live collaboration session replicates package edits. */
+  readonly collaborative?: () => boolean;
+  /** False when concurrent character insertion cannot retain tracked replacement coverage. */
+  readonly trackedRangeReplacement?: () => boolean;
   /** The owner UI requires edits to be tracked even when this automation runtime is Off. */
   readonly suggesting?: () => boolean;
   /**
@@ -148,7 +152,8 @@ export interface AutomationDocumentPort {
   apply(
     staged: AutomationStagedOps,
     scope: StoryScope,
-    packageEdits?: readonly AutomationPackageEdit[]
+    packageEdits?: readonly AutomationPackageEdit[],
+    requiresReview?: boolean
   ): AutomationPortApplyResult;
   /**
    * Commit ONE package-level op — a note or furniture lifecycle — as its own transaction.

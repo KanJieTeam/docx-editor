@@ -95,8 +95,57 @@ export declare namespace DocxEditor {
     isNullObject: boolean;
   }
 
+  /** Document information categories. Only DocumentProperties removal is supported. @public */
+  export enum RemoveDocInfoType {
+    all = 'All',
+    atMentions = 'AtMentions',
+    commentReactions = 'CommentReactions',
+    comments = 'Comments',
+    contentType = 'ContentType',
+    documentIntelligence = 'DocumentIntelligence',
+    documentManagementPolicy = 'DocumentManagementPolicy',
+    documentProperties = 'DocumentProperties',
+    documentServerProperties = 'DocumentServerProperties',
+    documentTasks = 'DocumentTasks',
+    documentWorkspace = 'DocumentWorkspace',
+    emailHeader = 'EmailHeader',
+    inkAnnotations = 'InkAnnotations',
+    removePersonalInformation = 'RemovePersonalInformation',
+    revisions = 'Revisions',
+    routingSlip = 'RoutingSlip',
+    sendForReview = 'SendForReview',
+    taskpaneWebExtensions = 'TaskpaneWebExtensions',
+    template = 'Template',
+    versions = 'Versions',
+  }
+
   export class Document {
     changeTrackingMode: 'Off' | 'TrackAll' | 'TrackMineOnly';
+    readonly properties: DocumentProperties;
+    removeDocumentInformation(removeDocInfoType: RemoveDocInfoType): void;
+    removeDocumentInformation(
+      removeDocInfoType:
+        | 'Comments'
+        | 'Revisions'
+        | 'Versions'
+        | 'RemovePersonalInformation'
+        | 'EmailHeader'
+        | 'RoutingSlip'
+        | 'SendForReview'
+        | 'DocumentProperties'
+        | 'Template'
+        | 'DocumentWorkspace'
+        | 'InkAnnotations'
+        | 'DocumentServerProperties'
+        | 'DocumentManagementPolicy'
+        | 'ContentType'
+        | 'TaskpaneWebExtensions'
+        | 'AtMentions'
+        | 'DocumentTasks'
+        | 'DocumentIntelligence'
+        | 'CommentReactions'
+        | 'All'
+    ): void;
     readonly body: Body;
     readonly comments: CommentCollection;
     readonly contentControls: ContentControlCollection;
@@ -105,7 +154,19 @@ export declare namespace DocxEditor {
     readonly sections: SectionCollection;
   }
 
+  export class DocumentProperties {
+    readonly lastAuthor: string;
+    author: string;
+    title: string;
+    subject: string;
+    keywords: string;
+    comments: string;
+    category: string;
+  }
+
   export class Body {
+    readonly footnotes: NoteItemCollection;
+    readonly endnotes: NoteItemCollection;
     readonly contentControls: ContentControlCollection;
     readonly font: Font;
     readonly lists: ListCollection;
@@ -285,9 +346,6 @@ export declare namespace DocxEditor {
     getNext(): NoteItem;
   }
 
-  // Upstream reaches this from `Body#footnotes`/`#endnotes`; here it hangs off the document, because
-  // a note is a part of the package that only the main story may reference. See
-  // `compat/manifest.json`.
   export class NoteItemCollection {
     readonly items: NoteItem[];
     getFirst(): NoteItem;

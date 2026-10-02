@@ -129,3 +129,126 @@ for (const action of ['list', 'table', 'field', 'control'] as const) {
     }
   });
 }
+
+test('tracked list creation requires the browser review module', async () => {
+  const editor = createDocxEditor({ container: document.createElement('div'), document: bytes });
+  const runtime = DocxEditorBrowser.createBrowser(editor, { author: 'Agent' });
+  const before = new Uint8Array(await editor.save());
+  try {
+    await expect(
+      runtime.run(async (c) => {
+        const paragraph = c.document.body.paragraphs.getFirst();
+        await c.sync();
+        c.document.changeTrackingMode = 'TrackMineOnly';
+        paragraph.startNewList();
+        await c.sync();
+      })
+    ).rejects.toMatchObject({ code: 'NotSupported' });
+    expect(new Uint8Array(await editor.save())).toEqual(before);
+  } finally {
+    runtime.dispose();
+    editor.destroy();
+  }
+});
+
+for (const action of ['properties', 'values', 'cell'] as const) {
+  test(`browser suggesting mode refuses permanent table ${action} with runtime tracking Off`, async () => {
+    const editor = createDocxEditor({
+      container: document.createElement('div'),
+      document: bytes,
+      modules: [reviewModule()],
+      author: 'UI reviewer',
+    });
+    const runtime = DocxEditorBrowser.createBrowser(editor, { author: 'Agent' });
+    try {
+      await runtime.run(async (context) => {
+        context.document.body.getRange('Start').insertTable(1, 1, 'Before', [['Original cell']]);
+        await context.sync();
+      });
+      editor.setEditingMode('suggesting');
+      const before = new Uint8Array(await editor.save());
+      await expect(
+        runtime.run(async (context) => {
+          const table = context.document.body.tables.getFirst();
+          await context.sync();
+          if (action === 'properties') table.headerRowCount = 1;
+          else if (action === 'values') table.values = [['Untracked replacement']];
+          else {
+            const cell = table.getCell(0, 0);
+            await context.sync();
+            cell.value = 'Untracked replacement';
+          }
+          await context.sync();
+        })
+      ).rejects.toMatchObject({ code: 'NotSupported' });
+      expect(new Uint8Array(await editor.save())).toEqual(before);
+    } finally {
+      runtime.dispose();
+      editor.destroy();
+    }
+  });
+}
+
+for (const action of ['rows', 'membership', 'level', 'control'] as const) {
+  test(`tracked ${action} requires the browser review module`, async () => {
+    const editor = createDocxEditor({ container: document.createElement('div'), document: bytes });
+    const runtime = DocxEditorBrowser.createBrowser(editor, { author: 'Agent' });
+    try {
+      await runtime.run(async (c) => {
+        const paragraph = c.document.body.paragraphs.getFirst();
+        await c.sync();
+        paragraph.startNewList();
+        await c.sync();
+        c.document.body.getRange('End').insertTable(2, 1, 'After', [['One'], ['Two']]);
+        await c.sync();
+      });
+      const before = new Uint8Array(await editor.save());
+      await expect(
+        runtime.run(async (c) => {
+          c.document.changeTrackingMode = 'TrackMineOnly';
+          if (action === 'rows') c.document.body.tables.getFirst().addRows('End', 1, [['Three']]);
+          else {
+            const paragraph = c.document.body.paragraphs.getFirst();
+            if (action === 'control')
+              paragraph.getRange('Content').insertContentControl('PlainText');
+            else if (action === 'membership') paragraph.detachFromList();
+            else paragraph.listItem.level = 1;
+          }
+          await c.sync();
+        })
+      ).rejects.toMatchObject({ code: 'NotSupported' });
+      expect(new Uint8Array(await editor.save())).toEqual(before);
+    } finally {
+      runtime.dispose();
+      editor.destroy();
+    }
+  });
+}
+
+test('browser suggesting mode refuses permanent control metadata with runtime tracking Off', async () => {
+  const editor = createDocxEditor({
+    container: document.createElement('div'),
+    document: bytes,
+    modules: [reviewModule()],
+    author: 'UI reviewer',
+  });
+  const runtime = DocxEditorBrowser.createBrowser(editor, { author: 'Agent' });
+  try {
+    await runtime.run(async (c) => {
+      c.document.body.getRange('Content').insertContentControl('PlainText');
+      await c.sync();
+    });
+    expect(editor.setEditingMode('suggesting').ok).toBe(true);
+    const before = new Uint8Array(await editor.save());
+    await expect(
+      runtime.run(async (c) => {
+        c.document.contentControls.getFirst().tag = 'changed';
+        await c.sync();
+      })
+    ).rejects.toMatchObject({ code: 'NotSupported' });
+    expect(new Uint8Array(await editor.save())).toEqual(before);
+  } finally {
+    runtime.dispose();
+    editor.destroy();
+  }
+});

@@ -202,12 +202,15 @@ function sessionPort(editor: DocxEditorInstance): AutomationDocumentPort {
       editor.surface
         ? layoutProjectionOf(editor.surface.revisionDisplayMode())
         : DEFAULT_FORMATTING_DISPLAY_MODE,
+    collaborative: () => !!editor.surface?.collaborationSession(),
+    trackedRangeReplacement: () => !editor.surface?.collaborationSession(),
     replacementLanding: (paragraphId, start, end) =>
       editor.surface?.replacementLanding(paragraphId, start, end) ?? null,
     apply(
       staged: AutomationStagedOps,
       scope: StoryScope,
-      packageEdits = []
+      packageEdits = [],
+      requiresReview = false
     ): AutomationPortApplyResult {
       sync();
       const surface = editor.surface;
@@ -223,7 +226,7 @@ function sessionPort(editor: DocxEditorInstance): AutomationDocumentPort {
       // The ops are STAGED, so the relationship an external hyperlink needs is minted inside that
       // gate — see `applyAutomationOps`. Minting it out here would put a target in the `.rels` of a
       // document the very next line refuses to write to.
-      const result = surface.applyAutomationOps(staged, scope, packageEdits);
+      const result = surface.applyAutomationOps(staged, scope, packageEdits, requiresReview);
       if (result.rejected) return { ok: false, reason: String(result.reason ?? 'refused') };
       return { ok: true, changed: result.committed };
     },

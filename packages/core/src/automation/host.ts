@@ -18,6 +18,7 @@
 
 import {
   trackingStep,
+  trackPlannedChanges,
   supportsTrackedAutomationOperation,
   type LocalTrackingState,
 } from './change-tracking.ts';
@@ -175,6 +176,8 @@ export function createAutomationHost(composition: AutomationHostComposition): Au
       handles,
       reads: readsOf(pkg),
       capabilities,
+      collaborative: port.collaborative?.() ?? false,
+      trackedRangeReplacement: port.trackedRangeReplacement?.() ?? true,
       // Read ONCE per batch: the formatting lanes must not answer one operation against
       // All Markup and the next against the resolved result.
       ...(port.revisionDisplayMode ? { displayMode: port.revisionDisplayMode() } : {}),
@@ -208,13 +211,25 @@ export function createAutomationHost(composition: AutomationHostComposition): Au
     /** The one custom-node write a batch may hold, solitary and its own commit for the same reason. */
     let customNodeWrite: { write: InsertCustomNodeWrite; scope: StoryScope } | null = null;
     let firstCommand = -1;
+    let requiresReview = false;
     let stagedTracking = tracking;
     for (let index = 0; index < operations.length; index += 1) {
       const operation = operations[index]!;
       if (
         port.suggesting?.() &&
         operation.op !== 'replaceSpan' &&
-        !supportsTrackedAutomationOperation(operation)
+        (!supportsTrackedAutomationOperation(operation) ||
+          (!stagedTracking.author &&
+            [
+              'insertContentControl',
+              'setContentControlProperties',
+              'startNewList',
+              'setListLevelFormat',
+              'insertTable',
+              'insertTableRows',
+              'updateTable',
+              'updateTableCell',
+            ].includes(operation.op)))
       )
         return refuse(
           operations,
@@ -226,11 +241,22 @@ export function createAutomationHost(composition: AutomationHostComposition): Au
           revision
         );
       const policy = trackingStep(operation, port.localChangeTracking === true, stagedTracking);
-      const step = policy?.step ?? planner.plan(operation, stagedTracking.author);
+      const step =
+        policy?.step ??
+        trackPlannedChanges(
+          operation,
+          planner.plan(operation, stagedTracking.author),
+          stagedTracking.author
+        );
       if (policy) stagedTracking = policy.state;
       if (!step.ok) return refuse(operations, index, step.error, revision);
       planned.push(step);
       if (step.kind === 'command') {
+        if (
+          stagedTracking.author &&
+          (step.packageEdits?.length || operation.op === 'setContentControlProperties')
+        )
+          requiresReview = true;
         if (step.packageEdits) packageEdits.push(...step.packageEdits);
         if (firstCommand < 0) firstCommand = index;
         if (step.lifecycle) lifecycle = step.ops[0] ?? null;
@@ -323,7 +349,8 @@ export function createAutomationHost(composition: AutomationHostComposition): Au
           return built;
         },
         planner.writeScope ?? { kind: 'body' },
-        packageEdits
+        packageEdits,
+        requiresReview
       );
       if (!applied.ok) {
         return refuse(

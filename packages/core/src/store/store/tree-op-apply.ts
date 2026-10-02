@@ -123,6 +123,7 @@ import {
   applySetSectionProperties,
 } from './tree-op-section.ts';
 import { pageFieldContentBuilders, pageFieldModelLength } from './tree-op-fields.ts';
+import { applyTrackedContentControl } from './tracked-content-control-insert.ts';
 import { applyInsertContentControl as applyAutomationInsertContentControl } from './tree-op-content-control-insert.ts';
 import {
   applyRemoveContentControl as applyAutomationRemoveContentControl,
@@ -237,7 +238,9 @@ export function applyTreeOp(part: OoxmlPart, op: TreeDocOp, options?: EditOption
     return applyAutomationRemoveContentControl(part, op, options);
   }
   if (op.op === 'insertContentControl') {
-    return applyAutomationInsertContentControl(part, op, options);
+    return op.revision
+      ? applyTrackedContentControl(part, op, options)
+      : applyAutomationInsertContentControl(part, op, options);
   }
   // Typing into a prompt REPLACES it. The transition belongs here rather than beside the
   // caret: an automation call and a paste insert text too, and a prompt that survived them
@@ -416,7 +419,7 @@ export function applyTreeOp(part: OoxmlPart, op: TreeDocOp, options?: EditOption
       return applyInsertContent(part, paragraph, op.offset, [element], options);
     }
     case 'setListLevel':
-      return applySetListLevel(part, paragraph, op.level, options, nextId);
+      return applySetListLevel(part, paragraph, op.level, options, nextId, op.revision);
     case 'setParagraphMarkProperties':
       return applySetParagraphMarkProperties(
         part,
@@ -427,7 +430,15 @@ export function applyTreeOp(part: OoxmlPart, op: TreeDocOp, options?: EditOption
         op.revision
       );
     case 'setListNumbering':
-      return applySetListNumbering(part, paragraph, op.numId, op.level ?? 0, options, nextId);
+      return applySetListNumbering(
+        part,
+        paragraph,
+        op.numId,
+        op.level ?? 0,
+        options,
+        nextId,
+        op.revision
+      );
     case 'setParagraphTabStops':
       return applySetParagraphTabStops(
         part,
