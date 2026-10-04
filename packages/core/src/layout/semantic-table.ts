@@ -1,3 +1,4 @@
+import { readTableAlignment } from './table-alignment.ts';
 import { withSharedGridLineSideRules } from './legacy-table-side-rules.ts';
 import { withRowMinimumContentInsets } from './table-row-minimum-insets.ts';
 // Bounded table structure over the typed canonical tree.
@@ -149,18 +150,6 @@ export type TableAlignment = 'left' | 'center' | 'right';
  * reader (`readTableIndentPt`); the table widths and margins stay unsigned.
  */
 const MAX_TABLE_INDENT_PT = 31_680 / 20;
-
-/** `w:tblPr/w:jc`, defaulting to left when absent or unrecognised. */
-function readTableAlignment(container: OoxmlElement | undefined): TableAlignment | undefined {
-  const jc = container && childNamed(container, 'jc');
-  if (!jc) return undefined;
-  const value = attributeValue(jc, 'val');
-  // `start`/`end` are the strict-conformant spellings of `left`/`right`.
-  if (value === 'center') return 'center';
-  if (value === 'right' || value === 'end') return 'right';
-  if (value === 'left' || value === 'start') return 'left';
-  return undefined;
-}
 
 /** One anchor box, in the same coordinates layout reports fragment boxes in. */
 export interface TableAnchorFrame {
@@ -377,11 +366,11 @@ function readGridSkip(rowProperties: OoxmlElement | undefined, localName: string
   return Number.isInteger(count) && count > 0 ? Math.min(count, MAX_TABLE_COLUMNS) : 0;
 }
 
-function readVMergeContinue(cellProperties: OoxmlElement | undefined): boolean {
+/** A cell's `w:vMerge` marker: absent, `restart`, or continue (explicit or bare). */
+function readVMerge(cellProperties: OoxmlElement | undefined): 'none' | 'restart' | 'continue' {
   const vMerge = cellProperties && childNamed(cellProperties, 'vMerge');
-  if (!vMerge) return false;
-  // Explicit "continue" or a bare <w:vMerge/> continues; only "restart" starts a cell.
-  return attributeValue(vMerge, 'val') !== 'restart';
+  if (!vMerge) return 'none';
+  return attributeValue(vMerge, 'val') === 'restart' ? 'restart' : 'continue';
 }
 
 function readShading(cellProperties: OoxmlElement | undefined): string | undefined {
@@ -746,6 +735,10 @@ function readTableStructureUncached(
   const bodyRows = plans.length;
 
   const rows: SemanticTableRow[] = [];
+  // Grid columns where the previous row has a cell with `w:vMerge`. A continuation only
+  // continues such a cell (17.4.85). Below an unmerged cell, or in the first row, it has
+  // nothing to continue, so it starts its own merge and paints its own content.
+  let mergedAbove = new Set<number>();
   for (let rowIndex = 0; rowIndex < plans.length; rowIndex += 1) {
     const plan = plans[rowIndex]!;
     const rowNode = plan.node;
@@ -763,6 +756,7 @@ function readTableStructureUncached(
     const isHeader = tableRowIsHeader(tableStyle, rowConditions, rowProperties);
     let cellIndex = 0;
     const cells: SemanticTableCell[] = [];
+    const mergedHere = new Set<number>();
     for (const cellNode of plan.cells) {
       if (cellNode.kind !== 'tableCell') continue;
       const cellProperties = childNamed(cellNode, 'tcPr');
@@ -804,12 +798,14 @@ function readTableStructureUncached(
       // merges inside it and a paragraph a revision removed leaves no blank line behind.
       const blocks = mergedFlowBlocks(cellNode.children, displayMode, authorFilter);
       const ownBorders = cellProperties ? readCellBorders(cellProperties) : EMPTY_CELL_BORDER_BOX;
+      const vMerge = readVMerge(cellProperties);
+      if (vMerge !== 'none') mergedHere.add(gridColumn);
       cells.push({
         id: cellNode.id,
         gridSpan,
         gridColumn,
         ...(gridCols[gridColumn]?.id ? { gridColumnId: gridCols[gridColumn]!.id } : {}),
-        vMergeContinue: readVMergeContinue(cellProperties),
+        vMergeContinue: vMerge === 'continue' && mergedAbove.has(gridColumn),
         hideEndMark: cellIgnoresEndMark(tableStyle, conditions, cellProperties),
         vAlign: readCellVerticalAlign(cellProperties),
         textDirection: readCellTextDirection(cellProperties),
@@ -822,6 +818,7 @@ function readTableStructureUncached(
         blocks,
       });
     }
+    mergedAbove = mergedHere;
     const rowRevision = plan.revision;
     const rowRevisionKind = rowRevision
       ? rowRevision.localName === 'ins'
