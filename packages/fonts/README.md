@@ -1,3 +1,13 @@
+<p align="center">
+  <a href="https://www.docx-editor.dev/">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/eigenpal/docx-editor/main/.github/assets/readme-logo-dark.svg" />
+      <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/eigenpal/docx-editor/main/.github/assets/readme-logo-light.svg" />
+      <img src="https://raw.githubusercontent.com/eigenpal/docx-editor/main/.github/assets/readme-logo-light.svg" alt="DOCX Editor by EigenPal" width="320" height="90" />
+    </picture>
+  </a>
+</p>
+
 # @docx-editor.dev/fonts
 
 Load open-licensed substitutes for common document fonts. The docx-editor engine uses these fonts to measure and render text.
@@ -15,7 +25,19 @@ The first five substitutes target matching advance widths for the glyphs they co
 
 Packaged faces do not cover every script. Liberation Sans has no Arabic glyphs. The editor keeps native family fallback available for missing glyphs. Exact metrics still depend on the font available for that script.
 
-`loadDefaultFonts()` and `defaultFonts()` load the five default families. To include Century Gothic, pass `families: ALL_DEFAULT_FONT_FAMILIES`. Its substitute adds about 709 KB. Alternatively, `googleFonts()` loads it from packaged assets when the document requests it.
+`loadDefaultFonts()` and `defaultFonts()` load five package defaults: Calibri, Cambria, Times New Roman, Arial, and Courier New. To include Century Gothic, pass `families: ALL_DEFAULT_FONT_FAMILIES`. Its substitute adds about 709 KB. Alternatively, `googleFonts()` loads it from packaged assets when the document requests it.
+
+## Default family names
+
+Use these names for the package's family lists and type:
+
+| Preferred name | Deprecated alias |
+| --- | --- |
+| `DefaultFontFamily` | `WordDefaultFamily` |
+| `DEFAULT_FONT_FAMILIES` | `WORD_DOCUMENT_DEFAULT_FAMILIES` |
+| `ALL_DEFAULT_FONT_FAMILIES` | `ALL_WORD_DEFAULT_FAMILIES` |
+
+The deprecated names remain available. Both constant aliases reference the same arrays as their preferred names. The family lists and loaded font bytes do not change.
 
 ## Install the package
 
