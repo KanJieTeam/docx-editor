@@ -1,4 +1,9 @@
 import type {
+  RevisionMarkupOptions,
+  RevisionMarkupChromeHandlers,
+} from '../contracts/revision-markup.ts';
+import type { ReviewDisplayMode } from '../layout/revision-projection.ts';
+import type {
   PopupChromeRegistrationOptions,
   ContentControlWidgetChromeHandlers,
   InvalidTextFormFieldChromeHandlers,
@@ -119,6 +124,10 @@ export interface DocxEditorConfig {
    * the proposed view still marks surviving insertions.
    */
   revisionStyles?: RevisionStyles;
+  /** Initial local revision presentation and tracking preferences. */
+  revisionMarkup?: RevisionMarkupOptions;
+  /** Initial review projection. Markup modes require a review module. */
+  reviewDisplayMode?: ReviewDisplayMode;
   /** Override raster decode for insert/replace image commands; defaults to browser/headless. */
   imageDecodePort?: import('../store/package/image-resources.ts').ImageDecodePort;
   /**
@@ -199,6 +208,15 @@ export interface DocxEditorInstance extends Editor {
    * command needs.
    */
   setHyperlinkChrome(handlers: HyperlinkChromeHandlers): Unsubscribe;
+  /**
+   * Register local revision settings chrome. Disposal cancels its active sessions.
+   * Manual renderers take priority over fallback renderers. Pass null to use native chrome
+   * until disposal restores the previous registration.
+   */
+  setRevisionMarkupChrome(
+    handlers: RevisionMarkupChromeHandlers | null,
+    options?: PopupChromeRegistrationOptions
+  ): Unsubscribe;
   /** Register Field Options chrome. Disposal closes sessions owned by this registration. */
   setTextFormFieldChrome(
     handlers: TextFormFieldChromeHandlers,
@@ -368,6 +386,10 @@ export interface DocxEditorInstance extends Editor {
    * of calling it. Call it directly from headless and non-React hosts.
    */
   setRevisionStyles(styles: RevisionStyles): void;
+  /** Merge local preferences and emit revisionMarkupChange after a change.
+   * Invalid settings throw TypeError without changing the previous settings.
+   */
+  setRevisionMarkup(options: RevisionMarkupOptions): void;
   /**
    * Mount into `el`. If the instance holds pending document bytes (created without a
    * container, or previously detached), they mount now — under the shaped measurer when

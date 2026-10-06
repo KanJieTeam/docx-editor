@@ -533,3 +533,30 @@ export {
   DocxEditorPrintDialog,
   type DocxEditorPrintDialogProps,
 } from './editor/DocxEditorPrintDialog';
+
+export {
+  DocxEditorRevisionMarkup,
+  type DocxEditorRevisionMarkupProps,
+} from './editor/DocxEditorRevisionMarkup';
+
+export type {
+  RevisionMarkupOptions,
+  ResolvedRevisionMarkup,
+  RevisionMarkupColor,
+  RevisionMarkupNamedColor,
+  RevisionMarkupMark,
+  RevisionDeletionMark,
+  RevisionChangedLinesMark,
+  ReviewDisplayMode,
+} from '@docx-editor.dev/core/editor';
+
+export {
+  DocxEditorRevisionMarkupDialog,
+  useRevisionMarkupDialog,
+  type DocxEditorRevisionMarkupDialogProps,
+  type UseRevisionMarkupDialogReturn,
+} from './editor/DocxEditorRevisionMarkupDialog';
+export type {
+  RevisionMarkupDialogSession,
+  RevisionMarkupChromeHandlers,
+} from '@docx-editor.dev/core/editor';

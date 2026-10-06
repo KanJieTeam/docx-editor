@@ -3343,6 +3343,8 @@ export interface RevisionFilter {
     // (undocumented)
     readonly includesNode?: (nodeId: string, author: string) => boolean;
     readonly resolvedMarkup?: 'plain';
+    // (undocumented)
+    readonly revisionMarkup?: ResolvedRevisionMarkup;
 }
 
 // @public
@@ -3807,6 +3809,10 @@ export interface SemanticTableCell {
         readonly top: number;
     };
     readonly preferredWidth: PreferredWidth;
+    // (undocumented)
+    readonly revisionShading?: 'inserted' | 'deleted' | 'merged' | 'split';
+    // (undocumented)
+    readonly revisionShadingAuthor?: string;
     readonly shading?: string;
     readonly styleFormatting: TableCellStyleFormatting;
     readonly suppressesTopBand?: true;
@@ -3879,6 +3885,7 @@ export interface SemanticTrackedChangeArtifactRecord {
     readonly replacedText: string;
     // (undocumented)
     readonly replyIds: readonly string[];
+    readonly structuralChanges?: readonly ('rowInsert' | 'rowDelete' | 'cellInsert' | 'cellDelete' | 'cellMerge' | 'numberingInsert')[];
     // (undocumented)
     readonly text: string;
 }
@@ -4426,6 +4433,9 @@ export interface TableCellFragmentRecord {
     readonly id: string;
     readonly logicalGridColumn?: number;
     readonly paintInert?: boolean;
+    // (undocumented)
+    readonly revisionShading?: 'inserted' | 'deleted' | 'merged' | 'split';
+    readonly revisionShadingAuthor?: string;
     readonly rowSpan?: number;
     readonly shading?: string;
     readonly textDirection?: 'btLr';

@@ -123,9 +123,19 @@ import { RefreshLocation } from '@docx-editor.dev/core/editor';
 import { RefreshResult } from '@docx-editor.dev/core/editor';
 import { RefreshSubmission } from '@docx-editor.dev/core/editor';
 import { RefreshUpdate } from '@docx-editor.dev/core/editor';
+import { ResolvedRevisionMarkup } from '@docx-editor.dev/core/editor';
 import { ReviewAuthorInfo } from '@docx-editor.dev/core/editor';
+import { ReviewDisplayMode } from '@docx-editor.dev/core/editor';
 import { RevisionAuthorAssignments } from '@docx-editor.dev/core/editor';
 import { RevisionAuthorStyle } from '@docx-editor.dev/core/editor';
+import { RevisionChangedLinesMark } from '@docx-editor.dev/core/editor';
+import { RevisionDeletionMark } from '@docx-editor.dev/core/editor';
+import { RevisionMarkupChromeHandlers } from '@docx-editor.dev/core/editor';
+import { RevisionMarkupColor } from '@docx-editor.dev/core/editor';
+import { RevisionMarkupDialogSession } from '@docx-editor.dev/core/editor';
+import { RevisionMarkupMark } from '@docx-editor.dev/core/editor';
+import { RevisionMarkupNamedColor } from '@docx-editor.dev/core/editor';
+import { RevisionMarkupOptions } from '@docx-editor.dev/core/editor';
 import { RevisionStyles } from '@docx-editor.dev/core/editor';
 import { RulerIndent } from '@docx-editor.dev/core/editor';
 import { rulerPageBox } from '@docx-editor.dev/core/editor';
@@ -943,6 +953,10 @@ export interface DocxEditorNamespace extends ForwardRefExoticComponent<DocxEdito
     readonly ParagraphDialog: typeof DocxEditorParagraphDialog;
     readonly PrintDialog: typeof DocxEditorPrintDialog;
     // (undocumented)
+    readonly RevisionMarkup: typeof DocxEditorRevisionMarkup;
+    // (undocumented)
+    readonly RevisionMarkupDialog: typeof DocxEditorRevisionMarkupDialog;
+    // (undocumented)
     readonly Root: typeof DocxEditorRoot;
     readonly TextFormFieldDialog: typeof DocxEditorTextFormFieldDialog;
     // (undocumented)
@@ -1180,6 +1194,8 @@ export interface DocxEditorPopups {
     paragraph?: DocxEditorPopup<DocxEditorParagraphDialogProps>;
     print?: DocxEditorPopup<DocxEditorPrintDialogProps>;
     // (undocumented)
+    revisionMarkup?: DocxEditorPopup<DocxEditorRevisionMarkupDialogProps>;
+    // (undocumented)
     textFormField?: DocxEditorPopup<DocxEditorTextFormFieldDialogProps>;
 }
 
@@ -1221,12 +1237,15 @@ export interface DocxEditorProps {
     onFontError?: (error: EditorFontError) => void;
     onOpen?: () => void;
     onReady?: (editor: Editor) => void;
+    onRevisionMarkupChange?: (settings: ResolvedRevisionMarkup) => void;
     onSave?: () => void;
     onTitleChange?: (title: string) => void;
     popups?: DocxEditorPopups;
     readonly renderTitleBarLeft?: () => DocxEditorChildren;
     // (undocumented)
     readonly renderTitleBarRight?: () => DocxEditorChildren;
+    reviewDisplayMode?: ReviewDisplayMode;
+    revisionMarkup?: RevisionMarkupOptions;
     rulers?: boolean;
     t?: (key: string, params?: Record<string, string | number>) => string;
     title?: string;
@@ -1249,6 +1268,52 @@ export interface DocxEditorRef {
 }
 
 // @public
+export function DocxEditorRevisionMarkup(props: DocxEditorRevisionMarkupProps): null;
+
+// @public
+export const DocxEditorRevisionMarkupDialog: typeof RevisionMarkupDialogRoot & {
+    Apply: (props: DialogPartProps & {
+        name?: keyof ResolvedRevisionMarkup | undefined;
+    }) => string | number | bigint | boolean | react.JSX.Element | Iterable<react.ReactNode> | Promise<string | number | bigint | boolean | Iterable<react.ReactNode> | react.ReactElement<unknown, string | react.JSXElementConstructor<any>> | react.ReactPortal | null | undefined> | null;
+    Body: (props: DialogPartProps & {
+        name?: keyof ResolvedRevisionMarkup | undefined;
+    }) => string | number | bigint | boolean | react.JSX.Element | Iterable<react.ReactNode> | Promise<string | number | bigint | boolean | Iterable<react.ReactNode> | react.ReactElement<unknown, string | react.JSXElementConstructor<any>> | react.ReactPortal | null | undefined> | null;
+    Cancel: (props: DialogPartProps & {
+        name?: keyof ResolvedRevisionMarkup | undefined;
+    }) => string | number | bigint | boolean | react.JSX.Element | Iterable<react.ReactNode> | Promise<string | number | bigint | boolean | Iterable<react.ReactNode> | react.ReactElement<unknown, string | react.JSXElementConstructor<any>> | react.ReactPortal | null | undefined> | null;
+    Error: (props: DialogPartProps & {
+        name?: keyof ResolvedRevisionMarkup | undefined;
+    }) => string | number | bigint | boolean | react.JSX.Element | Iterable<react.ReactNode> | Promise<string | number | bigint | boolean | Iterable<react.ReactNode> | react.ReactElement<unknown, string | react.JSXElementConstructor<any>> | react.ReactPortal | null | undefined> | null;
+    Field: (props: DialogPartProps & {
+        name: keyof ResolvedRevisionMarkup;
+    }) => react.ReactNode;
+    Footer: (props: DialogPartProps & {
+        name?: keyof ResolvedRevisionMarkup | undefined;
+    }) => string | number | bigint | boolean | react.JSX.Element | Iterable<react.ReactNode> | Promise<string | number | bigint | boolean | Iterable<react.ReactNode> | react.ReactElement<unknown, string | react.JSXElementConstructor<any>> | react.ReactPortal | null | undefined> | null;
+    Header: (props: DialogPartProps & {
+        name?: keyof ResolvedRevisionMarkup | undefined;
+    }) => string | number | bigint | boolean | react.JSX.Element | Iterable<react.ReactNode> | Promise<string | number | bigint | boolean | Iterable<react.ReactNode> | react.ReactElement<unknown, string | react.JSXElementConstructor<any>> | react.ReactPortal | null | undefined> | null;
+    Reset: (props: DialogPartProps & {
+        name?: keyof ResolvedRevisionMarkup | undefined;
+    }) => string | number | bigint | boolean | react.JSX.Element | Iterable<react.ReactNode> | Promise<string | number | bigint | boolean | Iterable<react.ReactNode> | react.ReactElement<unknown, string | react.JSXElementConstructor<any>> | react.ReactPortal | null | undefined> | null;
+    Title: (props: DialogPartProps & {
+        name?: keyof ResolvedRevisionMarkup | undefined;
+    }) => string | number | bigint | boolean | react.JSX.Element | Iterable<react.ReactNode> | Promise<string | number | bigint | boolean | Iterable<react.ReactNode> | react.ReactElement<unknown, string | react.JSXElementConstructor<any>> | react.ReactPortal | null | undefined> | null;
+};
+
+// @public
+export interface DocxEditorRevisionMarkupDialogProps extends DialogCustomizationProps {
+    // (undocumented)
+    session: RevisionMarkupDialogSession | null;
+}
+
+// @public
+export interface DocxEditorRevisionMarkupProps extends RevisionMarkupOptions {
+    // (undocumented)
+    onRevisionMarkupChange?: (settings: ResolvedRevisionMarkup) => void;
+}
+
+// @public
 export function DocxEditorRoot(props: DocxEditorRootProps): react.JSX.Element;
 
 // @public
@@ -1259,6 +1324,8 @@ export interface DocxEditorRootListeners {
     onFontError?: (error: EditorFontError) => void;
     // (undocumented)
     onReady?: (editor: Editor) => void;
+    // (undocumented)
+    onRevisionMarkupChange?: (settings: ResolvedRevisionMarkup) => void;
 }
 
 // @public
@@ -1275,7 +1342,10 @@ export interface DocxEditorRootProps {
     onChange?: (change: DocumentChange) => void;
     onFontError?: (error: EditorFontError) => void;
     onReady?: (editor: Editor) => void;
+    onRevisionMarkupChange?: (settings: ResolvedRevisionMarkup) => void;
     popups?: DocxEditorPopups;
+    reviewDisplayMode?: ReviewDisplayMode;
+    revisionMarkup?: RevisionMarkupOptions;
     tableInteractionLabel?: (key: 'table.insertRowBelow' | 'table.insertColumnRight') => string;
     translate?: (key: string, params?: Record<string, string | number>) => string;
     zoom?: number;
@@ -2268,6 +2338,8 @@ export { RefreshSubmission }
 
 export { RefreshUpdate }
 
+export { ResolvedRevisionMarkup }
+
 // @public
 export const REVIEW_MARKERS_GUTTER = 44;
 
@@ -2275,6 +2347,8 @@ export const REVIEW_MARKERS_GUTTER = 44;
 export const REVIEW_PANE_GUTTER = 316;
 
 export { ReviewAuthorInfo }
+
+export { ReviewDisplayMode }
 
 // @public
 export interface ReviewGutter {
@@ -2314,6 +2388,22 @@ export interface ReviewRailRegistry {
 export { RevisionAuthorAssignments }
 
 export { RevisionAuthorStyle }
+
+export { RevisionChangedLinesMark }
+
+export { RevisionDeletionMark }
+
+export { RevisionMarkupChromeHandlers }
+
+export { RevisionMarkupColor }
+
+export { RevisionMarkupDialogSession }
+
+export { RevisionMarkupMark }
+
+export { RevisionMarkupNamedColor }
+
+export { RevisionMarkupOptions }
 
 export { RevisionStyles }
 
@@ -2979,6 +3069,15 @@ export function useReviewAuthors(): readonly ReviewAuthorInfo[];
 
 // @public
 export function useReviewGutter(): ReviewGutter;
+
+// @public
+export function useRevisionMarkupDialog(): UseRevisionMarkupDialogReturn;
+
+// @public
+export interface UseRevisionMarkupDialogReturn extends UseDialogReturn<ResolvedRevisionMarkup> {
+    // (undocumented)
+    reset(): void;
+}
 
 // @public
 export function useScopeClassName(): '' | 'docx-editor ';

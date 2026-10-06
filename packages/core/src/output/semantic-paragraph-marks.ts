@@ -1,3 +1,5 @@
+import { revisionMarkupStyle, type ResolvedRevisionMarkup } from '../contracts/revision-markup.ts';
+import { paintRevisionMarkup } from './revision-markup-paint.ts';
 import {
   DEFAULT_RUN_STYLE,
   markRevisionRemovesMark,
@@ -132,7 +134,9 @@ export function paintManualLineBreak(
 export function paintParagraphMark(
   document: Document,
   revisions: readonly RevisionAttribution[],
-  colors: RevisionStyleContext | undefined
+  colors: RevisionStyleContext | undefined,
+  markup?: ResolvedRevisionMarkup,
+  kindColors = false
 ): HTMLElement {
   // ONE glyph however many decisions stand on it: there is one pilcrow, and drawing a second
   // beside it would read as a second paragraph break. A REMOVAL wins the face when a mark
@@ -185,6 +189,21 @@ export function paintParagraphMark(
       : removes
         ? 'var(--doc-revision-deletion)'
         : 'var(--doc-revision-insertion)');
-  if (removes) glyph.style.textDecorationLine = 'line-through';
+  if (markup) {
+    const legacyColor = glyph.style.color;
+    glyph.style.color = '';
+    const mark = revisionMarkupStyle(markup, shown.kind).mark;
+    if (mark === 'hidden') glyph.style.visibility = 'hidden';
+    if (mark === 'caret') glyph.textContent = '^';
+    if (mark === 'pound') glyph.textContent = '#';
+    paintRevisionMarkup(
+      glyph,
+      markup,
+      shown.kind,
+      markStyle?.color ?? reviewAuthorSlotColor(markSlot),
+      kindColors || colors?.others === 'kind' || markStyle?.color ? legacyColor : undefined,
+      markStyle?.background
+    );
+  } else if (removes) glyph.style.textDecorationLine = 'line-through';
   return glyph;
 }

@@ -1,3 +1,4 @@
+import type { RevisionMarkupDialogSession } from './revision-markup.ts';
 /**
  * `@docx-editor.dev/core/contracts/modules` — the `EditorModule` seam.
  *
@@ -60,6 +61,18 @@ export type { ReviewDisplayMode, RevisionDisplayMode } from '../layout/revision-
  */
 export type CollectReviewItems = (input: ReviewModelInput) => readonly ReviewItem[];
 
+/** Viewer settings dialog supplied by the review module. @public */
+export interface RevisionMarkupDialog {
+  open(): void;
+  destroy(): void;
+}
+
+/** Local settings access for review chrome. No document mutations occur here. @public */
+export interface RevisionMarkupDialogHost extends RevisionMarkupDialogSession {
+  readonly container: HTMLElement;
+  readonly translate?: (key: string) => string | undefined;
+}
+
 /**
  * What a review module contributes: the queue derivation, and the revision
  * display modes the editor may enter beyond the free tier's final-state
@@ -68,13 +81,12 @@ export type CollectReviewItems = (input: ReviewModelInput) => readonly ReviewIte
  * @public
  */
 export interface ReviewModuleContribution {
+  /** Create local review settings chrome when a host opens the dialog. */
+  readonly createRevisionMarkupDialog?: (host: RevisionMarkupDialogHost) => RevisionMarkupDialog;
   /**
    * Display modes this module unlocks (the free engine renders `proposed` only).
    *
-   * Currently DECLARATIVE: any registered review module restores the layout
-   * default (`all-markup`), and no runtime mode switch exists yet. The list is
-   * carried so the future `setRevisionDisplayMode` command can validate against
-   * it without a breaking module-shape change.
+   * The module enables the listed review projections.
    */
   readonly displayModes: readonly ReviewDisplayMode[];
   /** The review queue derivation. */

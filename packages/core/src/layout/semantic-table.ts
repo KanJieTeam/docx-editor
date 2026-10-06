@@ -1,3 +1,8 @@
+import {
+  revisionCellMetadata,
+  wmlRevisionChild,
+  wmlRevisionAttribute,
+} from './revision-cell-shading.ts';
 import { readTableAlignment } from './table-alignment.ts';
 import { withSharedGridLineSideRules } from './legacy-table-side-rules.ts';
 import { withRowMinimumContentInsets } from './table-row-minimum-insets.ts';
@@ -14,7 +19,6 @@ import { withRowMinimumContentInsets } from './table-row-minimum-insets.ts';
 import {
   readTwipsMeasure,
   flattenContentControls,
-  WML_NAMESPACE_URI,
   type OoxmlElement,
   type OoxmlNode,
 } from '@docx-editor.dev/core/store';
@@ -174,6 +178,8 @@ export interface TableAnchorFrames {
  * and would otherwise be a loop bound an attacker controls.
  */
 export interface SemanticTableCell {
+  readonly revisionShading?: 'inserted' | 'deleted' | 'merged' | 'split';
+  readonly revisionShadingAuthor?: string;
   readonly id: string;
   /** Derived content-edge geometry for a verified legacy percentage-width parent table. */
   readonly legacyContentAlignment?: true;
@@ -325,28 +331,6 @@ function childNamed(node: OoxmlElement, localName: string): OoxmlElement | undef
 
 function attributeValue(node: OoxmlElement, localName: string): string | undefined {
   return node.attributes.find((attribute) => attribute.localName === localName)?.value;
-}
-
-function wmlRevisionChild(
-  node: OoxmlElement,
-  localName: 'trPr' | 'ins' | 'del'
-): OoxmlElement | undefined {
-  for (const child of node.children) {
-    if (
-      child.kind !== 'textValue' &&
-      child.namespaceUri === WML_NAMESPACE_URI &&
-      child.localName === localName
-    ) {
-      return child;
-    }
-  }
-  return undefined;
-}
-
-function wmlRevisionAttribute(node: OoxmlElement, localName: string): string | undefined {
-  return node.attributes.find(
-    (attribute) => attribute.namespaceUri === WML_NAMESPACE_URI && attribute.localName === localName
-  )?.value;
 }
 
 function readGridSpan(cellProperties: OoxmlElement | undefined): number {
@@ -802,6 +786,7 @@ function readTableStructureUncached(
       if (vMerge !== 'none') mergedHere.add(gridColumn);
       cells.push({
         id: cellNode.id,
+        ...revisionCellMetadata(cellProperties, displayMode, authorFilter, plan.revision),
         gridSpan,
         gridColumn,
         ...(gridCols[gridColumn]?.id ? { gridColumnId: gridCols[gridColumn]!.id } : {}),

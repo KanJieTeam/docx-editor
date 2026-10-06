@@ -1,3 +1,8 @@
+import {
+  createSurfaceRevisionMarkup,
+  revisionFacingPages,
+  revisionParagraphMarkVisible,
+} from './surface-revision-markup.ts';
 import { createDrawingGestures } from './surface-drawing-gestures.ts';
 import { createTextboxEditing } from './surface-textbox-editing.ts';
 import { createCaretComplexScriptResolver } from './surface-complex-script.ts';
@@ -88,7 +93,6 @@ import {
   findNode,
   isContentControl,
   ORIGIN_IDS,
-  parentNodeOf,
   parseTocInstruction,
   planTocEntries,
   resolveTocRowHeadings,
@@ -145,14 +149,12 @@ import {
 import { attachListResolveChangeEvidence } from '../layout/list-resolve.ts';
 import { refreshSurfaceRefFieldResults } from './surface-ref-field-refresh.ts';
 import { type RevisionAuthorFilter } from '../layout/revision-projection.ts';
-import { markRemovedInMode } from '../layout/revision-visibility.ts';
 import {
   createRevisionAuthorVisibility,
   type RevisionAuthorVisibility,
 } from './revision-author-visibility.ts';
 import { PROPERTY_CHANGE_WRAPPER_OF_OP } from '../store/store/tree-op-tracked-properties.ts';
 import { mergedPredecessorsOf } from '../layout/line-segments.ts';
-import { mergedFlowBlocks } from '../layout/story-roots.ts';
 import { selectionMarkRects } from '../layout/selection-rects.ts';
 import { paintSelectionOverlay, type OverlayRect } from '@docx-editor.dev/core/output';
 // By module path, like the roster walk below: dropping a retained paint is an engine
@@ -889,8 +891,18 @@ export function mountPaginatedSurface(
     part: () => session.partFor(storyScope()) ?? session.part(),
     view: revisionView,
   });
-  const revisionFilter = (): RevisionAuthorFilter | undefined =>
-    reviewView.filter(revisionAuthorVisibility.filterForSession(session));
+  const markupSettings = createSurfaceRevisionMarkup(
+    options.revisionMarkup,
+    () => reviewView.filter(revisionAuthorVisibility.filterForSession(session)),
+    () => flushPendingInputAndLayout(),
+    () => {
+      furnitureSource = createCurrentFurnitureSource(revisionFilter());
+      scheduler.invalidateAll(session.packageRevision(), 'revision-markup');
+      scheduler.flush();
+      render(false);
+    }
+  );
+  const revisionFilter = markupSettings.filter;
   const complexScriptAtCaret = createCaretComplexScriptResolver(
     session,
     revisionDisplayMode,
@@ -898,16 +910,7 @@ export function mountPaginatedSurface(
   );
   const paragraphMarkVisible = (paragraphId: string): boolean => {
     const part = partOfNodeId(session, paragraphId) ?? session.part();
-    const paragraph = findNode(part, paragraphId);
-    if (paragraph?.kind !== 'paragraph') return false;
-    const displayMode = revisionDisplayMode();
-    const authorFilter = revisionFilter();
-    if (!markRemovedInMode(paragraph, displayMode, authorFilter)) return true;
-    const parent = parentNodeOf(part, paragraphId);
-    if (!parent) return false;
-    return mergedFlowBlocks(parent.children, displayMode, authorFilter).some(
-      (block) => block.kind === 'paragraph' && block.id === paragraphId
-    );
+    return revisionParagraphMarkVisible(part, paragraphId, revisionDisplayMode(), revisionFilter());
   };
 
   let furnitureSource: ReturnType<typeof createFurnitureSource>;
@@ -2543,6 +2546,8 @@ export function mountPaginatedSurface(
         drawingStrings,
         ...(options.fieldShading ? { fieldShading: options.fieldShading } : {}),
         ...(revisionStyles !== undefined ? { revisionStyles } : {}),
+        revisionMarkup: markupSettings.current(),
+        facingPages: revisionFacingPages(settingsPartOf(session.currentPackage())),
         shadeFormFields: shadeFormFields(),
         showParagraphMarks: paragraphMarks.get(),
         changeBars: changeBarsMode(),
@@ -2859,7 +2864,8 @@ export function mountPaginatedSurface(
     PROPERTY_CHANGE_WRAPPER_OF_OP.has(op);
 
   /** Whether this document wants its formatting changes recorded at all. */
-  const formattingTracked = (): boolean => !session.trackingSettings().doNotTrackFormatting;
+  const formattingTracked = (): boolean =>
+    markupSettings.current().trackFormatting && !session.trackingSettings().doNotTrackFormatting;
   function attributeTrackedOps(
     ops: readonly TreeDocOp[],
     revision: import('../store/store/tree-op-types.ts').RevisionAttributionInput,
@@ -4272,7 +4278,7 @@ export function mountPaginatedSurface(
       session,
       editingMode,
       collaborationActive: collaborationSession !== undefined,
-      reviewerFilterActive: revisionFilter() !== undefined,
+      reviewerFilterActive: revisionAuthorVisibility.filterForSession(session) !== undefined,
       layout: surface.layout(),
       canonicalUnfilteredLayout: canonicalUnfilteredLayoutForSave,
       styleCascade: styleCascade(),
@@ -5348,17 +5354,12 @@ export function mountPaginatedSurface(
     collaborationSession: () => collaborationSession ?? null,
     remotePresenceColor,
     setShowParagraphMarks: paragraphMarks.set,
+    setRevisionMarkup: markupSettings.set,
     setRevisionStyles: (colors) => {
       if (colors === revisionStyles) return;
       revisionStyles = colors;
-      // BEFORE the repaint, as `rematerialize` does: `render` adopts a pending DOM gesture,
-      // which moves the selection without passing `setSelection`'s buffer guard. A style
-      // change can land mid-typing-burst — a colour picker is a live control — and buffered
-      // characters are still destined for the old selection. The layout flush rides along
-      // so the repaint below shows the burst it just landed rather than the pre-burst pages.
+      // Commit buffered input before adopting a pending DOM selection.
       flushPendingInputAndLayout();
-      // Paint-level only: the reuse key moves with the resolved styles, so the pages
-      // repaint in the new colours without a layout pass.
       render(false);
     },
 

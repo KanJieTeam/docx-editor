@@ -1,3 +1,9 @@
+import {
+  projectRevisionMarkup,
+  markupRevisionOf,
+  recordHiddenMarkup,
+  projectBufferedRevisionMarkup,
+} from './revision-markup-projection.ts';
 import { tocLinkCascader } from './toc-link-formatting.ts';
 import { fieldResultIsDirectionOnly } from './field-result-style.ts';
 import { displayFieldCodes } from './field-code-display.ts';
@@ -170,8 +176,15 @@ export function unmergedPiecesOfParagraphForDisplay(
       authorFilter
     );
     if (published === null) return;
-    // A field result flushes with the attribution captured from its result run, its
-    // formatting site included; anything else carries the run being walked.
+    const markup = projectRevisionMarkup(
+      text,
+      style,
+      projected,
+      displayMode === 'all-markup' ? authorFilter?.revisionMarkup : undefined,
+      markupRevisionOf(published, paragraph, authorFilter)
+    );
+    if (markup.hidden) return recordHiddenMarkup(changeSites, start, end, published);
+    ({ text, style, projected } = markup);
     const attributed = withRunFormatSite(
       published,
       extras?.revisionsOverride ? (extras.formatSiteOverride ?? null) : runFormatSite
@@ -262,10 +275,7 @@ export function unmergedPiecesOfParagraphForDisplay(
       };
       return carriedMemo;
     };
-    // The whole synthesis dispatch — SYMBOL / form field / live PAGE / cached result / a
-    // document-property value / MACROBUTTON display — lives in `field-synthesis.ts`; it reads
-    // the pending state and the document-global context and returns the one glyph run to paint,
-    // or null for nothing (the reserved model unit stays either way).
+    // Resolve atomic field display without changing its model range.
     const synthesis = synthesizeAtomicField(pending, {
       pageContext,
       themeFonts,
@@ -296,8 +306,6 @@ export function unmergedPiecesOfParagraphForDisplay(
 
   const abandonPending = (): void => {
     if (!pending) return;
-    // A demoted HYPERLINK keeps its link too, when nothing already linked its pieces — the
-    // enclosing `w:hyperlink` a buffered piece carries wins, same precedence as the flush.
     const fieldLink =
       !pending.resultLink && pending.linkSpec
         ? (projectFieldLink?.(pending.linkSpec) ?? null)
@@ -305,8 +313,6 @@ export function unmergedPiecesOfParagraphForDisplay(
     const linked = (piece: FieldAwarePiece): FieldAwarePiece =>
       fieldLink && !piece.link ? { ...piece, link: fieldLink } : piece;
     if (pending.atomic) {
-      // Missing end after an atomic begin should not happen (atoms require end). If the
-      // scan budget aborts mid-field, roll the atom back and flush any buffered cache.
       offset = pending.atomStart;
       for (const piece of pending.buffered) {
         pieces.push({
@@ -341,10 +347,6 @@ export function unmergedPiecesOfParagraphForDisplay(
     openAtomicBeginId = null;
   };
 
-  /**
-   * Record one model unit's deletion, and its removal unless vanish hides it anyway; whether
-   * this view shows it. The unit exists in every display mode, so the caret steps over it.
-   */
   const unitShown = (start: number, hidden = false): boolean => {
     if (revisionsAreDeletion(revisions) && deletedRanges) {
       appendModelRange(deletedRanges, start, start + 1);
@@ -978,8 +980,6 @@ export function unmergedPiecesOfParagraphForDisplay(
   // Malformed field missing end: demote — surface cached/buffered text, no live projection.
   abandonPending();
 
-  // Slot resolution is a paragraph-wide question (Common characters inherit across run
-  // boundaries), so it runs after the walk, over the assembled pieces.
   return applyEastAsiaFontSlots(
     showFieldCodes
       ? displayFieldCodes(
@@ -992,7 +992,7 @@ export function unmergedPiecesOfParagraphForDisplay(
           authorFilter,
           fieldCodeRanges
         )
-      : pieces,
+      : projectBufferedRevisionMarkup(pieces, paragraph, displayMode, authorFilter, changeSites),
     themeFonts
   );
 }

@@ -1,3 +1,4 @@
+import type { ResolvedRevisionMarkup } from './revision-markup.ts';
 /**
  * `@docx-editor.dev/core/contracts/editor` — the `Editor` contract adapters are written against.
  *
@@ -29,9 +30,9 @@ export type {
   HighlightResult,
 } from './editor-highlights.ts';
 export type { DocumentChange, EditorEvents } from './editor-events.ts';
-import type { ResolveReviewChangesOptions } from './editor-review.ts';
+import type { DocumentEditingMode, ResolveReviewChangesOptions } from './editor-review.ts';
 import type { ReviewDisplayMode } from '../layout/revision-projection.ts';
-export type { ResolveReviewChangesOptions } from './editor-review.ts';
+export type { DocumentEditingMode, ResolveReviewChangesOptions } from './editor-review.ts';
 export type { RevisionBatchResult } from '../store/store/revision-batch.ts';
 import type { ContentControlSummary, DocEdits, DocQueries, DocQueryResults } from './document.ts';
 import type { EditorExecOptions, EditorScope, HistoryGroup, ViewScope } from './editor-scope.ts';
@@ -958,15 +959,6 @@ export type ReviewItemPlacement =
   | ReviewRevisionPlacement
   | ReviewCustomPlacement;
 
-/**
- * How a keystroke reaches the document.
- *
- * `'suggesting'` changes what an edit MEANS rather than whether it is allowed: typing writes
- * `w:ins` and deleting writes `w:del` over the words it would have removed, so every change
- * arrives as a proposal somebody else accepts or rejects.
- */
-export type DocumentEditingMode = 'editing' | 'suggesting' | 'viewing';
-
 import type {
   TableBorderEdgeTarget,
   TableBorderSpec,
@@ -1020,6 +1012,8 @@ export interface EditorCommands
    * adapters and any host chrome read one answer.
    */
   toggleReviewPane: Record<never, never>;
+  /** Open the local review settings dialog supplied by the review module. */
+  openRevisionMarkupDialog: Record<never, never>;
   /** Word's Show/Hide paragraph marks; presentation only. */
   toggleParagraphMarks: Record<never, never>;
   /** Word's Protect Document: enforce filling-in-forms protection, or lift the enforced one. */
@@ -1621,6 +1615,8 @@ export interface EditorSnapshot {
   readonly documentProtection?: DocumentProtectionState | null;
   /** The displayed revision projection. The document and its revision history stay unchanged. */
   readonly reviewDisplayMode?: ReviewDisplayMode;
+  /** Resolved local viewer preferences. Never saved into the document. */
+  readonly revisionMarkup: ResolvedRevisionMarkup;
   /**
    * Whether the document carries review content — tracked changes or comment
    * anchors — independent of any registered review module.

@@ -1,3 +1,5 @@
+import { carrySymbolRun } from './symbol-run.ts';
+import type { ResolvedRevisionMarkup } from '../contracts/revision-markup.ts';
 // Revision attribution and display modes for layout.
 //
 // The canonical tree keeps `w:ins` / `w:del` / `w:moveFrom` / `w:moveTo` as wrappers, because
@@ -87,6 +89,7 @@ export const DEFAULT_REVISION_DISPLAY_MODE: RevisionDisplayMode = 'all-markup';
  * delimiter-based key.
  */
 export interface RevisionFilter {
+  readonly revisionMarkup?: ResolvedRevisionMarkup;
   readonly hiddenAuthors: ReadonlySet<string>;
   readonly includes?: (revision: RevisionAttribution) => boolean;
   readonly includesNode?: (nodeId: string, author: string) => boolean;
@@ -474,7 +477,7 @@ export function projectedRevisionProperties(
   authorFilter?: RevisionAuthorFilter
 ): readonly OoxmlProperty[] {
   if (!authorFilter) return properties;
-  return properties.filter((property) => {
+  const projected = properties.filter((property) => {
     if (property.localName !== 'rPrChange' && property.localName !== 'pPrChange') return true;
     const nodeId =
       'revisionNodeId' in property && typeof property.revisionNodeId === 'string'
@@ -488,6 +491,9 @@ export function projectedRevisionProperties(
       nodeId,
     });
   });
+  if (projected.length === properties.length) return properties;
+  carrySymbolRun(properties, projected);
+  return projected;
 }
 
 /** What one laid-out piece carries after the reviewer view is applied to it. */

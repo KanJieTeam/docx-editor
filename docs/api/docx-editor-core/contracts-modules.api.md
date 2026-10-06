@@ -124,6 +124,7 @@ export interface ReviewModelInput {
 // @public
 export interface ReviewModuleContribution {
     readonly collectReviewItems: CollectReviewItems;
+    readonly createRevisionMarkupDialog?: (host: RevisionMarkupDialogHost) => RevisionMarkupDialog;
     readonly displayModes: readonly ReviewDisplayMode[];
     readonly revisionItemsOfParagraph: (part: OoxmlPart, paragraphId: string) => readonly ReviewRevisionItem[];
 }
@@ -202,6 +203,22 @@ export interface RevisionAddress {
 
 // @public
 export type RevisionDisplayMode = 'all-markup' | 'proposed' | 'original';
+
+// @public
+export interface RevisionMarkupDialog {
+    // (undocumented)
+    destroy(): void;
+    // (undocumented)
+    open(): void;
+}
+
+// @public
+export interface RevisionMarkupDialogHost extends RevisionMarkupDialogSession {
+    // (undocumented)
+    readonly container: HTMLElement;
+    // (undocumented)
+    readonly translate?: (key: string) => string | undefined;
+}
 
 // (No @packageDocumentation comment for this package)
 

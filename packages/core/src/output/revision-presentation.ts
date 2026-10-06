@@ -446,7 +446,11 @@ function blockAuthors(blocks: readonly BlockFragmentRecord[]): readonly string[]
     found.push(author);
   };
   for (const fragment of paragraphFragmentsOfBlocks(blocks)) {
+    for (const property of fragment.props) {
+      if (property.localName === 'pPrChange') see(property.attributes?.author ?? '');
+    }
     for (const line of fragment.lines) {
+      if (line.changeSites) for (const revision of line.changeSites) see(revision.author);
       for (const span of line.spans) {
         // Index loops with an explicit guard: `?? []` allocated a throwaway array and an
         // iterator for every untracked span, which is the overwhelming majority of them.
@@ -494,6 +498,18 @@ function blockAuthors(blocks: readonly BlockFragmentRecord[]): readonly string[]
     const marks = fragment.markRevisions;
     if (marks) for (let i = 0; i < marks.length; i += 1) see(marks[i]!.author);
   }
+  // Cell-only revisions carry no text span attribution. Retain their reviewers too.
+  const collectCells = (items: readonly BlockFragmentRecord[]): void => {
+    for (const block of items) {
+      if (block.kind !== 'table') continue;
+      for (const row of block.rows)
+        for (const cell of row.cells) {
+          if (cell.revisionShadingAuthor) see(cell.revisionShadingAuthor);
+          collectCells(cell.blocks);
+        }
+    }
+  };
+  collectCells(blocks);
   blockAuthorCache.set(blocks, found);
   return found;
 }
