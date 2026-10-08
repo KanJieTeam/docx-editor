@@ -13,6 +13,7 @@ import { CHROME_GROUPS } from '@docx-editor.dev/core/editor';
 import { CHROME_MENUS } from '@docx-editor.dev/core/editor';
 import { ChromeExportFormat } from '@docx-editor.dev/core/editor';
 import { ChromeExportHandlers } from '@docx-editor.dev/core/editor';
+import { ChromeGroupId } from '@docx-editor.dev/core/editor';
 import { ChromeMenu } from '@docx-editor.dev/core/editor';
 import { ChromeMenuEntry } from '@docx-editor.dev/core/editor';
 import { ChromeMenuId } from '@docx-editor.dev/core/editor';
@@ -3042,6 +3043,7 @@ export interface DocxEditorMenuProps {
     onReportIssue?: () => void;
     // (undocumented)
     onSave?: () => void;
+    overflow?: boolean;
     // (undocumented)
     preset?: boolean;
     // (undocumented)
@@ -4163,12 +4165,28 @@ export interface DocxEditorTextFormFieldDialogProps extends DialogCustomizationP
 // @public (undocumented)
 export const DocxEditorToolbar: DocxEditorToolbarNamespace;
 
+// @public
+export interface DocxEditorToolbarGroupProps {
+    after?: ChromeGroupId | (string & {});
+    children?: DocxEditorChildren;
+    // (undocumented)
+    className?: string;
+    hidden?: boolean;
+    id: ChromeGroupId | (string & {});
+    label?: string;
+    labelKey?: string;
+    overflowContent?: () => DocxEditorChildren;
+    pinned?: boolean;
+    priority?: number;
+}
+
 // @public (undocumented)
 export interface DocxEditorToolbarNamespace {
     // (undocumented)
     (props: DocxEditorToolbarProps): VNode;
     // (undocumented)
     readonly Action: typeof ToolbarAction;
+    readonly AddComment: typeof ToolbarAddComment;
     // (undocumented)
     readonly AlignCenter: ToolbarPartComponent;
     // (undocumented)
@@ -4205,6 +4223,7 @@ export interface DocxEditorToolbarNamespace {
     readonly FontFamily: typeof FontFamily;
     // (undocumented)
     readonly FontSize: ToolbarSlotPartComponent;
+    readonly Group: typeof ToolbarHostGroup;
     // (undocumented)
     readonly Highlight: ToolbarColorSplitComponent;
     // (undocumented)
@@ -4239,6 +4258,7 @@ export interface DocxEditorToolbarNamespace {
     readonly Save: ToolbarSlotPartComponent;
     // (undocumented)
     readonly Separator: typeof ToolbarSeparator;
+    readonly Slot: typeof ToolbarSlot;
     // (undocumented)
     readonly Strike: ToolbarPartComponent;
     // (undocumented)
@@ -4281,6 +4301,14 @@ export interface DocxEditorToolbarProps {
     preset?: boolean;
     // (undocumented)
     t?: ToolbarTranslate;
+}
+
+// @public
+export interface DocxEditorToolbarSlotProps {
+    children?: DocxEditorChildren;
+    hidden?: boolean;
+    overflowContent?: () => DocxEditorChildren;
+    slotId: ChromeSlotId;
 }
 
 // @public (undocumented)
@@ -4986,14 +5014,22 @@ export interface MenuGroupProps {
 export type MenuId = ChromeMenuId | (string & {});
 
 // @public
-export interface MenuItemProps {
+export interface MenuItemBaseProps {
     // (undocumented)
     className?: string;
     hidden?: boolean;
     labelKey?: string;
     shortcutKey?: string;
-    slot: ChromeSlotId;
 }
+
+// @public
+export type MenuItemProps = MenuItemBaseProps & ({
+    slot?: never;
+    slotId: ChromeSlotId;
+} | {
+    slot: ChromeSlotId;
+    slotId?: never;
+});
 
 // @public
 export interface MenuPartComponent {
@@ -5058,15 +5094,23 @@ export interface MenuSeparatorProps {
     className?: string;
 }
 
-// @public (undocumented)
-export interface MenuSubmenuProps {
+// @public
+export interface MenuSubmenuBaseProps {
     // (undocumented)
     children?: DocxEditorChildren;
     // (undocumented)
     className?: string;
-    labelKey: string;
     paths?: readonly string[] | null;
 }
+
+// @public (undocumented)
+export type MenuSubmenuProps = MenuSubmenuBaseProps & ({
+    label?: string;
+    labelKey: string;
+} | {
+    label: string;
+    labelKey?: string;
+});
 
 // @public
 export interface MenuTableGridProps {
@@ -6167,7 +6211,6 @@ export interface ToolbarButtonProps {
     class?: string;
     // (undocumented)
     className?: string;
-    // (undocumented)
     hidden?: boolean;
     // (undocumented)
     icon?: DocxEditorChildren;
@@ -6421,7 +6464,6 @@ export interface ToolbarSlotPartProps {
     class?: string;
     // (undocumented)
     className?: string;
-    // (undocumented)
     hidden?: boolean;
 }
 
