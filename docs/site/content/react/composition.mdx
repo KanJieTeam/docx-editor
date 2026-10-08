@@ -626,6 +626,8 @@ Import the stylesheet once and give the editor container a height. Use a flex co
 
 The navigation pane requires a positioning context. Place it beside the viewport in a row with `position: relative`. The pane uses absolute positioning over the document gutter. Without that context, it enters normal flow and moves the page.
 
+`DocxEditor.PageNumber` uses absolute positioning against the same positioning context. Place it beside the viewport or inside it. Inside the viewport, it renders into the viewport's parent element, so it stays in view while the pages scroll.
+
 Do not set `z-index` on the workspace row or viewport. That property can create a stacking context around the context menu. A fixed panel cannot escape its containing stacking context. The panel can then render under the chrome bar.
 
 ## Keep the caret
