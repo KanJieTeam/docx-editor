@@ -1053,6 +1053,9 @@ export function commandForSlotValue(slotId: ChromeSlotId, value: unknown): Edito
 export function commandForTableChromeSlotValue(slotId: TableChromeSlotId, value: unknown, draft: TableChromeDraft): EditorCommand | null;
 
 // @public
+export type CommentMarkerStyle = 'initials' | 'icon';
+
+// @public
 export function composeFontConfiguration(base: FontConfigurationBase, ...fragments: readonly FontConfigurationFragment[]): FontConfiguration;
 
 // @public
@@ -2701,8 +2704,10 @@ export function resolveColorValueToCss(color: ColorValue | undefined | null, the
 
 // @public
 export interface ResolvedReviewPane {
+    readonly commentMarkers: CommentMarkerStyle;
     readonly opening: ReviewPaneOpening;
     readonly overflow: ReviewPaneOverflow;
+    readonly revisionsIn: RevisionDisplay;
 }
 
 // @public
@@ -2761,6 +2766,9 @@ export function resolveThemeColorHex(color: Extract<ColorValue, {
 // @public
 export function resolveZoomMode(mode: ZoomMode | 'auto'): ZoomMode | null;
 
+// @internal
+export const REVIEW_MARKERS_GUTTER_PX = 44;
+
 // @public
 export interface ReviewAuthorInfo {
     readonly author: string;
@@ -2811,12 +2819,14 @@ export type ReviewPaneOpening = 'auto' | 'manual';
 
 // @public
 export interface ReviewPaneOptions {
+    readonly commentMarkers?: CommentMarkerStyle;
     readonly opening?: ReviewPaneOpening;
     readonly overflow?: ReviewPaneOverflow;
+    readonly revisionsIn?: RevisionDisplay;
 }
 
 // @public
-export type ReviewPaneOverflow = 'float' | 'shrinkPage';
+export type ReviewPaneOverflow = 'float' | 'shrinkPage' | 'scroll';
 
 // @public
 export type ReviewWriteIntent = 'revision-resolve' | 'revision-attribution' | 'comment-add' | 'comment-reply' | 'comment-resolve' | 'comment-delete' | 'package-scoped';
@@ -2845,6 +2855,9 @@ export type RevisionChangedLinesMark = 'none' | 'leftBorder' | 'rightBorder' | '
 
 // @public (undocumented)
 export type RevisionDeletionMark = RevisionMarkupMark | 'hidden' | 'caret' | 'pound';
+
+// @public
+export type RevisionDisplay = 'pane' | 'balloons';
 
 // @public
 export interface RevisionMarkupChromeHandlers {

@@ -775,7 +775,11 @@
     "noMarkup": "İşaretleme yok",
     "original": "Özgün",
     "protectDocument": "Belgeyi formlar için koru",
-    "simpleMarkup": "Basit işaretleme"
+    "simpleMarkup": "Basit işaretleme",
+    "replyCount": "Yanıtlar: {count}",
+    "trackedChange": "İzlenen değişiklik",
+    "changeAnnouncement": "{author} tarafından {change}: {text}",
+    "replyTargetResolved": "Değişiklik çözümlendiği için yanıt gönderilmedi."
   },
   "imageAltText": {
     "description": "Açıklama",

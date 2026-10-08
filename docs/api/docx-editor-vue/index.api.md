@@ -5890,6 +5890,7 @@ export interface ReviewGutterInput {
     readonly open: boolean;
     // (undocumented)
     readonly pageWidthPx: number;
+    readonly scroll?: boolean;
     // (undocumented)
     readonly viewportWidth: number;
 }

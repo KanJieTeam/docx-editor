@@ -6,6 +6,7 @@
 // issues the same accept/reject ops a host would issue for the halves, in one transaction.
 
 import type { ReviewItemPlacement, ReviewItemQuery } from '../contracts/editor.ts';
+import type { ReviewItemRevealEvent } from '../contracts/editor-events.ts';
 import {
   registerRevisionSiteNodeIds,
   reviewItemKey,
@@ -189,4 +190,36 @@ export function resolutionKeysOf(item: ReviewItem): readonly string[] {
   return halves
     ? [reviewItemKey(halves.deletion), reviewItemKey(halves.insertion)]
     : [reviewItemKey(item)];
+}
+
+/**
+ * The key `query` reads for the review item whose store key is `key`: under
+ * `pairReplacements`, the pair a deletion or insertion belongs to; otherwise `key` itself.
+ */
+export function keyUnderQuery(
+  placements: (query?: ReviewItemQuery) => readonly ReviewItemPlacement[],
+  key: string | null,
+  query: ReviewItemQuery | undefined
+): string | null {
+  if (key === null || query?.pairReplacements !== true) return key;
+  const pair = placements({ ...query, placement: false }).find(
+    (entry) =>
+      isReplacementPairKey(entry.key) && resolutionKeysOf(entry.item as ReviewItem).includes(key)
+  );
+  return pair?.key ?? key;
+}
+
+/**
+ * A reveal event with `pairKey` set when its item is a paired replacement or one half of
+ * one. Navigation reads the unpaired queue, so a host that lists pairs needs the pair's key
+ * to find the item. One paired read per reveal; reveals are single user actions.
+ */
+export function withRevealPairKey(
+  placements: (query?: ReviewItemQuery) => readonly ReviewItemPlacement[],
+  event: ReviewItemRevealEvent
+): ReviewItemRevealEvent {
+  const pairKey = isReplacementPairKey(event.key)
+    ? event.key
+    : keyUnderQuery(placements, event.key, { pairReplacements: true });
+  return pairKey !== null && isReplacementPairKey(pairKey) ? { ...event, pairKey } : event;
 }

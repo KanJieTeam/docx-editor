@@ -12,7 +12,7 @@ if (!GlobalRegistrator.isRegistered) GlobalRegistrator.register();
 
 import { describe, expect, test } from 'bun:test';
 import { strToU8, zipSync } from 'fflate';
-import { createDocxEditor } from '@docx-editor.dev/core/editor';
+import { createDocxEditor, DEFAULT_REVIEW_PANE } from '@docx-editor.dev/core/editor';
 import { reviewModule } from '../index.ts';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -153,6 +153,46 @@ describe('review pane opening', () => {
     expect(() => reviewModule(oldValue)).toThrow(TypeError);
   });
 
+  test('under balloons, tracked changes alone never open the pane', () => {
+    // The pane lists comments only in this mode, so it would open empty.
+    const loaded = createDocxEditor({
+      container: document.createElement('div'),
+      document: docx(TRACKED),
+      author: 'Grace Hopper',
+      modules: [reviewModule({ pane: { revisionsIn: 'balloons' } })],
+    });
+    expect(loaded.getReviewItems().length).toBeGreaterThan(0);
+    expect(loaded.isReviewPaneOpen()).toBe(false);
+    loaded.destroy();
+
+    const edited = createDocxEditor({
+      container: document.createElement('div'),
+      document: docx(PLAIN),
+      author: 'Grace Hopper',
+      modules: [reviewModule({ pane: { revisionsIn: 'balloons' } })],
+    });
+    typeTracked(edited);
+    expect(edited.getReviewItems().length).toBeGreaterThan(0);
+    expect(edited.isReviewPaneOpen()).toBe(false);
+    // Back to the pane: the next load with tracked changes opens it again.
+    edited.setReviewPaneOptions({ revisionsIn: 'pane' });
+    edited.load(docx(TRACKED));
+    expect(edited.isReviewPaneOpen()).toBe(true);
+    edited.destroy();
+  });
+
+  test('switching an open pane to balloons closes it when nothing is left to list', () => {
+    const editor = open(TRACKED);
+    expect(editor.isReviewPaneOpen()).toBe(true);
+    expect(editor.setReviewPaneOptions({ revisionsIn: 'balloons' }).ok).toBe(true);
+    // The document holds tracked changes only, and they now open in balloons.
+    expect(editor.isReviewPaneOpen()).toBe(false);
+    // Back to the pane: the reader opens it again when they want it.
+    expect(editor.setReviewPaneOptions({ revisionsIn: 'pane' }).ok).toBe(true);
+    expect(editor.isReviewPaneOpen()).toBe(false);
+    editor.destroy();
+  });
+
   test('without a review module, setReviewPaneOptions is refused and changes nothing', () => {
     const editor = createDocxEditor({
       container: document.createElement('div'),
@@ -160,7 +200,7 @@ describe('review pane opening', () => {
     });
     const before = editor.snapshot().reviewPane;
     // Always set, even with no review module: the defaults.
-    expect(before).toEqual({ opening: 'auto', overflow: 'float' });
+    expect(before).toEqual(DEFAULT_REVIEW_PANE);
     expect(editor.setReviewPaneOptions({ opening: 'manual' })).toMatchObject({
       ok: false,
       code: 'unsupported',
@@ -183,14 +223,19 @@ describe('review pane opening', () => {
   test('setReviewPaneOptions changes the opening at runtime, and invalid settings change nothing', () => {
     const editor = open(PLAIN);
     const before = editor.snapshot().reviewPane;
-    expect(before).toEqual({ opening: 'auto', overflow: 'float' });
+    expect(before).toEqual({
+      opening: 'auto',
+      overflow: 'float',
+      revisionsIn: 'pane',
+      commentMarkers: 'initials',
+    });
     expect(editor.setReviewPaneOptions({ opening: 'manual' })).toEqual({
       ok: true,
       changed: false,
     });
     // `changed` answers for the document; the snapshot reference shows the settings change.
     expect(editor.snapshot().reviewPane).not.toBe(before);
-    expect(editor.snapshot().reviewPane).toEqual({ opening: 'manual', overflow: 'float' });
+    expect(editor.snapshot().reviewPane).toMatchObject({ opening: 'manual', overflow: 'float' });
     typeTracked(editor);
     expect(editor.isReviewPaneOpen()).toBe(false);
     // An unchanged value keeps the snapshot's reference.

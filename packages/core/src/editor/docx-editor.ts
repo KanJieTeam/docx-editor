@@ -26,9 +26,11 @@ import { createTextHighlights } from './text-highlights.ts';
 import { createReviewItemsAt } from './review-items-at.ts';
 import {
   findReviewPlacement,
+  keyUnderQuery,
   narrowReviewItems,
   replacementPairHalves,
   reviewItemWithHalves,
+  withRevealPairKey,
 } from './review-replacement-pairs.ts';
 import { captureSearchResult } from './document-search-result.ts';
 import { createDocumentProtectionCommands } from './docx-editor-protection.ts';
@@ -37,14 +39,11 @@ import {
   anchorLineY,
   commentBodyText,
   commentInitials,
-  documentOrder,
   firstReviewRange,
-  paragraphFragmentsOfBlocks,
   reviewItemGeometry,
   reviewItemKey,
   type ReviewItem,
   type ReviewParagraphAnchor,
-  type SemanticLayout,
   type SemanticPosition,
   type SemanticSelection,
 } from '../layout/index.ts';
@@ -102,7 +101,7 @@ import {
   searchStoriesForSurface,
   selectDocumentSearchMatch,
 } from './docx-editor-story-navigation.ts';
-import { fragmentParagraphs } from '../layout/line-segments.ts';
+import { noteScopeIndexOf, paragraphOrderOf } from './layout-paragraph-indexes.ts';
 import {
   classifyCommand,
   deepFreezeValue,
@@ -271,9 +270,17 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
   // Review pane view settings: seeded by the review module, changed by `setReviewPaneOptions`.
   const reviewPane = createReviewPaneState(modules.review?.pane, {
     enabled: reviewEnabled,
-    changed: () => {
+    changed: (value, previous) => {
+      // Moving tracked changes into balloons can leave an open pane with nothing to list.
+      if (
+        reviewPaneOpen &&
+        value.revisionsIn !== previous.revisionsIn &&
+        !reviewPane.shows(surface?.session.reviewItems() ?? [])
+      )
+        reviewPaneOpen = false;
       bump();
       emitSelectionChange();
+      zoomLane.refit();
     },
   });
   /** Document bytes waiting for a container — set when constructed or loaded detached. */
@@ -538,6 +545,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     surface: () => surface,
     bump,
     emitSelectionChange,
+    reviewPaneScrolls: () => reviewPane.current().overflow === 'scroll',
   });
   const scaleOf = (): number => zoomLane.scale();
   const highlights = createTextHighlights({
@@ -1307,38 +1315,6 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
   const anchorIndexOf = createAnchorIndex();
 
   /**
-   * Paragraph id → note scope id, built once per LAYOUT from the painted note stories.
-   *
-   * The layout already states which note each paragraph belongs to (`NoteStoryRecord`
-   * carries `scopeId`), so this is a lookup rather than a search. The first version walked
-   * the notes part per item — O(items x notes x subtree), which measured 91 ms per
-   * `getTrackedChanges()` call on a document with 600 note revisions.
-   */
-  const noteScopeIndexCache = new WeakMap<SemanticLayout, Map<string, string>>();
-  function noteScopeIndexOf(layout: SemanticLayout): Map<string, string> {
-    const cached = noteScopeIndexCache.get(layout);
-    if (cached) return cached;
-    const index = new Map<string, string>();
-    for (const page of layout.pages) {
-      for (const area of [page.footnotes, page.endnotes]) {
-        if (!area) continue;
-        for (const note of area.notes) {
-          for (const fragment of paragraphFragmentsOfBlocks(note.fragments)) {
-            // Every paragraph the fragment DRAWS. A note whose paragraphs a resolved view
-            // merges publishes one fragment, and an absorbed member with no scope made its
-            // card look like a body card: no note to accept it in, no note to scroll to.
-            for (const paragraphId of fragmentParagraphs(fragment)) {
-              if (!index.has(paragraphId)) index.set(paragraphId, note.scopeId);
-            }
-          }
-        }
-      }
-    }
-    noteScopeIndexCache.set(layout, index);
-    return index;
-  }
-
-  /**
    * Which story a review item lives in, from the part name its ranges carry.
    *
    * `null` rId means the part is not a header/footer this document's sections resolve —
@@ -1408,17 +1384,6 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
 
   /** Word writes `@w:date` to the second; milliseconds group with nothing. */
   const secondsPrecisionNow = (): string => `${new Date().toISOString().slice(0, 19)}Z`;
-
-  /** Paragraph id to document position, memoized per layout. */
-  const paragraphOrderCache = new WeakMap<SemanticLayout, Map<string, number>>();
-  function paragraphOrderOf(layout: SemanticLayout): Map<string, number> {
-    const cached = paragraphOrderCache.get(layout);
-    if (cached) return cached;
-    const index = new Map<string, number>();
-    for (const [position, id] of documentOrder(layout).entries()) index.set(id, position);
-    paragraphOrderCache.set(layout, index);
-    return index;
-  }
 
   function commentTargetRange(): { from: SemanticPosition; to: SemanticPosition } | null {
     return commentTargetRangeOf({
@@ -1744,10 +1709,11 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     visible: () =>
       filterReviewItemsByAuthor(surface?.session.reviewItems() ?? [], reviewAuthorVisibility),
     scope: storyScopeOfReviewItem,
+    reveal: (event) => events.emitReviewItemReveal(withRevealPairKey(reviewPlacements, event)),
     activate: (key, allowExcludedFormat) => {
       allowExcludedFormatNavigation = allowExcludedFormat ?? false;
       try {
-        return editor.setActiveReviewItem(key);
+        return editor.setActiveReviewItem(key, { announce: false });
       } finally {
         allowExcludedFormatNavigation = false;
       }
@@ -2316,6 +2282,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     setEditingMode: (mode) => editor.exec({ type: 'setEditingMode', mode }),
 
     getReviewRevision: () => reviewRevision(),
+    getActivatedReviewItemKey: (query) =>
+      keyUnderQuery(reviewPlacements, surface?.activatedReviewKey() ?? null, query),
 
     setActiveReviewItem(key: string | null, options?: ReviewActivationOptions): ExecResult {
       // Dismissing is the only thing a key of `null` can mean here. A card the reader closed
@@ -2445,6 +2413,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       // not respond to any number of further clicks.
       bump();
       emitSelectionChange();
+      if (options?.announce === true)
+        events.emitReviewItemReveal(withRevealPairKey(reviewPlacements, { key, source: 'host' }));
       // `changed: false` — activation moves the caret and the open card, and neither is
       // document state. A host must not mark its document dirty for opening a card.
       return { ok: true, changed: false };

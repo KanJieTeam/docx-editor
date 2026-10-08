@@ -775,7 +775,11 @@
     "noMarkup": "Aucune marque",
     "original": "Original",
     "protectDocument": "Protéger le document pour les formulaires",
-    "simpleMarkup": "Marques simples"
+    "simpleMarkup": "Marques simples",
+    "replyCount": "Réponses : {count}",
+    "trackedChange": "Modification suivie",
+    "changeAnnouncement": "{change} par {author} : {text}",
+    "replyTargetResolved": "La modification a été résolue, la réponse n'a donc pas été publiée."
   },
   "imageAltText": {
     "description": "Description",

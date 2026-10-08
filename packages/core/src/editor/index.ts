@@ -271,6 +271,7 @@ export {
   ZOOM_MAX,
   ZOOM_MIN,
   resolveZoomMode,
+  REVIEW_MARKERS_GUTTER_PX,
   reviewPaneEntitledZoom,
   sameZoomMode,
 } from './zoom-fit.ts';
@@ -514,10 +515,12 @@ export type { ChromePrintErrorCode, ChromePrintJob, ChromePrintOptions } from '.
 
 export { DEFAULT_REVIEW_PANE, resolveReviewPane } from '../contracts/review-pane.ts';
 export type {
+  CommentMarkerStyle,
   ResolvedReviewPane,
   ReviewPaneOpening,
   ReviewPaneOptions,
   ReviewPaneOverflow,
+  RevisionDisplay,
 } from '../contracts/review-pane.ts';
 export {
   DEFAULT_REVISION_MARKUP,

@@ -2420,6 +2420,7 @@ export interface ReviewGutterInput {
     readonly inlineStartReservation?: number;
     readonly open: boolean;
     readonly pageWidthPx: number;
+    readonly scroll?: boolean;
     readonly viewportWidth: number;
 }
 

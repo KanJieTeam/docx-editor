@@ -31,6 +31,7 @@ import type { ReviewRevisionKind, SelectionPin } from '@docx-editor.dev/core/con
 import {
   ReviewRailContext,
   useDocxEditor,
+  useEditorEvent,
   useEditorState,
   useReviewAuthors,
   useReviewGutter,
@@ -56,13 +57,18 @@ import {
   DEFAULT_CARD_HEIGHT,
   INITIAL_METRICS,
   NO_PLACEMENT_REVIEW_QUERY,
+  PAIRED_REVIEW_QUERY,
   RAIL_GUTTER,
   RAIL_OVERSCAN,
   guardMousedown,
   idsOf,
   isThreadedReply,
+  selectCommentMarkers,
   selectDocumentAbsent,
   selectDocumentReadOnly,
+  selectPaneOpening,
+  selectRevisionsIn,
+  servedByChangeBalloon,
   type RailMetrics,
 } from './review-shared.ts';
 import {
@@ -119,6 +125,7 @@ function buildReviewActions(hook: UseReviewReturn, list: readonly ReviewItemView
   return {
     items: list,
     activeKey: hook.activeKey.value,
+    activatedKey: hook.activatedKey.value,
     setActive: hook.setActive,
     accept: hook.accept,
     reject: hook.reject,
@@ -163,6 +170,9 @@ const ReviewRoot = defineComponent({
     const editorRef = useDocxEditor();
     const documentAbsent = useEditorState(selectDocumentAbsent);
     const readOnly = useEditorState(selectDocumentReadOnly);
+    // Viewer preferences, live: `setRevisionMarkup` re-renders the rail with the new layout.
+    const revisionsIn = useEditorState(selectRevisionsIn);
+    const commentMarkers = useEditorState(selectCommentMarkers);
     const editorRevision = useEditorRenderRevision();
 
     const excludeRevisionKinds = computed((): readonly ReviewRevisionKind[] | undefined => {
@@ -190,7 +200,11 @@ const ReviewRoot = defineComponent({
     });
 
     provideEditorRenderRevision(editorRevision);
-    const allReview = useReviewWithRevision(NO_PLACEMENT_REVIEW_QUERY, editorRevision);
+    // `revisionsIn: 'balloons'` reads replacement pairs so a typed-over range is one decision.
+    const allReview = useReviewWithRevision(
+      () => (revisionsIn.value === 'balloons' ? PAIRED_REVIEW_QUERY : NO_PLACEMENT_REVIEW_QUERY),
+      editorRevision
+    );
     const reviewHook = useReviewWithRevision(() => railQuery.value, editorRevision);
     const { t: bundled } = useTranslation();
     const label = (key: string, params?: Record<string, string | number>) =>
@@ -237,9 +251,18 @@ const ReviewRoot = defineComponent({
       reviewHook.items.value.filter(
         (entry) =>
           (props.formatting || !hasFormattingBalloon(entry)) &&
+          (revisionsIn.value !== 'balloons' || !servedByChangeBalloon(entry)) &&
           (!props.filter || props.filter(entry))
       )
     );
+    // A revealed card opens a closed pane, as a click on its marker does, unless the pane's
+    // `opening` setting leaves that to the host. A change that the balloon serves is not in
+    // `items`, so the balloon opens it instead.
+    const paneOpening = useEditorState(selectPaneOpening);
+    useEditorEvent('reviewItemReveal', ({ key }) => {
+      if (props.hidden || paneOpening.value === 'manual') return;
+      if (items.value.some((entry) => entry.key === key)) reviewHook.setPaneOpen(true);
+    });
     const expandedResolvedKey = ref<string | null>(null);
     watch(
       items,
@@ -611,6 +634,8 @@ const ReviewRoot = defineComponent({
         setExpandedResolvedKey: (key) => {
           expandedResolvedKey.value = key;
         },
+        commentMarkers: commentMarkers.value,
+        revisionsIn: revisionsIn.value,
       };
     };
     const railValue = shallowRef<ReviewRailValue>(currentRailValue());
@@ -831,6 +856,7 @@ const ReviewRoot = defineComponent({
 export { useReviewItem };
 export type {
   ReviewActionProps,
+  ReviewBalloonProps,
   ReviewMarkersProps,
   ReviewPartProps,
   ReviewProps,

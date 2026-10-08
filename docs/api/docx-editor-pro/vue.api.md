@@ -207,6 +207,9 @@ export interface CollaborationStatusSnapshot {
 }
 
 // @public
+export type CommentMarkerStyle = 'initials' | 'icon';
+
+// @public
 export interface CreateDocumentCollaborationOptions {
     // (undocumented)
     readonly awareness: Awareness;
@@ -986,8 +989,10 @@ export interface ResolvedCustomNodeActivation {
 
 // @public
 export interface ResolvedReviewPane {
+    readonly commentMarkers: CommentMarkerStyle;
     readonly opening: ReviewPaneOpening;
     readonly overflow: ReviewPaneOverflow;
+    readonly revisionsIn: RevisionDisplay;
 }
 
 // @public (undocumented)
@@ -998,6 +1003,7 @@ export interface ReviewActionProps extends ReviewPartProps {
 
 // @public
 export interface ReviewActivationOptions {
+    readonly announce?: boolean;
     readonly reveal?: ScrollPlacement | false;
 }
 
@@ -1006,6 +1012,22 @@ export interface ReviewAdoptOptions {
     readonly author?: string;
     readonly date?: Date;
 }
+
+// @public
+export interface ReviewBalloonProps {
+    className?: string;
+    hidden?: boolean;
+}
+
+// @public
+export interface ReviewItemRevealEvent {
+    readonly key: string;
+    readonly pairKey?: string;
+    readonly source: ReviewItemRevealSource;
+}
+
+// @public
+export type ReviewItemRevealSource = 'navigate' | 'host';
 
 // @public (undocumented)
 export type ReviewItemView = ReviewItemPlacement;
@@ -1038,12 +1060,14 @@ export type ReviewPaneOpening = 'auto' | 'manual';
 
 // @public
 export interface ReviewPaneOptions {
+    readonly commentMarkers?: CommentMarkerStyle;
     readonly opening?: ReviewPaneOpening;
     readonly overflow?: ReviewPaneOverflow;
+    readonly revisionsIn?: RevisionDisplay;
 }
 
 // @public
-export type ReviewPaneOverflow = 'float' | 'shrinkPage';
+export type ReviewPaneOverflow = 'float' | 'shrinkPage' | 'scroll';
 
 // @public (undocumented)
 export interface ReviewPartProps {
@@ -1083,6 +1107,9 @@ export interface ReviewProps extends Omit<ReviewPartProps, 'children' | 'hidden'
     // (undocumented)
     t?: (key: string, params?: Record<string, string | number>) => string;
 }
+
+// @public
+export type RevisionDisplay = 'pane' | 'balloons';
 
 // @public
 export type ScrollPlacement = 'start' | 'center' | 'centerIfNeeded' | 'nearest';
@@ -1167,7 +1194,7 @@ export function useReviewOf(editorRef: Ref<Editor | null>, query?: MaybeRefOrGet
 export interface UseReviewReturn {
     // (undocumented)
     readonly accept: (item: ReviewItemView) => boolean;
-    // (undocumented)
+    readonly activatedKey: ComputedRef<string | null>;
     readonly activeKey: ComputedRef<string | null>;
     readonly adopt: (items: ReviewItemView | readonly ReviewItemView[], options?: ReviewAdoptOptions) => boolean;
     // (undocumented)
@@ -1192,7 +1219,6 @@ export interface UseReviewReturn {
     readonly resolve: (item: ReviewItemView) => boolean;
     // (undocumented)
     readonly selectionAnchorY: ComputedRef<number | null>;
-    // (undocumented)
     readonly setActive: (key: string | null, options?: ReviewActivationOptions) => boolean;
     // (undocumented)
     readonly setPaneOpen: (open: boolean) => void;

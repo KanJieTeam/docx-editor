@@ -34,9 +34,10 @@ export type {
 import type { EditorReviewHits } from './editor-review-hits.ts';
 import type { ReviewItemQuery } from './editor-review-query.ts';
 export type { ReviewItemQuery } from './editor-review-query.ts';
-import type { ReviewActivationOptions, ReviewItemPlacement } from './editor-review-placement.ts';
+import type { ReviewActivationOptions } from './review-activation.ts';
+export type { ReviewActivationOptions } from './review-activation.ts';
+import type { ReviewItemPlacement } from './editor-review-placement.ts';
 export type {
-  ReviewActivationOptions,
   ReviewCommentPlacement,
   ReviewCustomPlacement,
   ReviewItemPlacement,
@@ -44,7 +45,12 @@ export type {
   ReviewRevisionPlacement,
 } from './editor-review-placement.ts';
 export type { EditorReviewHits, ReviewItemHit } from './editor-review-hits.ts';
-export type { DocumentChange, EditorEvents } from './editor-events.ts';
+export type {
+  DocumentChange,
+  EditorEvents,
+  ReviewItemRevealEvent,
+  ReviewItemRevealSource,
+} from './editor-events.ts';
 import type {
   DocumentEditingMode,
   ResolveReviewChangesOptions,
@@ -637,8 +643,38 @@ export interface Editor extends EditorAnchorNavigation, EditorHighlights, Editor
    * {@link setReviewActivationExclusions}), for a custom node without `reviewCard`, and when
    * the story it lives in will not open — and a host walking a queue with next/previous
    * controls has no other way to learn that a step did nothing. Consult {@link ReviewItemPlacement.activatable} to avoid asking.
+   *
+   * With `options.announce: true`, a call that lands fires `reviewItemReveal` with
+   * `source: 'host'`, also when the item was already active, so the packaged review UI opens
+   * the item's balloon or card. By default it fires nothing. A `null` key fires nothing.
    */
   setActiveReviewItem(key: string | null, options?: ReviewActivationOptions): ExecResult;
+
+  /**
+   * The key of the ACTIVATED review item: the one {@link setActiveReviewItem}, Next Change, or
+   * Previous Change made active, while the caret stays in it.
+   *
+   * Two ideas of "active" exist. The caret-active item is the one the caret is in, however it
+   * got there: `isActive` on the placements {@link getReviewItems} returns, and `activeKey` in
+   * `useReview()`. The activated item is narrower: only an explicit activation sets it, so a
+   * caret that merely lands in a change leaves this `null`. Open a balloon or card for the
+   * activated item, and highlight the caret-active one.
+   *
+   * Pass the query you read items with, so the key matches theirs: with
+   * `pairReplacements: true`, a paired replacement reports the pair's key; without it, the
+   * key of the half the caret is in. The value changes with the selection, so read it again
+   * on `selectionChange`.
+   *
+   * @example
+   * ```ts
+   * const query = { pairReplacements: true };
+   * editor.on('selectionChange', () => {
+   *   const activated = editor.getActivatedReviewItemKey(query);
+   *   if (activated !== null) showMyCard(activated);
+   * });
+   * ```
+   */
+  getActivatedReviewItemKey(query?: ReviewItemQuery): string | null;
 
   /**
    * Revision kinds the caret must never activate, or null for none.

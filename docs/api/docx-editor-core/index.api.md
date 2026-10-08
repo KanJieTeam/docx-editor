@@ -1417,6 +1417,7 @@ export interface Editor extends EditorAnchorNavigation, EditorHighlights, Editor
     }): readonly (readonly TextMatch[])[];
     // (undocumented)
     focus(scope?: EditorScope): InteractionOutcome<void>;
+    getActivatedReviewItemKey(query?: ReviewItemQuery): string | null;
     // (undocumented)
     getActiveScope(): ViewScope;
     getAvailableFonts(): readonly string[];
@@ -1831,6 +1832,7 @@ export interface EditorEvents {
     error: (error: EditorError) => void;
     // (undocumented)
     historyDiagnostic: (diagnostic: HistoryDiagnostic) => void;
+    reviewItemReveal: (event: ReviewItemRevealEvent) => void;
     revisionMarkupChange: (settings: ResolvedRevisionMarkup) => void;
     selectionChange: (snapshot: EditorSnapshot) => void;
 }
@@ -2780,6 +2782,7 @@ export interface ResolveReviewChangesOptions {
 
 // @public
 export interface ReviewActivationOptions {
+    readonly announce?: boolean;
     readonly reveal?: ScrollPlacement | false;
 }
 
@@ -2885,6 +2888,16 @@ export interface ReviewItemQuery {
     readonly pairReplacements?: boolean;
     readonly placement?: boolean;
 }
+
+// @public
+export interface ReviewItemRevealEvent {
+    readonly key: string;
+    readonly pairKey?: string;
+    readonly source: ReviewItemRevealSource;
+}
+
+// @public
+export type ReviewItemRevealSource = 'navigate' | 'host';
 
 // @public
 export interface ReviewModelInput {

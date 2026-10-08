@@ -20,15 +20,28 @@ export interface ReviewPaneState {
    * invalid setting.
    */
   set(options: ReviewPaneOptions): ExecResult;
+  /** Whether the pane lists at least one of these items under the current settings. */
+  shows(items: readonly ReviewItem[]): boolean;
   /** Whether a loaded document with these items opens the pane by itself. */
   opensOnLoad(items: readonly ReviewItem[]): boolean;
   /** Whether a new tracked change opens a closed pane by itself. */
   opensOnTrackedChange(): boolean;
 }
 
+/**
+ * Whether the pane shows a card for this item. With `revisionsIn: 'balloons'` the pane
+ * lists comments and custom cards only; tracked changes open in balloons.
+ */
+function paneShows(pane: ResolvedReviewPane, item: ReviewItem): boolean {
+  return pane.revisionsIn === 'pane' || item.kind !== 'revision';
+}
+
 export function createReviewPaneState(
   initial: ReviewPaneOptions | undefined,
-  host: { readonly enabled: boolean; changed(value: ResolvedReviewPane): void }
+  host: {
+    readonly enabled: boolean;
+    changed(value: ResolvedReviewPane, previous: ResolvedReviewPane): void;
+  }
 ): ReviewPaneState {
   let value = resolveReviewPane(initial);
   return {
@@ -44,11 +57,16 @@ export function createReviewPaneState(
       }
       // `changed: false`, as for every view-only call: `changed` answers for the document.
       if (next === value) return { ok: true, changed: false };
+      const previous = value;
       value = next;
-      host.changed(value);
+      host.changed(value, previous);
       return { ok: true, changed: false };
     },
-    opensOnLoad: (items) => value.opening === 'auto' && items.length > 0,
-    opensOnTrackedChange: () => value.opening === 'auto',
+    shows: (items) => items.some((item) => paneShows(value, item)),
+    // An empty pane is not worth opening: under balloons a document with tracked changes
+    // and no comments has nothing to list.
+    opensOnLoad: (items) =>
+      value.opening === 'auto' && items.some((item) => paneShows(value, item)),
+    opensOnTrackedChange: () => value.opening === 'auto' && value.revisionsIn === 'pane',
   };
 }

@@ -17,11 +17,13 @@ Production use requires a commercial agreement: licensing@eigenpal.com
 
 export {
   reviewModule,
+  type CommentMarkerStyle,
   type ResolvedReviewPane,
   type ReviewModuleOptions,
   type ReviewPaneOpening,
   type ReviewPaneOptions,
   type ReviewPaneOverflow,
+  type RevisionDisplay,
 } from '../review/review-module.ts';
 export {
   collaborationModule,
@@ -33,6 +35,7 @@ export {
   useReviewItem,
   type DocxEditorReviewNamespace,
   type ReviewActionProps,
+  type ReviewBalloonProps,
   type ReviewMarkersProps,
   type ReviewPartProps,
   type ReviewProps,
@@ -45,6 +48,8 @@ export {
   type ReviewActivationOptions,
   type ScrollPlacement,
   type ReviewAdoptOptions,
+  type ReviewItemRevealEvent,
+  type ReviewItemRevealSource,
   type ReviewItemView,
   type UseReviewReturn,
 } from './useReview.ts';

@@ -775,7 +775,11 @@
     "noMarkup": "ללא סימונים",
     "original": "מקורי",
     "protectDocument": "הגן על המסמך עבור טפסים",
-    "simpleMarkup": "סימון פשוט"
+    "simpleMarkup": "סימון פשוט",
+    "replyCount": "תשובות: {count}",
+    "trackedChange": "שינוי במעקב",
+    "changeAnnouncement": "{change} מאת {author}: {text}",
+    "replyTargetResolved": "השינוי נפתר, ולכן התשובה לא פורסמה."
   },
   "imageAltText": {
     "description": "תיאור",

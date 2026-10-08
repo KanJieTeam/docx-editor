@@ -24,6 +24,7 @@ import {
 } from 'vue';
 import type { ReviewAuthorInfo } from '@docx-editor.dev/vue';
 import type { TranslationKey } from '@docx-editor.dev/i18n';
+import type { CommentMarkerStyle, RevisionDisplay } from '@docx-editor.dev/core/editor';
 import { useReviewAuthors, useTranslation } from '@docx-editor.dev/vue';
 import type { ReviewActions } from './review-types.ts';
 import type { ReviewItemView } from './useReview.ts';
@@ -47,6 +48,10 @@ export interface ReviewRailValue {
   readonly endDraft: () => void;
   readonly expandedResolvedKey: string | null;
   readonly setExpandedResolvedKey: (key: string | null) => void;
+  /** The `commentMarkers` review pane setting: how a comment thread's margin marker looks. */
+  readonly commentMarkers: CommentMarkerStyle;
+  /** The `revisionsIn` review pane setting: tracked changes as rail cards or page balloons. */
+  readonly revisionsIn: RevisionDisplay;
 }
 
 export const ReviewContextKey: InjectionKey<ComputedRef<ReviewRailValue>> = Symbol('ReviewContext');
@@ -56,6 +61,7 @@ export const ReviewItemContextKey: InjectionKey<ComputedRef<ReviewItemView | nul
 const INERT_REVIEW: ReviewActions = {
   items: [],
   activeKey: null,
+  activatedKey: null,
   setActive: () => false,
   accept: () => false,
   reject: () => false,
@@ -90,6 +96,8 @@ const INERT_RAIL: ReviewRailValue = {
   endDraft: () => {},
   expandedResolvedKey: null,
   setExpandedResolvedKey: () => {},
+  commentMarkers: 'initials',
+  revisionsIn: 'pane',
 };
 
 /** @internal */
@@ -131,10 +139,24 @@ export function useReviewAuthor(
 }
 
 /** @internal */
-export function useReviewLabel(): (key: TranslationKey) => string {
+/** Placeholder values for a review label, such as `{ count: 3 }` for `{count}`. */
+export type ReviewLabelParams = Readonly<Record<string, string | number>>;
+
+/** Fill `{name}` placeholders in a host-translated label, the way the catalogue's `t()` does. */
+function withParams(text: string, params: ReviewLabelParams | undefined): string {
+  if (!params) return text;
+  return text.replace(/\{(\w+)\}/g, (whole, name: string) =>
+    Object.hasOwn(params, name) ? String(params[name]) : whole
+  );
+}
+
+export function useReviewLabel(): (key: TranslationKey, params?: ReviewLabelParams) => string {
   const rail = useRail();
   const { t } = useTranslation();
-  return (key: TranslationKey) => rail.value.t?.(key) ?? t(key);
+  return (key: TranslationKey, params?: ReviewLabelParams) => {
+    const host = rail.value.t?.(key);
+    return host !== undefined ? withParams(host, params) : t(key, params);
+  };
 }
 
 function reviewItemRenderKey(item: ReviewItemView): string {
