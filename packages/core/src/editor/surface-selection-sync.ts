@@ -221,7 +221,7 @@ export interface SurfaceSelectionSync {
    */
   selectionPageIndex(): number | undefined;
   selectionLineId(): string | undefined;
-  caretPreference(): CaretAtOptions;
+  caretPreference(preferredPageIndex?: number): CaretAtOptions;
   /** Keep pointer geometry local; model positions and collaboration selections stay unchanged. */
   notePointerCaret(caret?: CaretGeometry): void;
 }
@@ -737,12 +737,10 @@ export function createSurfaceSelectionSync(deps: SurfaceSelectionSyncDeps): Surf
 
     selectionPageIndex: () => lastSelectionPageIndex,
     selectionLineId,
-    caretPreference() {
+    caretPreference(preferredPageIndex = lastSelectionPageIndex) {
       const preferredLineId = selectionLineId();
       return {
-        ...(lastSelectionPageIndex !== undefined
-          ? { preferredPageIndex: lastSelectionPageIndex }
-          : {}),
+        ...(preferredPageIndex !== undefined ? { preferredPageIndex } : {}),
         ...(preferredLineId !== undefined ? { preferredLineId } : {}),
       };
     },

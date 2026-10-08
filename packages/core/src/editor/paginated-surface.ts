@@ -475,7 +475,7 @@ export function mountPaginatedSurface(
       return {
         layout: editingLayout(),
         selection: hiddenMarks.shownSelection(selection),
-        ...selectionSync.caretPreference(),
+        ...selectionSync.caretPreference(active?.pageIndex ?? notePageIndex ?? undefined),
         measurer,
         ...(armedAtCaret()
           ? {
@@ -497,11 +497,6 @@ export function mountPaginatedSurface(
               },
             }
           : {}),
-        ...(active
-          ? { preferredPageIndex: active.pageIndex }
-          : notePageIndex !== null
-            ? { preferredPageIndex: notePageIndex }
-            : {}),
         scopedHost,
         ...(active
           ? { scopedHostKind: 'headerFooter' as const }
