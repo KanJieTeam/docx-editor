@@ -55,7 +55,8 @@ export const ToolbarLineSpacing = defineComponent({
       (value) => {
         open.value = value;
       },
-      rootRef
+      rootRef,
+      () => Boolean(props.hidden)
     );
 
     const applyLines = (lines: number) => {

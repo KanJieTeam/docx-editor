@@ -39,7 +39,7 @@ function ToolbarAlignmentImpl({ className, hidden }: ToolbarSlotPartProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
-  useDropdownClose(open, setOpen, rootRef);
+  useDropdownClose(open, setOpen, rootRef, hidden);
 
   if (hidden) return null;
 

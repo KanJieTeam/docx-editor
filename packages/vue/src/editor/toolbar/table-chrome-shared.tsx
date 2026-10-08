@@ -5,7 +5,6 @@ import { useTranslation } from '../../i18n';
 import { focusBy, focusEdge } from '../menu/menu-keyboard';
 import { useStableDocxId } from '../../lib/stable-id';
 import { guardToolbarMousedown } from './ToolbarButton';
-export { useDropdownClose } from './useDropdownClose';
 
 /** Return focus to the painted pages layer after a table colour dialog applies. */
 export function restoreToolbarDocumentFocus(from: HTMLElement | null): void {

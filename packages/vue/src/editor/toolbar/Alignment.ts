@@ -38,7 +38,8 @@ export const ToolbarAlignment = defineComponent({
       (value) => {
         open.value = value;
       },
-      rootRef
+      rootRef,
+      () => Boolean(props.hidden)
     );
 
     return () => {

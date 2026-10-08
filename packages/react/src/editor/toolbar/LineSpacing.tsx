@@ -71,7 +71,7 @@ function ToolbarLineSpacingImpl({ className, hidden }: ToolbarSlotPartProps) {
   const rootRef = useRef<HTMLSpanElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
 
-  useDropdownClose(open, setOpen, rootRef);
+  useDropdownClose(open, setOpen, rootRef, hidden);
 
   const applyLines = useCallback(
     (lines: number) => {
