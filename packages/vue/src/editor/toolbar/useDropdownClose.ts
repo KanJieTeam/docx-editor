@@ -1,18 +1,23 @@
 import { watch, type Ref } from 'vue';
 import { editorScopeFor } from '../editor-scope';
+import { useNavigationViewportElement } from '../navigation/navigation-layout';
 
 /**
- * The box that holds this editor's chrome and its painted pages.
+ * Whether a key event comes from this editor: the dropdown, the chrome root that holds it
+ * (the toolbar or menu bar scopes itself), this editor's own scroll container with its pages,
+ * or a `.docx-editor` wrapper that holds this editor's chrome and pages together.
  *
- * A packaged editor or a wrapped composition answers through `editorScopeFor`. A bare
- * composition has no wrapper, so the nearest ancestor that holds a pages layer stands in.
+ * Never a plain ancestor: in a bare composition the host's container holds the toolbar, the
+ * viewport, and the host's own inputs and dialogs side by side, and those keep their keys.
  */
-function editorOwnerFor(root: HTMLElement): Element {
+function ownedByEditor(event: Event, root: HTMLElement, viewport: HTMLElement | null): boolean {
+  const path = event.composedPath();
+  if (path.includes(root)) return true;
+  if (viewport && path.includes(viewport)) return true;
+  const chrome = root.closest('.docx-editor');
+  if (chrome && path.includes(chrome)) return true;
   const scope = editorScopeFor(root);
-  if (scope) return scope;
-  let box: Element | null = root;
-  while (box && !box.querySelector('.docx-pages')) box = box.parentElement;
-  return box ?? root;
+  return scope !== null && path.includes(scope);
 }
 
 /**
@@ -30,6 +35,8 @@ export function useDropdownClose(
   rootRef: Ref<HTMLElement | null>,
   hidden: () => boolean = () => false
 ): void {
+  // This editor's scroll container, read at key time so it never re-binds the listeners.
+  const viewport = useNavigationViewportElement();
   watch(
     () => [open.value, hidden(), rootRef.value] as const,
     ([isOpen, isHidden, root], _, onCleanup) => {
@@ -46,7 +53,7 @@ export function useDropdownClose(
       const onKeyDown = (event: KeyboardEvent) => {
         if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
         setOpen(false);
-        if (!inside(event, root) && !inside(event, editorOwnerFor(root))) return;
+        if (!ownedByEditor(event, root, viewport.value)) return;
         event.preventDefault();
         event.stopPropagation();
         const focused = doc.activeElement;

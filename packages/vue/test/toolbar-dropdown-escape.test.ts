@@ -212,6 +212,28 @@ test('host input and host dialog Escape close the dropdown and keep the host def
   expect(seen).toEqual(['input', 'dialog']);
 });
 
+test('host controls beside the toolbar and viewport in the same container keep their Escape', async () => {
+  // A bare composition: the toolbar, the viewport, and the host's own input and dialog are
+  // siblings in one container, which therefore holds the pages layer too.
+  const view = await mount();
+  const input = document.createElement('input');
+  const dialog = document.createElement('dialog');
+  const dialogButton = document.createElement('button');
+  dialog.append(dialogButton);
+  view.container.append(input, dialog);
+  expect(input.parentElement!.querySelector('.docx-pages')).not.toBeNull();
+  for (const target of [input, dialogButton]) {
+    await clickOpen(view, 'alignment');
+    let event: KeyboardEvent | undefined;
+    await update(() => {
+      target.focus();
+      event = pressEscape(target);
+    });
+    expect(view.popup('alignment')).toBeNull();
+    expect(event!.defaultPrevented).toBe(false);
+  }
+});
+
 test('Escape in a second editor closes the dropdown and still reaches that editor', async () => {
   const left = await mount({ source: MODES_SOURCE });
   const right = await mount({ source: MODES_SOURCE });
