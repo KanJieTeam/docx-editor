@@ -3151,10 +3151,10 @@ export interface DocxEditorNavigationProps extends UseNavigationPaneOptions {
     children?: DocxEditorChildren;
     // (undocumented)
     className?: string;
+    findShortcut?: boolean;
     searchHighlight?: DocumentSearchHighlight;
     // (undocumented)
     style?: CSSProperties;
-    // (undocumented)
     t?: (key: string, params?: Record<string, string | number>) => string;
     // (undocumented)
     toggle?: boolean | NavigationPartProps;
@@ -3754,7 +3754,6 @@ export interface DocxEditorProps {
     menu?: boolean | DocxEditorMenuProps;
     mode?: EditorMode;
     modules?: readonly EditorModule[];
-    // (undocumented)
     navigation?: boolean | DocxEditorNavigationProps;
     // (undocumented)
     popups?: DocxEditorPopups;
@@ -5085,6 +5084,9 @@ export const NAVIGATION_PANE_GAP = 16;
 export const NAVIGATION_PANE_INSET = 32;
 
 // @public
+export const NAVIGATION_PANE_MIN_PAGE_ROOM = 320;
+
+// @public
 export const NAVIGATION_PANE_WIDTH = 280;
 
 // @public (undocumented)
@@ -5182,6 +5184,9 @@ export const NavigationHeadings: vue.DefineComponent<vue.ExtractPropTypes<{
     className: string;
     style: CSSProperties;
 }, {}, {}, {}, string, vue.ComponentProvideOptions, true, {}, any>;
+
+// @public
+export function navigationPaneOverlays(viewportWidth: number, reservation: number): boolean;
 
 // @public
 export function navigationPaneReservation(paneWidth?: number): number;
@@ -6729,6 +6734,7 @@ export interface UseNavigationPaneOptions {
 export interface UseNavigationPaneResult {
     // (undocumented)
     readonly open: ComputedRef<boolean>;
+    readonly overlay: ComputedRef<boolean>;
     // (undocumented)
     readonly paneWidth: ComputedRef<number>;
     // (undocumented)
