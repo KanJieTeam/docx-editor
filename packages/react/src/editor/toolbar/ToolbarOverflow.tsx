@@ -22,7 +22,13 @@ import {
   useState,
 } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { chromeSlotIsToggle, type ChromeSlotId } from '@docx-editor.dev/core/editor';
+import {
+  chromeSlotIsToggle,
+  hasOpenNestedPopup,
+  listenForPopupEscape,
+  type ChromeSlotId,
+} from '@docx-editor.dev/core/editor';
+import { useNavigationViewportElement } from '../navigation/navigation-layout';
 import { useEditorCommand } from '../useEditorCommand';
 import { usePlatformShortcut } from '../usePlatformShortcut';
 import { useToolbarLabel } from './toolbar-context';
@@ -146,6 +152,9 @@ export function ToolbarOverflow({ sections, className }: ToolbarOverflowProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const focusOnOpenRef = useRef(false);
   const panelId = useId();
+  const viewport = useNavigationViewportElement();
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
   const text = label('formattingBar.more');
 
   const close = useCallback((focusTrigger: boolean) => {
@@ -165,9 +174,26 @@ export function ToolbarOverflow({ sections, className }: ToolbarOverflowProps) {
       if (target instanceof Node && rootRef.current?.contains(target)) return;
       setOpen(false);
     };
+    const root = rootRef.current;
+    // Escape in the capture phase, ahead of the surface: a click opens the panel with focus
+    // left in the pages, and the surface would spend the key on its own mode first. An open
+    // nested popup (a table menu, a picker) takes this Escape, and the panel stays open.
+    const stopEscape = root
+      ? listenForPopupEscape({
+          popup: root,
+          contains: (node) =>
+            rootRef.current?.contains(node) === true || panelRef.current?.contains(node) === true,
+          editorElements: () => [viewportRef.current],
+          skip: () => hasOpenNestedPopup(panelRef.current),
+          close,
+        })
+      : undefined;
     document.addEventListener('mousedown', onPointerDown, true);
-    return () => document.removeEventListener('mousedown', onPointerDown, true);
-  }, [open]);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown, true);
+      stopEscape?.();
+    };
+  }, [open, close]);
 
   // Clamped into the viewport. The stylesheet lines the panel up with the trigger's end,
   // which runs off the left edge when the bar is centered or narrow. Measured in a layout

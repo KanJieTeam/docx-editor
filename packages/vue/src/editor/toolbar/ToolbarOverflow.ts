@@ -10,7 +10,13 @@ import {
   type PropType,
   type VNode,
 } from 'vue';
-import { chromeSlotIsToggle, type ChromeSlotId } from '@docx-editor.dev/core/editor';
+import {
+  chromeSlotIsToggle,
+  hasOpenNestedPopup,
+  listenForPopupEscape,
+  type ChromeSlotId,
+} from '@docx-editor.dev/core/editor';
+import { useNavigationViewportElement } from '../navigation/navigation-layout';
 import { useEditorCommand } from '../useEditorCommand';
 import { usePlatformShortcut } from '../usePlatformShortcut';
 import { useStableDocxId } from '../../lib/stable-id';
@@ -133,6 +139,7 @@ export const ToolbarOverflow = defineComponent({
     const panelRef = ref<HTMLDivElement | null>(null);
     const focusOnOpen = ref(false);
     const panelId = useStableDocxId('toolbar-overflow');
+    const viewport = useNavigationViewportElement();
     const text = label('formattingBar.more');
 
     const close = (focusTrigger: boolean) => {
@@ -184,8 +191,25 @@ export const ToolbarOverflow = defineComponent({
         if (target instanceof Node && rootRef.value?.contains(target)) return;
         open.value = false;
       };
+      const root = rootRef.value;
+      // Escape in the capture phase, ahead of the surface: a click opens the panel with focus
+      // left in the pages, and the surface would spend the key on its own mode first. An open
+      // nested popup (a table menu, a picker) takes this Escape, and the panel stays open.
+      const stopEscape = root
+        ? listenForPopupEscape({
+            popup: root,
+            contains: (node) =>
+              rootRef.value?.contains(node) === true || panelRef.value?.contains(node) === true,
+            editorElements: () => [viewport.value],
+            skip: () => hasOpenNestedPopup(panelRef.value),
+            close,
+          })
+        : undefined;
       document.addEventListener('mousedown', onPointerDown, true);
-      onCleanup(() => document.removeEventListener('mousedown', onPointerDown, true));
+      onCleanup(() => {
+        document.removeEventListener('mousedown', onPointerDown, true);
+        stopEscape?.();
+      });
     });
 
     watch(

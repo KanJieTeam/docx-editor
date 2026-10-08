@@ -1343,6 +1343,7 @@ export interface DocxEditorInstance extends Editor {
     setMode(mode: 'edit' | 'view' | 'suggesting' | undefined): void;
     setRemoteCaretLabelHost(host: RemoteCaretLabelHost | null): void;
     setReviewAuthorVisible(author: string, visible: boolean): void;
+    setReviewPaneOptions(options: ReviewPaneOptions): ExecResult;
     setRevisionMarkup(options: RevisionMarkupOptions): void;
     setRevisionMarkupChrome(handlers: RevisionMarkupChromeHandlers | null, options?: PopupChromeRegistrationOptions): Unsubscribe;
     setRevisionStyles(styles: RevisionStyles): void;
@@ -1388,7 +1389,7 @@ export interface DrawingPositionInput {
 export type DrawingVerticalReferenceFrame = 'bottomMargin' | 'insideMargin' | 'line' | 'margin' | 'outsideMargin' | 'page' | 'paragraph' | 'topMargin';
 
 // @public
-export interface Editor extends EditorAnchorNavigation, EditorHighlights {
+export interface Editor extends EditorAnchorNavigation, EditorHighlights, EditorReviewHits {
     acceptReviewItem(key: string): ExecResult;
     addComment(text: string, author?: string): ExecResult;
     beginHistoryGroup(): HistoryGroup;
@@ -1536,8 +1537,7 @@ export interface Editor extends EditorAnchorNavigation, EditorHighlights {
     reportCustomNodeDiagnostic(diagnostic: unknown): void;
     retainSelection(): SelectionPin | null;
     save(): Promise<ArrayBuffer>;
-    // (undocumented)
-    scrollToBlock(blockId: string): boolean;
+    scrollToBlock(blockId: string, options?: ScrollToAnchorOptions): boolean;
     scrollToPage(pageNumber: number): boolean;
     selectMatch(match: TextMatch): ExecResult;
     setActiveReviewItem(key: string | null, options?: ReviewActivationOptions): ExecResult;
@@ -2012,6 +2012,12 @@ export interface EditorQueryResults extends DocQueryResults {
 }
 
 // @public
+export interface EditorReviewHits {
+    getReviewItemRects(key: string): readonly HighlightRect[];
+    getReviewItemsAt(clientX: number, clientY: number, query?: ReviewItemQuery): readonly ReviewItemHit[];
+}
+
+// @public
 export type EditorScope = {
     kind: 'body';
 } | {
@@ -2080,6 +2086,7 @@ export interface EditorSnapshot {
     // (undocumented)
     readonly parseError: string | null;
     readonly reviewDisplayMode?: ReviewDisplayMode;
+    readonly reviewPane: ResolvedReviewPane;
     readonly reviewPaneOpen?: boolean;
     readonly revisionMarkup: ResolvedRevisionMarkup;
     // (undocumented)
@@ -2773,7 +2780,7 @@ export interface ResolveReviewChangesOptions {
 
 // @public
 export interface ReviewActivationOptions {
-    readonly reveal?: 'start' | 'center' | 'centerIfNeeded' | 'nearest' | false;
+    readonly reveal?: ScrollPlacement | false;
 }
 
 // @public
@@ -2845,6 +2852,12 @@ export type ReviewDisplayMode = RevisionDisplayMode | 'simple-markup';
 export type ReviewItem = ReviewRevisionItem | ReviewCommentItem | ReviewCustomItem;
 
 // @public
+export interface ReviewItemHit {
+    readonly placement: ReviewItemPlacement;
+    readonly rect: HighlightRect;
+}
+
+// @public
 export type ReviewItemPlacement = ReviewCommentPlacement | ReviewRevisionPlacement | ReviewCustomPlacement;
 
 // @public
@@ -2868,8 +2881,8 @@ export interface ReviewItemPlacementBase {
 
 // @public
 export interface ReviewItemQuery {
-    // (undocumented)
     readonly excludeRevisionKinds?: readonly ReviewRevisionKind[];
+    readonly pairReplacements?: boolean;
     readonly placement?: boolean;
 }
 
@@ -2894,6 +2907,7 @@ export interface ReviewModuleContribution {
     readonly collectReviewItems: CollectReviewItems;
     readonly createRevisionMarkupDialog?: (host: RevisionMarkupDialogHost) => RevisionMarkupDialog;
     readonly displayModes: readonly ReviewDisplayMode[];
+    readonly pane?: ReviewPaneOptions;
     readonly revisionItemsOfParagraph: (part: OoxmlPart, paragraphId: string) => readonly ReviewRevisionItem[];
 }
 
@@ -2949,8 +2963,8 @@ export interface ReviewRevisionItem {
 // @public
 export type ReviewRevisionKind = 'insert' | 'delete'
 /**
-* A combined decision supplied by a custom review provider.
-* The built-in reader exposes text replacements as separate deletion and insertion decisions.
+* A combined deletion and insertion decision. The built-in reader lists them separately,
+* unless a review query asks to pair replacements or a custom review provider combines them.
 */
 | 'replace' | 'moveFrom' | 'moveTo'
 /** `w:rPrChange` / `w:pPrChange` — the words are unchanged, their formatting is not. */
@@ -3096,9 +3110,12 @@ export function runToolbarCommand(editor: Editor | null, id: TableChromeSlotId, 
 export function runToolbarCommand(editor: Editor | null, id: ChromeSlotId, value: undefined, options: EditorExecOptions): ExecResult;
 
 // @public
+export type ScrollPlacement = 'start' | 'center' | 'centerIfNeeded' | 'nearest';
+
+// @public
 export interface ScrollToAnchorOptions {
     readonly behavior?: 'instant' | 'smooth';
-    readonly block?: 'start' | 'center' | 'centerIfNeeded' | 'nearest';
+    readonly block?: ScrollPlacement;
     readonly offsetPx?: number;
 }
 

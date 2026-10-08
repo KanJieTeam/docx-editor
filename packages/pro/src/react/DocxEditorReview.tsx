@@ -65,7 +65,7 @@ import {
   type ReviewAuthorInfo,
   type ToolbarTranslate,
 } from '@docx-editor.dev/react';
-import { cloneReviewCard, partitionReviewChildren } from './review-composition';
+import { cloneReviewCard, listCardTemplate, partitionReviewChildren } from './review-composition';
 import {
   COMPACT_CARD_WIDTH,
   RAIL_OVERSCAN,
@@ -73,10 +73,12 @@ import {
   useRailWindow,
 } from './use-rail-geometry';
 import { useReviewSlotSizing } from './use-review-slot-sizing';
+import { isCardControl, keepsPressFocus } from '../review/card-controls.ts';
 import { useReview, type ReviewItemView } from './useReview';
 import {
   authorAccent,
   authorCardStyle,
+  authorHooks,
   authorSlot,
   useReviewAuthorInfo,
 } from './review-author-styles';
@@ -122,7 +124,7 @@ export function useReviewItem(): ReviewItemView | null {
  * The link between a CUSTOM card and the author styling system: a `List` render callback
  * or card child reads the item's author here and draws with the same colours the painted
  * document and the packaged cards use. Live: a `setRevisionStyles` call re-renders the
- * rail, and this answer with it. Works anywhere under `DocxEditorReview`.
+ * rail, and this answer with it. Outside the rail it reads the editor's author roster.
  *
  * ```tsx
  * function MyCard({ item }: { item: ReviewItemView }) {
@@ -135,8 +137,10 @@ export function useReviewItem(): ReviewItemView | null {
  * @public
  */
 export function useReviewAuthor(author: string | undefined): ReviewAuthorInfo | undefined {
-  const { authorInfo } = useRail();
-  return author === undefined ? undefined : authorInfo.get(author);
+  const rail = useContext(ReviewContext);
+  const roster = useReviewAuthors();
+  if (author === undefined) return undefined;
+  return rail ? rail.authorInfo.get(author) : roster.find((info) => info.author === author);
 }
 
 interface ReviewRailValue {
@@ -826,24 +830,24 @@ function ReviewRoot({
         : window_ !== null
           ? window_.top + RAIL_OVERSCAN + 24
           : null;
-  // The same card resolution as ReviewList: a host's `Card` part (or render prop) must
-  // reach the floating card too, or compact silently swaps in the packaged card the host
-  // replaced. With `preset={false}` and no Card part there is no card to float — the host
-  // opted out of packaged defaults. Under `asChild` the child is the rail ELEMENT, never
-  // a card template, so the packaged card stands there (as it does in that branch's list).
-  const cardTemplate = asChild ? null : rootChildren.rest;
+  // The same card resolution as ReviewList, from the same template: the List part's
+  // children (render prop, `Card` part, or part overrides plus extra children), else the
+  // root's. Without it compact swaps in the packaged parts the host hid or replaced.
+  // `preset={false}` with no template of its own floats nothing. Under `asChild` the child
+  // is the rail ELEMENT, never a card template, so the packaged card stands there.
+  const fromList = listCardTemplate(rootChildren.rest, rootParts.List);
+  const cardTemplate = asChild ? null : fromList.template;
   const listParts =
     typeof cardTemplate === 'function' ? null : partitionReviewChildren(cardTemplate, 'list');
-  const compactCardInner =
-    typeof cardTemplate === 'function' ? (
-      activeRoot && cardTemplate(activeRoot)
-    ) : listParts?.parts.Card && isValidElement<{ className?: string }>(listParts.parts.Card) ? (
-      cloneReviewCard(listParts.parts.Card, cardClassName)
-    ) : preset ? (
-      <ReviewCard {...(cardClassName ? { className: cardClassName } : {})}>
-        {listParts?.rest}
-      </ReviewCard>
-    ) : null;
+  const compactCardInner = fromList.hidden ? null : typeof cardTemplate === 'function' ? (
+    activeRoot && cardTemplate(activeRoot)
+  ) : listParts?.parts.Card && isValidElement<{ className?: string }>(listParts.parts.Card) ? (
+    cloneReviewCard(listParts.parts.Card, cardClassName)
+  ) : preset || fromList.fromList ? (
+    <ReviewCard {...(cardClassName ? { className: cardClassName } : {})}>
+      {listParts?.rest}
+    </ReviewCard>
+  ) : null;
   const compactCard =
     activeRoot && compactTop !== null && metrics.compactCardLeft !== null && compactCardInner ? (
       <ReviewItemContext.Provider value={activeRoot}>
@@ -1368,18 +1372,7 @@ function ReviewBalloon({ className, hidden }: ReviewPartProps) {
                 className="docx-review__card"
                 data-testid="review-balloon-card"
                 data-kind={served.revisionKind ?? 'revision'}
-                // Gated, as the card and the fallback balloon are: an anonymous change would
-                // otherwise carry `data-review-author=""` and match a host's `[data-review-author]`.
-                {...(served.author
-                  ? {
-                      'data-review-author': served.author,
-                      'data-review-author-slot': authorSlot(
-                        authorInfo.get(served.author),
-                        authorSlots.get(served.author) ?? 0
-                      ),
-                    }
-                  : {})}
-                style={authorCardStyle(
+                {...authorHooks(
                   served.author,
                   authorInfo.get(served.author),
                   authorSlots.get(served.author) ?? 0
@@ -1407,16 +1400,7 @@ function ReviewBalloon({ className, hidden }: ReviewPartProps) {
               className="docx-review__card"
               data-testid="review-balloon-card"
               data-kind={fallbackKind}
-              {...(anchor.author
-                ? {
-                    'data-review-author': anchor.author,
-                    'data-review-author-slot': authorSlot(
-                      authorInfo.get(anchor.author),
-                      authorSlots.get(anchor.author) ?? 0
-                    ),
-                  }
-                : {})}
-              style={authorCardStyle(
+              {...authorHooks(
                 anchor.author,
                 authorInfo.get(anchor.author),
                 authorSlots.get(anchor.author) ?? 0
@@ -1528,10 +1512,12 @@ function ReviewCard({ className, asChild, hidden, children }: ReviewPartProps) {
     ...(!resolvedCollapsible
       ? {
           onMouseDown: (event: React.MouseEvent) => {
-            if ((event.target as HTMLElement | null)?.closest('[data-review-selectable]')) return;
+            if (keepsPressFocus(event.target)) return;
             (event.currentTarget as HTMLElement).focus({ preventScroll: true });
           },
-          onClick: () => review.setActive(entry.key),
+          onClick: (event: React.MouseEvent) => {
+            if (!isCardControl(event.target) && !entry.isActive) review.setActive(entry.key);
+          },
           onKeyDown: (event: React.KeyboardEvent) => {
             if (event.target !== event.currentTarget) return;
             if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -1962,7 +1948,7 @@ ReviewDelete.docxReviewPart = 'Delete' as const;
 
 /** The thread under a comment, in document order. @public */
 function ReviewReplies({ className, hidden }: ReviewPartProps) {
-  const { byId } = useRail();
+  const { byId, authorSlots, authorInfo } = useRail();
   const entry = useContext(ReviewItemContext);
   // Comments AND revisions. A reply to a tracked change is a comment over that change's range,
   // and refusing to draw it here is what put the reader's answer in a card of its own, floating
@@ -1976,7 +1962,16 @@ function ReviewReplies({ className, hidden }: ReviewPartProps) {
     <ol className={`docx-review__replies${className ? ` ${className}` : ''}`}>
       {replies.map((reply) => (
         <ReviewItemContext.Provider key={reply.key} value={reply}>
-          <li className="docx-review__reply" data-testid="review-reply">
+          <li
+            className="docx-review__reply"
+            data-testid="review-reply"
+            // Each reply draws in its OWN author's colour, not the thread's.
+            {...authorHooks(
+              reply.author,
+              authorInfo.get(reply.author),
+              authorSlots.get(reply.author) ?? 0
+            )}
+          >
             <div className="docx-review__head">
               <ReviewAvatar />
               <div className="docx-review__meta">

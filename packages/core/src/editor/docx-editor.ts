@@ -23,6 +23,13 @@ import { formattingCommandActive } from './docx-editor-active.ts';
 import { createEditorScrolling } from './docx-editor-scroll.ts';
 import { createAnchorNavigation } from './docx-editor-anchor-navigation.ts';
 import { createTextHighlights } from './text-highlights.ts';
+import { createReviewItemsAt } from './review-items-at.ts';
+import {
+  findReviewPlacement,
+  narrowReviewItems,
+  replacementPairHalves,
+  reviewItemWithHalves,
+} from './review-replacement-pairs.ts';
 import { captureSearchResult } from './document-search-result.ts';
 import { createDocumentProtectionCommands } from './docx-editor-protection.ts';
 
@@ -31,12 +38,12 @@ import {
   commentBodyText,
   commentInitials,
   documentOrder,
+  firstReviewRange,
   paragraphFragmentsOfBlocks,
   reviewItemGeometry,
   reviewItemKey,
   type ReviewItem,
   type ReviewParagraphAnchor,
-  type ReviewRange,
   type SemanticLayout,
   type SemanticPosition,
   type SemanticSelection,
@@ -59,6 +66,7 @@ import type {
   ReviewRevisionKind,
 } from '../contracts/editor.ts';
 import { resolveEditorModules, type ReviewDisplayMode } from '../contracts/modules.ts';
+import { createReviewPaneState } from './review-pane-state.ts';
 import {
   NO_TRACKING_SETTINGS,
   type DocumentTrackingSettings,
@@ -260,6 +268,14 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
   const modules = resolveEditorModules(config.modules);
   const reportDiagnostic = customNodeDiagnosticReporter(modules);
   const reviewEnabled = modules.review !== null;
+  // Review pane view settings: seeded by the review module, changed by `setReviewPaneOptions`.
+  const reviewPane = createReviewPaneState(modules.review?.pane, {
+    enabled: reviewEnabled,
+    changed: () => {
+      bump();
+      emitSelectionChange();
+    },
+  });
   /** Document bytes waiting for a container — set when constructed or loaded detached. */
   let pendingBytes: Uint8Array | null = null;
   /** Pending input belongs to these exact remount bytes, including a deferred mount. */
@@ -614,7 +630,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       onRequestHyperlink: () => hyperlinkChrome.current().onRequest?.(),
       onEquationPopover: (activation) => equationChrome.current().onPopover?.(activation),
       onTrackedChange: () => {
-        if (reviewPaneOpen) return;
+        if (reviewPaneOpen || !reviewPane.opensOnTrackedChange()) return;
         reviewPaneOpen = true;
         bump();
         emitSelectionChange();
@@ -661,9 +677,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     // Before anything can publish: the mount decides the mode itself just below, and a sync
     // firing in between would decide a second time and clear what the first one published.
     protection.prime();
-    // Keep the loading page centred and its comments control inactive until the review
-    // model exists. Once open completes, show the pane only when the model found content.
-    reviewPaneOpen = reviewEnabled && surface.session.reviewItems().length > 0;
+    // Once the review model exists, show the pane when it found content and the module allows.
+    reviewPaneOpen = reviewEnabled && reviewPane.opensOnLoad(surface.session.reviewItems());
     publishSignal.adopt(surface);
     if (pendingHostModeFallback !== null) applyHostModeDecision(pendingHostModeFallback, false);
     else adoptDocumentTracking();
@@ -1158,6 +1173,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       canRedo: state?.canRedo ?? false,
       pageSetup: pageSetupOf(surface),
       reviewPaneOpen,
+      reviewPane: reviewPane.current(),
       showParagraphMarks: paragraphMarks.get(),
       documentProtection: protection.state(),
       revisionMarkup: revisionMarkupState.current(),
@@ -1276,11 +1292,6 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
 
   // The surface derives the active card from its caret and explicit selection pin.
   // Sharing that answer keeps card state and painted highlights consistent.
-  function firstReviewRange(item: ReviewItem): ReviewRange | null {
-    if (item.kind === 'revision') return item.ranges[0] ?? null;
-    return item.range;
-  }
-
   /** Shared by the placement flag and activation: an addressable, non-excluded range with a card. */
   function reviewItemActivatable(item: ReviewItem): boolean {
     if (firstReviewRange(item) === null || (item.kind === 'custom' && !item.carded)) return false;
@@ -1536,33 +1547,11 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
    */
   function reviewPlacements(query?: ReviewItemQuery): readonly ReviewItemPlacement[] {
     if (!reviewEnabled) return [];
-    let items = filterReviewItemsByAuthor(
-      surface?.session.reviewItems() ?? [],
-      reviewAuthorVisibility
+    // Kind exclusion and opt-in replacement pairing; see `review-replacement-pairs.ts`.
+    const items = narrowReviewItems(
+      filterReviewItemsByAuthor(surface?.session.reviewItems() ?? [], reviewAuthorVisibility),
+      query
     );
-    const excluded = query?.excludeRevisionKinds;
-    if (excluded && excluded.length > 0) {
-      const excludedKinds = new Set(excluded);
-      items = items.filter(
-        (item) => item.kind !== 'revision' || !excludedKinds.has(item.revisionKind)
-      );
-      // A comment that answers a change this QUERY dropped is a top-level card again. The
-      // link is only a reason to render the comment inside the change's card, so publishing
-      // it beside a change the caller cannot see makes the comment unrenderable: the rail
-      // skips it as a reply and no card claims it. The rail hides `format` and `structural`
-      // by default, and a tracked formatting change anchors on exactly the run it decorates
-      // — the same span a reviewer's comment on that word covers — so this is the ordinary
-      // case, not a corner one.
-      const present = new Set(
-        items.filter((item) => item.kind === 'revision').map((item) => item.id)
-      );
-      items = items.map((item) => {
-        if (item.kind !== 'comment' || item.parentRevisionId === undefined) return item;
-        if (present.has(item.parentRevisionId)) return item;
-        const { parentRevisionId: _dropped, ...rest } = item;
-        return rest;
-      });
-    }
     const withPlacement = query?.placement !== false;
     let anchors: Map<string, ReviewParagraphAnchor> | null = null;
     if (withPlacement && items.length > 0) {
@@ -1603,10 +1592,14 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         // Derived from the two facts activation itself checks, so the flag and the verb
         // cannot disagree. Not from `geometry`, which is null for a whole page that has not
         // been laid out yet — an item is addressable long before it has a Y.
-        activatable: reviewItemActivatable(item),
+        // A paired replacement opens through its deletion, so both halves must be openable.
+        activatable: reviewItemWithHalves(item).every(reviewItemActivatable),
         anchorY: geometry?.y ?? null,
         pageIndex: geometry?.pageIndex ?? null,
-        isActive: key === activeReviewKey,
+        // The surface names the half the caret is in; a pair is active when either half is.
+        isActive: reviewItemWithHalves(item).some(
+          (part) => reviewItemKey(part) === activeReviewKey
+        ),
       };
       if (item.kind === 'comment') {
         return {
@@ -1747,7 +1740,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     enabled: () => reviewEnabled,
     destroyed: () => destroyed,
     viewing: () => editingMode === 'viewing',
-    placements: () => reviewPlacements(),
+    placements: reviewPlacements,
     visible: () =>
       filterReviewItemsByAuthor(surface?.session.reviewItems() ?? [], reviewAuthorVisibility),
     scope: storyScopeOfReviewItem,
@@ -2309,6 +2302,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       // Tolerated detached: the host waits here and applies on the next mount.
       surface?.setRemoteCaretLabelHost(host);
     },
+    setReviewPaneOptions: reviewPane.set,
     setRevisionMarkup: revisionMarkupState.set,
     setRevisionMarkupChrome: revisionMarkupState.register,
     setRevisionStyles(colors) {
@@ -2342,11 +2336,13 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       // under a pin that had just recorded where it was, and the card the reader opened would
       // close by itself. Same rule as `commentTargetRange` and `replyToReviewItem`.
       surface.flushPendingInput();
-      const placement = reviewPlacements().find((entry) => entry.key === key);
-      const item = placement?.item;
+      const item = findReviewPlacement(reviewPlacements, key)?.item;
       if (!item) {
         return { ok: false, code: 'notFound', reason: 'no review item with that key' };
       }
+      // The surface knows only store items: a paired replacement opens as its deletion.
+      const halves = replacementPairHalves(item);
+      const pinKey = halves ? reviewItemKey(halves.deletion) : key;
       const range = firstReviewRange(item);
       if (!range) {
         return {
@@ -2360,7 +2356,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       // and a host stepping through its queue would see the viewport move and the active key
       // stay put with nothing to explain it.
       if (
-        !reviewItemActivatable(item) &&
+        !reviewItemWithHalves(item).every(reviewItemActivatable) &&
         !(
           allowExcludedFormatNavigation &&
           item.kind === 'revision' &&
@@ -2418,7 +2414,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         // classifies to — the wrong twin, when two cards share one span — and corrects itself
         // a frame later.
         surface.activateReview(
-          key,
+          pinKey,
           { anchor: caret, head: caret },
           { allowExcluded: allowExcludedFormatNavigation }
         );
@@ -2437,7 +2433,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       // themselves, inside the scope they open, so there is nothing to hand down. The body
       // branch above has already pinned with its own selection.
       if (home !== null || note !== null)
-        surface.activateReview(key, undefined, {
+        surface.activateReview(pinKey, undefined, {
           allowExcluded: allowExcludedFormatNavigation,
         });
       // ANNOUNCED, exactly as dismissing is. Opening a card is observable state of its own,
@@ -2489,8 +2485,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       if (!reviewEnabled) {
         return { ok: false, code: 'unsupported', reason: PRO_REVIEW_REASON };
       }
-      const placement = reviewPlacements().find((entry) => entry.key === key);
-      const item = placement?.item as ReviewItem | undefined;
+      const item = findReviewPlacement(reviewPlacements, key)?.item as ReviewItem | undefined;
       if (!item || !surface) {
         return { ok: false, code: 'notFound', reason: 'no review item with that key' };
       }
@@ -2533,8 +2528,9 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       // outlive this call; queued typing must land before they are taken, the
       // same rule as commentTargetRange.
       surface?.flushPendingInput();
-      const placement = reviewPlacements().find((entry) => entry.key === key);
-      const item = placement?.item as ReviewItem | undefined;
+      const found = findReviewPlacement(reviewPlacements, key)?.item as ReviewItem | undefined;
+      // A reply to a paired replacement anchors over its inserted words.
+      const item = replacementPairHalves(found)?.insertion ?? found;
       if (!item || !surface) {
         return { ok: false, code: 'notFound', reason: 'no review item with that key' };
       }
@@ -2594,7 +2590,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
 
     ...createEditorScrolling(
       () => surface,
-      () => openScheduler.flush()
+      () => openScheduler.flush(),
+      () => container
     ),
     ...createAnchorNavigation(
       () => editor,
@@ -2604,6 +2601,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
 
     ...zoomFacadeMembers(zoomLane, () => surface),
     ...highlights.members,
+    ...createReviewItemsAt({ frame: highlights.frame, placements: reviewPlacements }),
 
     relayout(options?: { sync?: boolean }) {
       // `layout()` flushes any commit the scheduler has not published yet; the surface

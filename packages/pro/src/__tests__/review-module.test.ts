@@ -92,3 +92,129 @@ describe('the free packages carry no review derivation', () => {
     expect('commentsOfPart' in layout).toBe(false);
   });
 });
+
+describe('review pane opening', () => {
+  const PLAIN = `<w:p><w:r><w:t>Plain words</w:t></w:r></w:p>`;
+
+  function open(body: string, opening?: 'auto' | 'manual') {
+    return createDocxEditor({
+      container: document.createElement('div'),
+      document: docx(body),
+      author: 'Grace Hopper',
+      modules: [reviewModule(opening ? { pane: { opening } } : {})],
+    });
+  }
+
+  function typeTracked(editor: ReturnType<typeof open>) {
+    editor.setEditingMode('suggesting');
+    const paragraphId = editor.surface!.session.paragraphIds()[0]!;
+    editor.surface!.setSelection({
+      anchor: { paragraphId, offset: 0 },
+      head: { paragraphId, offset: 0 },
+    });
+    editor.surface!.type('x');
+  }
+
+  test('by default the pane opens on a document with review items', () => {
+    const editor = open(TRACKED);
+    expect(editor.isReviewPaneOpen()).toBe(true);
+    editor.destroy();
+  });
+
+  test('by default the first tracked change opens the pane', () => {
+    const editor = open(PLAIN);
+    expect(editor.isReviewPaneOpen()).toBe(false);
+    typeTracked(editor);
+    expect(editor.getReviewItems().length).toBeGreaterThan(0);
+    expect(editor.isReviewPaneOpen()).toBe(true);
+    editor.destroy();
+  });
+
+  test('manual keeps the pane closed on load and after a tracked change', () => {
+    const loaded = open(TRACKED, 'manual');
+    expect(loaded.getReviewItems().length).toBeGreaterThan(0);
+    expect(loaded.isReviewPaneOpen()).toBe(false);
+    loaded.destroy();
+
+    const edited = open(PLAIN, 'manual');
+    typeTracked(edited);
+    expect(edited.getReviewItems().length).toBeGreaterThan(0);
+    expect(edited.isReviewPaneOpen()).toBe(false);
+    edited.destroy();
+  });
+
+  test('an unknown field or value is refused, not read as the default', () => {
+    const badValue = { pane: { opening: 'Manual' } } as unknown as { pane: { opening: 'manual' } };
+    expect(() => reviewModule(badValue)).toThrow(TypeError);
+    const badField = { pane: { openning: 'manual' } } as unknown as { pane: { opening: 'manual' } };
+    expect(() => reviewModule(badField)).toThrow(TypeError);
+    // The old spelling of the default is refused too.
+    const oldValue = { pane: { opening: 'automatic' } } as unknown as { pane: { opening: 'auto' } };
+    expect(() => reviewModule(oldValue)).toThrow(TypeError);
+  });
+
+  test('without a review module, setReviewPaneOptions is refused and changes nothing', () => {
+    const editor = createDocxEditor({
+      container: document.createElement('div'),
+      document: docx(PLAIN),
+    });
+    const before = editor.snapshot().reviewPane;
+    // Always set, even with no review module: the defaults.
+    expect(before).toEqual({ opening: 'auto', overflow: 'float' });
+    expect(editor.setReviewPaneOptions({ opening: 'manual' })).toMatchObject({
+      ok: false,
+      code: 'unsupported',
+    });
+    expect(editor.snapshot().reviewPane).toBe(before);
+    editor.destroy();
+  });
+
+  test('manual stays in force across a second load', () => {
+    const editor = open(PLAIN, 'manual');
+    expect(editor.snapshot().reviewPane.opening).toBe('manual');
+    editor.load(docx(TRACKED));
+    expect(editor.getReviewItems().length).toBeGreaterThan(0);
+    expect(editor.isReviewPaneOpen()).toBe(false);
+    editor.load(docx(TRACKED));
+    expect(editor.isReviewPaneOpen()).toBe(false);
+    editor.destroy();
+  });
+
+  test('setReviewPaneOptions changes the opening at runtime, and invalid settings change nothing', () => {
+    const editor = open(PLAIN);
+    const before = editor.snapshot().reviewPane;
+    expect(before).toEqual({ opening: 'auto', overflow: 'float' });
+    expect(editor.setReviewPaneOptions({ opening: 'manual' })).toEqual({
+      ok: true,
+      changed: false,
+    });
+    // `changed` answers for the document; the snapshot reference shows the settings change.
+    expect(editor.snapshot().reviewPane).not.toBe(before);
+    expect(editor.snapshot().reviewPane).toEqual({ opening: 'manual', overflow: 'float' });
+    typeTracked(editor);
+    expect(editor.isReviewPaneOpen()).toBe(false);
+    // An unchanged value keeps the snapshot's reference.
+    const same = editor.snapshot().reviewPane;
+    expect(editor.setReviewPaneOptions({ opening: 'manual' })).toEqual({
+      ok: true,
+      changed: false,
+    });
+    expect(editor.snapshot().reviewPane).toBe(same);
+    const bad = { overflow: 'scrollPage' } as unknown as { overflow: 'float' };
+    expect(editor.setReviewPaneOptions(bad)).toMatchObject({ ok: false, code: 'invalidArgs' });
+    expect(editor.snapshot().reviewPane).toBe(same);
+    editor.setReviewPaneOptions({ opening: 'auto' });
+    editor.load(docx(TRACKED));
+    expect(editor.isReviewPaneOpen()).toBe(true);
+    editor.destroy();
+  });
+
+  test('manual still lets the host open and close the pane', () => {
+    const editor = open(TRACKED, 'manual');
+    expect(editor.exec({ type: 'toggleReviewPane' }).ok).toBe(true);
+    expect(editor.isReviewPaneOpen()).toBe(true);
+    expect(editor.exec({ type: 'toggleReviewPane' }).ok).toBe(true);
+    expect(editor.isReviewPaneOpen()).toBe(false);
+    editor.destroy();
+  });
+});
