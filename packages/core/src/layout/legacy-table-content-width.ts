@@ -100,16 +100,30 @@ export function legacyTableContentWidth(input: {
   const indent = child(properties, 'tblInd');
   const rawWidth = attr(width, 'w');
   const layout = child(properties, 'tblLayout');
+  const units = /^[1-9]\d{3,4}$/.test(rawWidth ?? '') ? Number(rawWidth) : 0;
+  const overflow = units > 5000 && units <= 10000;
   const stated = (name: string) =>
     properties.children.some((node) => node.kind !== 'textValue' && node.localName === name);
   if (
     attr(width, 'type') !== 'pct' ||
     rawWidth === undefined ||
-    ((!/^\d{1,4}$/.test(rawWidth) || Number(rawWidth) > 5000) &&
+    (!overflow &&
+      (!/^\d{1,4}$/.test(rawWidth) || Number(rawWidth) > 5000) &&
       (!/^\d{1,3}(?:\.\d+)?%$/.test(rawWidth) || Number(rawWidth.slice(0, -1)) > 100)) ||
     (stated('tblInd') &&
       (attr(indent, 'type') !== 'dxa' || readTwipsMeasure(attr(indent, 'w')) !== 0)) ||
     (stated('tblLayout') && attr(layout, 'type') !== 'autofit')
+  )
+    return undefined;
+
+  // The preferred-width reader clamps percentages to 100. Recover a larger
+  // legacy width only when an explicit placement and the complete grid agree.
+  if (
+    overflow &&
+    (input.tableWidth.value !== 100 ||
+      input.alignment !== 'center' ||
+      attr(child(properties, 'jc'), 'val') !== 'center' ||
+      attr(layout, 'type') !== 'autofit')
   )
     return undefined;
 
@@ -179,8 +193,14 @@ export function legacyTableContentWidth(input: {
     if (pt < 1 || pt > MAX_WIDTH_PT || ++count > MAX_TABLE_COLUMNS) return undefined;
     total += pt;
   }
-  return count === columnCount &&
-    Math.abs(total - (target * input.tableWidth.value) / 100) <= 0.025 + EPSILON_PT
-    ? target
+  const expected = overflow ? (target * units) / 5000 : (target * input.tableWidth.value) / 100;
+  // Keep the authored twip total. Rescaling it loses the independent grid
+  // evidence and can force a value near the column edge onto another line.
+  return expected <= MAX_WIDTH_PT &&
+    count === columnCount &&
+    Math.abs(total - expected) <= 0.025 + EPSILON_PT
+    ? overflow
+      ? total
+      : target
     : undefined;
 }

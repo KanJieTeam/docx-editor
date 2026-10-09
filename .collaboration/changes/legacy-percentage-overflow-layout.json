@@ -1,0 +1,12 @@
+{
+  "impact": "no-impact",
+  "fields": [],
+  "before": "Legacy centered tables can wrap text after their width preference is capped.",
+  "after": "Grid-confirmed legacy tables retain their authored width during layout.",
+  "reason": "Only layout changes. Document nodes, operations, room formats, and transport stay the same.",
+  "tests": [
+    "packages/core/src/layout/__tests__/legacy-percentage-overflow.test.ts"
+  ],
+  "changeset": null,
+  "migration": null
+}
