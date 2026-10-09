@@ -2186,6 +2186,7 @@ export interface NotesLayoutInput {
     readonly footnotePropsBySection: readonly ResolvedFootnoteProperties[];
     // (undocumented)
     readonly footnotesPart: OoxmlPart | null;
+    readonly lineGridPitchBySection?: readonly (number | undefined)[];
     readonly linkRelsEpoch?: string;
     // (undocumented)
     readonly measurer: TextMeasurer;
