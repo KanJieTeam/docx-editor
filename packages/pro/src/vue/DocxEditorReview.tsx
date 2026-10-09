@@ -26,7 +26,11 @@ import {
   type VNode,
   type VNodeArrayChildren,
 } from 'vue';
-import type { DocxEditorInstance, ReviewAuthorInfo } from '@docx-editor.dev/core/editor';
+import {
+  reviewPaneListsItem,
+  type DocxEditorInstance,
+  type ReviewAuthorInfo,
+} from '@docx-editor.dev/core/editor';
 import type { ReviewRevisionKind, SelectionPin } from '@docx-editor.dev/core/contracts/editor';
 import {
   ReviewRailContext,
@@ -68,7 +72,6 @@ import {
   selectDocumentReadOnly,
   selectPaneOpening,
   selectRevisionsIn,
-  servedByChangeBalloon,
   type RailMetrics,
 } from './review-shared.ts';
 import {
@@ -247,11 +250,21 @@ const ReviewRoot = defineComponent({
     );
     const expanded = computed(() => open.value && !compact.value);
 
+    // The engine's rule, applied before this rail's own filters. The engine decides whether the
+    // pane opens from the same rule over every item, so the rail lists what the engine counts,
+    // less what `structural`, `formatting`, and `filter` hide. `railQuery` removes the reply
+    // link of a comment on a hidden change, but the balloon still draws that reply under the
+    // change, so the rule reads the link from the unfiltered read.
+    const unfilteredById = computed(() =>
+      revisionsIn.value === 'balloons'
+        ? new Map(allReview.items.value.map((entry) => [entry.id, entry]))
+        : null
+    );
     const items = computed(() =>
       reviewHook.items.value.filter(
         (entry) =>
+          reviewPaneListsItem(revisionsIn.value, unfilteredById.value?.get(entry.id) ?? entry) &&
           (props.formatting || !hasFormattingBalloon(entry)) &&
-          (revisionsIn.value !== 'balloons' || !servedByChangeBalloon(entry)) &&
           (!props.filter || props.filter(entry))
       )
     );

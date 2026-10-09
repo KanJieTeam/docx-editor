@@ -272,10 +272,17 @@ export async function paint(
   // Runs in a tracked row carry no revision of their own; the row's applies to all of them.
   // Only All Markup shows revision marks; the resolved views have no tracked rows to mark.
   const rowRevisions = new Map<BlockFragmentRecord, RowRevision>();
+  // Every story's blocks: the root stories, then each text box story and group member story,
+  // which hold tables, tracked rows, and tracked cells too.
+  const forEachStoryBlocks = (visit: (blocks: readonly BlockFragmentRecord[]) => void): void => {
+    forEachSemanticStory(layout, (root) => visit(root.host.fragments));
+    forEachSemanticDrawing(layout, ({ drawing }) => {
+      if (drawing.textboxStory) visit(drawing.textboxStory.fragments);
+      for (const member of drawing.groupTextboxStories ?? []) visit(member.story.fragments);
+    });
+  };
   if (layout.displayMode === 'all-markup')
-    forEachSemanticStory(layout, (root) =>
-      indexRowRevisions(root.host.fragments, rowRevisions, () => work.tick())
-    );
+    forEachStoryBlocks((blocks) => indexRowRevisions(blocks, rowRevisions, () => work.tick()));
   // Match the visible document order before adding authors from resolved-away revisions.
   forEachSemanticSpan(layout, (visit) => {
     for (const revision of visit.span.revisions ?? []) addAuthor(revision.author);
@@ -296,7 +303,7 @@ export async function paint(
         }
     }
   };
-  forEachSemanticStory(layout, (root) => addCellAuthors(root.host.fragments));
+  forEachStoryBlocks(addCellAuthors);
   for (const artifact of layout.reviewArtifacts) {
     if (artifact.kind === 'tracked-change') addAuthor(artifact.author);
   }

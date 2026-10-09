@@ -12,8 +12,8 @@
  *
  * - `'auto'`: the pane opens when a document with review items loads, and when a tracked
  *   change is made while it is closed, in both cases when the pane has items to list. With
- *   `revisionsIn: 'balloons'` the pane lists comments only, so tracked changes alone do not
- *   open it.
+ *   `revisionsIn: 'balloons'` the pane lists no tracked change and no reply to one, so
+ *   tracked changes and their replies alone do not open it.
  * - `'manual'`: the pane stays closed until the host or the user opens it. Use it when the
  *   host shows review items its own way, such as in balloons or margin markers.
  *
@@ -47,7 +47,8 @@ export type ReviewPaneOverflow = 'float' | 'shrinkPage' | 'scroll';
  * Where tracked changes open.
  *
  * - `'pane'`: the review pane lists tracked changes as cards beside the comments.
- * - `'balloons'`: the pane lists comments only. A tracked change opens in a balloon at its
+ * - `'balloons'`: the pane lists comments only, except comments that reply to a tracked
+ *   change: the change's balloon shows those. A tracked change opens in a balloon at its
  *   text when the reader clicks it, or when Next Change, Previous Change, or
  *   `setActiveReviewItem(key, { announce: true })` reaches it.
  *
@@ -140,4 +141,41 @@ export function resolveReviewPane(
     if (next[field] !== value) next = { ...next, [field]: value };
   }
   return next === base ? base : Object.freeze(next);
+}
+
+/**
+ * The fields of a review item that decide whether the review pane lists it. A
+ * `ReviewItem` and a review item placement both have them.
+ *
+ * @public
+ */
+export interface ReviewPaneItemFields {
+  /** The item kind, as `ReviewItem.kind` gives it. */
+  readonly kind: 'revision' | 'comment' | 'custom';
+  /** For a comment, the tracked change it replies to. */
+  readonly parentRevisionId?: string;
+}
+
+/**
+ * Whether the review pane lists a card for `item` under `revisionsIn`.
+ *
+ * With `'balloons'`, a balloon at the text shows every tracked change and every comment
+ * that replies to a tracked change, so the pane lists neither. Give the item as an
+ * unfiltered `getReviewItems()` read returns it: a query that excludes revision kinds
+ * removes `parentRevisionId` from replies to the changes it drops.
+ *
+ * The engine applies this rule to every review item when it decides whether the pane opens
+ * by itself or closes after a settings change. A review pane must apply the same rule before
+ * its own filters, such as a hidden kind or a host filter. Those filters can hide every card,
+ * and then the pane that the engine opens is empty.
+ *
+ * @public
+ */
+export function reviewPaneListsItem(
+  revisionsIn: RevisionDisplay,
+  item: ReviewPaneItemFields
+): boolean {
+  if (revisionsIn === 'pane') return true;
+  if (item.kind === 'revision') return false;
+  return !(item.kind === 'comment' && item.parentRevisionId !== undefined);
 }
