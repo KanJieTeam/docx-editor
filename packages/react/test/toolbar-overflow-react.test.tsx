@@ -5,7 +5,7 @@ import './dom-setup.ts';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
@@ -437,6 +437,98 @@ describe('toolbar overflow integration', () => {
     nested.remove();
   });
 
+  test('a dropdown inside More takes the first Escape, and the panel the second', async () => {
+    installResizeObserverMock();
+    const { view } = mountToolbar(
+      <DocxEditorToolbar t={(key) => (key === 'formattingBar.more' ? 'More' : key)} />
+    );
+    await collapseToolbar(view, { barWidth: 280 });
+    await act(async () => {
+      (view.getByLabelText('More') as HTMLButtonElement).click();
+    });
+    const panel = view.getByTestId('toolbar-overflow-panel');
+    const dropdown = panel.querySelector<HTMLButtonElement>(
+      '[data-slot="alignment"] [aria-haspopup]'
+    );
+    expect(dropdown).not.toBeNull();
+    await act(async () => {
+      dropdown!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      dropdown!.click();
+    });
+    expect(dropdown!.getAttribute('aria-expanded')).toBe('true');
+    const pages = view.container.querySelector<HTMLElement>('.docx-pages')!;
+    const escape = async () => {
+      await act(async () => {
+        pages.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+        );
+      });
+    };
+    await escape();
+    expect(dropdown!.getAttribute('aria-expanded')).toBe('false');
+    expect(view.queryByTestId('toolbar-overflow-panel')).not.toBeNull();
+    await escape();
+    expect(view.queryByTestId('toolbar-overflow-panel')).toBeNull();
+  });
+
+  test('More stays open behind the paragraph dialog it opened, and focus comes back', async () => {
+    installResizeObserverMock();
+    const { view } = mountToolbar(
+      <DocxEditorToolbar t={(key) => (key === 'formattingBar.more' ? 'More' : key)} />
+    );
+    await collapseToolbar(view, { barWidth: 280 });
+    await act(async () => {
+      (view.getByLabelText('More') as HTMLButtonElement).click();
+    });
+    const panel = view.getByTestId('toolbar-overflow-panel');
+    const trigger = panel.querySelector<HTMLButtonElement>(
+      '[data-slot="list.lineSpacing"] [aria-haspopup]'
+    );
+    expect(trigger).not.toBeNull();
+    await act(async () => {
+      trigger!.click();
+    });
+    const options = panel.querySelector<HTMLButtonElement>('[data-slot="paragraph.dialog"]');
+    expect(options).not.toBeNull();
+    await act(async () => {
+      options!.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    const dialog = document.querySelector<HTMLElement>('[data-docx-dialog="paragraph"]');
+    expect(dialog).not.toBeNull();
+    // Focus entering the modal dialog does not close More, so the opener stays mounted.
+    expect(view.queryByTestId('toolbar-overflow-panel')).not.toBeNull();
+    await act(async () => {
+      dialog!.dispatchEvent(new Event('cancel', { cancelable: true }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(document.querySelector('[data-docx-dialog="paragraph"]')).toBeNull();
+    expect(trigger!.isConnected).toBe(true);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  test('More closes when focus moves to a control outside it', async () => {
+    installResizeObserverMock();
+    const { view } = mountToolbar(
+      <DocxEditorToolbar t={(key) => (key === 'formattingBar.more' ? 'More' : key)} />
+    );
+    await collapseToolbar(view, { barWidth: 280 });
+    await act(async () => {
+      (view.getByLabelText('More') as HTMLButtonElement).click();
+    });
+    expect(view.queryByTestId('toolbar-overflow-panel')).not.toBeNull();
+    const host = document.createElement('input');
+    document.body.append(host);
+    try {
+      await act(async () => {
+        host.focus();
+      });
+      expect(view.queryByTestId('toolbar-overflow-panel')).toBeNull();
+    } finally {
+      host.remove();
+    }
+  });
+
   test('Escape closes the More dialog before the header scope or the format painter', async () => {
     installResizeObserverMock();
     const { view, editor } = mountToolbar(
@@ -674,5 +766,55 @@ describe('toolbar overflow integration', () => {
         /@media \(max-width: 768px\)\s*\{[\s\S]*?\.docx-editor \[role='toolbar'\]\s*\{[^}]+\}/
       )?.[0] ?? '';
     expect(mobileToolbarRule).not.toContain('overflow');
+  });
+});
+
+describe('toolbar parts outside the More panel', () => {
+  test('Toolbar.Button takes slotId, and the deprecated slot still works with a warning', () => {
+    const warn = mock(() => {});
+    const original = console.warn;
+    console.warn = warn;
+    try {
+      const { view } = mountToolbar(
+        <DocxEditorToolbar preset={false} overflow={false}>
+          <DocxEditorToolbar.Button slotId="format.painter" />
+          <DocxEditorToolbar.Button slot="history.undo" />
+        </DocxEditorToolbar>
+      );
+      expect(view.container.querySelector('button[data-slot="format.painter"]')).not.toBeNull();
+      expect(view.container.querySelector('button[data-slot="history.undo"]')).not.toBeNull();
+      const messages = warn.mock.calls.map((call) => String((call as unknown[])[0]));
+      expect(messages.some((text) => text.includes('slot="history.undo"'))).toBe(true);
+      expect(messages.some((text) => text.includes('slot="format.painter"'))).toBe(false);
+    } finally {
+      console.warn = original;
+    }
+  });
+
+  test('Escape from a host input closes the editing-mode menu and keeps its default', () => {
+    const { view } = mountToolbar(<DocxEditorToolbar />);
+    const host = document.createElement('input');
+    document.body.append(host);
+    try {
+      const trigger = view.container.querySelector<HTMLButtonElement>(
+        '[data-testid="editing-mode-trigger"]'
+      )!;
+      act(() => {
+        trigger.click();
+      });
+      expect(trigger.getAttribute('aria-expanded')).toBe('true');
+      const escape = new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        host.dispatchEvent(escape);
+      });
+      expect(trigger.getAttribute('aria-expanded')).toBe('false');
+      expect(escape.defaultPrevented).toBe(false);
+    } finally {
+      host.remove();
+    }
   });
 });

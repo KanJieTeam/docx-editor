@@ -279,7 +279,9 @@ export {
   editorInstanceScope,
   hasOpenNestedPopup,
   listenForPopupEscape,
+  listenForPopupFocusLeave,
   type PopupEscapeOptions,
+  type PopupFocusLeaveOptions,
 } from './popup-escape.ts';
 export {
   computeImageResizeResult,

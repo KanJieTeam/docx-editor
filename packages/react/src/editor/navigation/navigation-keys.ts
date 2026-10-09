@@ -3,9 +3,8 @@
 // Both adapters carry an identical copy of this file. It is plain DOM, so the two panes
 // answer every key and focus question the same way.
 
-import { chordLetter } from '@docx-editor.dev/core/editor';
+import { chordLetter, editorInstanceScope } from '@docx-editor.dev/core/editor';
 import { isApplePlatform } from '@docx-editor.dev/i18n';
-import { editorScopeFor } from '../editor-scope';
 import type { NavigationTab } from './useNavigationPane';
 
 /**
@@ -74,9 +73,9 @@ export function ownsShortcutTarget(
   if (viewport.contains(target)) return true;
   const element = target instanceof Element ? target : target.parentElement;
   if (!element) return false;
-  const scope = editorScopeFor(viewport);
+  const scope = editorInstanceScope(viewport);
   if (scope && scope !== viewport && scope.contains(element)) return true;
-  if (!element.closest('.docx-editor') || editorScopeFor(element) !== null) return false;
+  if (!element.closest('.docx-editor') || editorInstanceScope(element) !== null) return false;
   const viewports = viewport.ownerDocument.querySelectorAll('.docx-editor__scroll-container');
   return viewports.length === 1 && viewports[0] === viewport;
 }
@@ -106,6 +105,25 @@ export function focusPaneEntry(element: HTMLElement): void {
 }
 
 /**
+ * Focus the entry of the pane's ACTIVE tab, the same target Ctrl+F and the disc use (see
+ * {@link paneEntryTarget}), or the pane itself. A heading in a hidden panel can never take
+ * focus, so the tab is read from the pane's selected tab.
+ */
+function focusIntoPane(pane: Element): void {
+  const selected = pane.querySelector('[role="tab"][aria-selected="true"]');
+  const tab: NavigationTab = selected?.id === 'docx-nav-tab-find' ? 'find' : 'headings';
+  const target = paneEntryTarget(pane, tab);
+  if (target) {
+    focusPaneEntry(target);
+    return;
+  }
+  if (pane instanceof HTMLElement) {
+    if (!pane.hasAttribute('tabindex')) pane.setAttribute('tabindex', '-1');
+    pane.focus();
+  }
+}
+
+/**
  * Make the page content `inert` while an overlaying pane covers it, so Tab and the pointer
  * cannot reach content the pane hides. A pane inside the scroll container leaves its own
  * ancestors alone and marks their other children. A pane beside the container marks the
@@ -113,20 +131,26 @@ export function focusPaneEntry(element: HTMLElement): void {
  * attributes set here are removed again. Returns the cleanup.
  */
 export function inertBehindPane(pane: Element, viewport: Element): () => void {
-  const marked: Element[] = [];
-  const mark = (element: Element) => {
-    if (element.hasAttribute('inert')) return;
-    element.setAttribute('inert', '');
-    marked.push(element);
-  };
+  const covered: Element[] = [];
   if (viewport.contains(pane)) {
     let node: Element = pane;
     while (node !== viewport && node.parentElement) {
-      for (const sibling of node.parentElement.children) if (sibling !== node) mark(sibling);
+      for (const sibling of node.parentElement.children)
+        if (sibling !== node) covered.push(sibling);
       node = node.parentElement;
     }
   } else {
-    for (const child of viewport.children) mark(child);
+    covered.push(...viewport.children);
+  }
+  // Focus in content that turns inert, such as an open balloon or a comment draft, would
+  // drop to <body>. Move it into the pane first.
+  const active = pane.ownerDocument.activeElement;
+  if (active && covered.some((element) => element.contains(active))) focusIntoPane(pane);
+  const marked: Element[] = [];
+  for (const element of covered) {
+    if (element.hasAttribute('inert')) continue;
+    element.setAttribute('inert', '');
+    marked.push(element);
   }
   return () => {
     for (const element of marked) element.removeAttribute('inert');

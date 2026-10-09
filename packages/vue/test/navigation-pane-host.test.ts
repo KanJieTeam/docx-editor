@@ -11,6 +11,8 @@ import { resolve } from 'node:path';
 import { h, nextTick, ref } from 'vue';
 import { zipSync, strToU8 } from 'fflate';
 import { DocxEditorNavigation } from '../src/editor/navigation';
+import { DocxEditorToolbar } from '../src/editor/toolbar';
+import { inertBehindPane } from '../src/editor/navigation/navigation-keys';
 import {
   NAVIGATION_PANE_MIN_PAGE_ROOM,
   navigationPaneOverlays,
@@ -626,5 +628,147 @@ describe('page width', () => {
     expect(scroller.style.getPropertyValue('--docx-nav-shift')).toBe(
       `${navigationPaneReservation()}px`
     );
+  });
+});
+
+describe('an open toolbar popup and Ctrl/Cmd+F', () => {
+  test('moving focus into the find field closes the dropdown, so Escape reaches the pane', async () => {
+    const view = mountEditorTree(
+      () =>
+        h(
+          DocxEditorToolbar,
+          { preset: false, overflow: false },
+          { default: () => [h(DocxEditorToolbar.Alignment)] }
+        ),
+      SOURCE,
+      () => [h(DocxEditorNavigation)]
+    );
+    mounted.push(view);
+    await flush();
+    const scroller = q(view.container, '.docx-editor__scroll-container');
+    scroller.focus();
+    const trigger = q(view.container, '[data-slot="alignment"] [aria-haspopup]');
+    trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    trigger.click();
+    await flush();
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    await ctrlF(scroller);
+    await flush();
+    const input = q(view.container, '#docx-nav-panel-find .docx-nav__search-input');
+    expect(document.activeElement).toBe(input);
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    );
+    await flush();
+    expect(q(view.container, '.docx-nav').getAttribute('data-open')).toBe('false');
+    expect(document.activeElement).toBe(scroller);
+  });
+});
+
+describe('focus when the pane covers the page', () => {
+  test('focus in content that turns inert moves into the pane', () => {
+    const viewport = document.createElement('div');
+    const pane = document.createElement('nav');
+    const find = document.createElement('input');
+    find.className = 'docx-nav__search-input';
+    // The headings panel with no headings yet: its filter field is the entry.
+    const panel = document.createElement('div');
+    panel.id = 'docx-nav-panel-headings';
+    panel.append(find);
+    pane.append(panel);
+    const rail = document.createElement('div');
+    const draft = document.createElement('textarea');
+    rail.append(draft);
+    viewport.append(pane, rail);
+    document.body.append(viewport);
+    try {
+      draft.focus();
+      expect(document.activeElement).toBe(draft);
+      const release = inertBehindPane(pane, viewport);
+      expect(rail.hasAttribute('inert')).toBe(true);
+      expect(document.activeElement).toBe(find);
+      release();
+      expect(rail.hasAttribute('inert')).toBe(false);
+    } finally {
+      viewport.remove();
+    }
+  });
+
+  test('focus outside the covered content stays where it is', () => {
+    const viewport = document.createElement('div');
+    const pane = document.createElement('nav');
+    pane.append(document.createElement('input'));
+    viewport.append(pane, document.createElement('div'));
+    const host = document.createElement('input');
+    document.body.append(viewport, host);
+    try {
+      host.focus();
+      const release = inertBehindPane(pane, viewport);
+      expect(document.activeElement).toBe(host);
+      release();
+    } finally {
+      viewport.remove();
+      host.remove();
+    }
+  });
+});
+
+describe('the focus target when the pane covers the page', () => {
+  function paneFixture(tab: 'headings' | 'find') {
+    const viewport = document.createElement('div');
+    const pane = document.createElement('nav');
+    for (const value of ['headings', 'find']) {
+      const button = document.createElement('button');
+      button.setAttribute('role', 'tab');
+      button.id = `docx-nav-tab-${value}`;
+      button.setAttribute('aria-selected', String(value === tab));
+      pane.append(button);
+    }
+    const headings = document.createElement('div');
+    headings.id = 'docx-nav-panel-headings';
+    headings.hidden = tab !== 'headings';
+    const first = document.createElement('button');
+    first.className = 'docx-nav__heading';
+    const current = document.createElement('button');
+    current.className = 'docx-nav__heading docx-nav__heading--current';
+    headings.append(first, current);
+    const find = document.createElement('div');
+    find.id = 'docx-nav-panel-find';
+    find.hidden = tab !== 'find';
+    const input = document.createElement('input');
+    input.className = 'docx-nav__search-input';
+    find.append(input);
+    pane.append(headings, find);
+    const rail = document.createElement('div');
+    const draft = document.createElement('textarea');
+    rail.append(draft);
+    viewport.append(pane, rail);
+    document.body.append(viewport);
+    return { viewport, pane, current, input, draft };
+  }
+
+  test('with the Find tab active, focus goes to the query, not a hidden heading', () => {
+    const view = paneFixture('find');
+    try {
+      view.draft.focus();
+      const release = inertBehindPane(view.pane, view.viewport);
+      expect(document.activeElement).toBe(view.input);
+      release();
+    } finally {
+      view.viewport.remove();
+    }
+  });
+
+  test('with the Headings tab active, focus goes to the current heading', () => {
+    const view = paneFixture('headings');
+    try {
+      view.draft.focus();
+      const release = inertBehindPane(view.pane, view.viewport);
+      expect(document.activeElement).toBe(view.current);
+      release();
+    } finally {
+      view.viewport.remove();
+    }
   });
 });
