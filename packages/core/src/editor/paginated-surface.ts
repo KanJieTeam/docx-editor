@@ -4787,7 +4787,8 @@ export function mountPaginatedSurface(
         desiredX,
         hfScope?.getActive() ?? null,
         noteScopeId(),
-        measurer
+        measurer,
+        selectionSync.selectionLineId()
       );
       if (!moved) return;
       const tocIds = tocParagraphIds();
@@ -4796,7 +4797,8 @@ export function mountPaginatedSurface(
         moved.position,
         ['left', 'wordLeft', 'lineStart', 'up', 'pageUp'].includes(command)
       );
-      if (outside) moved = { ...moved, position: outside };
+      // The escape lands elsewhere, so the motion's caret (and its page) no longer applies.
+      if (outside) moved = { ...moved, position: outside, caret: undefined };
       if (tocAtPosition(session.part(), moved.position)) {
         if (extend) return;
         const backwards = new Set<NavigationCommand>([
@@ -4863,7 +4865,7 @@ export function mountPaginatedSurface(
       const next = extend ? target : absorbPlaceholderControls(currentLayout, target);
       const absorbed = !extend && !selectionsEqual(next, target);
       const before = selection;
-      setSelection(next, true, absorbed ? 'none' : 'head');
+      setSelection(next, true, absorbed ? 'none' : 'head', absorbed ? undefined : moved.caret);
       // Landed, like every other reveal here: a form field holding an invalid value refuses
       // the write and pins the caret where the reader has to fix it.
       if (absorbed && (selection !== before || selectionsEqual(selection, next))) {
