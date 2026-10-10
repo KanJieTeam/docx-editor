@@ -33,7 +33,7 @@ const GENERIC_BASELINES = ['monospace', 'serif'] as const;
  * The same family-name shape every other font sink enforces. Re-validated here because a
  * probe builds a CSS shorthand out of a file-derived name.
  */
-const FONT_NAME = /^[\p{L}\p{N}\p{M} \-.+_]{1,64}$/u;
+const FONT_NAME = /^[\p{L}\p{N}\p{M} \-.+_,;]{1,64}$/u;
 
 /**
  * A local-resolution probe over a canvas 2d context, memoized per family.
