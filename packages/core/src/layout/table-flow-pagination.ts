@@ -1,14 +1,6 @@
-// Placing ONE top-level table into the body flow, row by row, across page breaks.
-//
-// Lifted out of the story loop because it is the one block kind whose placement is a loop of
-// its own: a table advances the same cursor a paragraph does, but it decides per ROW whether
-// to place, move, split or fail, and it re-emits repeated header rows on every page it runs
-// onto. Keeping that beside paragraph fragmentation buried both.
-//
-// The flow it advances arrives as {@link TableFlowCursor}: the cursor itself, the geometry
-// getters that answer where the column is and how much page is left, and the sinks a placed
-// row publishes into. Everything the paginator needs to mutate is on that object, so the
-// story loop keeps ownership of the cursor and this module keeps the row rules.
+// Place one top-level table in body flow: each row can place, move, split or fail.
+// TableFlowCursor supplies the story cursor, column geometry and publication sinks;
+// this module owns row pagination and re-emits repeated headers across page breaks.
 
 import { autofitContextOf } from './table-autofit-widths.ts';
 import { positionedTableOriginX } from './table-origin.ts';
@@ -41,6 +33,10 @@ import { cellContentInsets, type CellContentInsets } from './table-cell-geometry
 import { admitVMergeSpansAt, type RowVMergeLayoutOptions } from './table-vmerge-heights.ts';
 import { planHeaderGroup, type HeaderGroupPlan } from './table-header-vmerge.ts';
 import { createMergedTextCarry, deferMergedTextPastHeadRow } from './table-vmerge-boundary.ts';
+import {
+  createVMergeFragmentCarry,
+  type VMergeFragmentCarry,
+} from './table-vmerge-fragment-carry.ts';
 import { annotateTableFragmentGeometry } from './semantic-table-interaction.ts';
 import { readTableStructure, tableOriginX, type SemanticTableRow } from './semantic-table.ts';
 import { pinnedBreakAtCursor, withSplittableRows } from './table-pinned-break.ts';
@@ -202,6 +198,7 @@ export function paginateTableInFlow(
   let occurrenceInsets = new Map<TableRowFragmentRecord, ReadonlyMap<string, CellContentInsets>>();
   // Merged text a head row left to its next row (`table-vmerge-boundary.ts`).
   const carry = createMergedTextCarry();
+  const fragmentCarry: { current?: VMergeFragmentCarry } = {};
   const completeSourceRows = new Set(structure.rows);
   let forceNextFragment = false;
   // Rows clear a wrapping float that crosses the table; see `table-float-collision.ts`.
@@ -276,8 +273,15 @@ export function paginateTableInFlow(
         flow.cursorY += terminal.height - record.box.height;
       }
     }
+    if (fragmentCarry.current)
+      ({ rows, sources: sourceRows } = fragmentCarry.current.publish(
+        rows,
+        sourceRows,
+        occurrenceInsets,
+        tableLeft
+      ));
     ({ rows, sources: sourceRows } = carry.publish(rows, sourceRows, occurrenceInsets));
-    const finalized = carry.finish(
+    let finalized = carry.finish(
       finalizeTableRows(
         rows,
         structure,
@@ -290,6 +294,7 @@ export function paginateTableInFlow(
         occurrenceInsets
       )
     );
+    if (fragmentCarry.current) finalized = fragmentCarry.current.finish(finalized);
     const last = finalized[finalized.length - 1]!;
     const fragment = annotateTableFragmentGeometry(
       {
@@ -476,12 +481,15 @@ export function paginateTableInFlow(
     placeHeaderGroup(false);
   }
 
-  // `w:vMerge` heights, planned over the BODY rows: a merged cell is as tall as the rows
-  // it covers, so its own row must not swallow the whole merged height.
+  // Plan body merges across their covered rows instead of growing only the head row.
   const bodyRows = structure.rows.slice(initialHeaderGroupDegraded ? 0 : headerRows.length);
-  // `tableLeft` is read through a getter, not captured: `placeHeaderGroup` and
-  // `breakForContinuation` both re-derive it, and a positioned probe localizes wrap bands
-  // against it — a stale left measures the head against a band that does not cross it.
+  fragmentCarry.current = createVMergeFragmentCarry(
+    structure,
+    bodyRows,
+    tableDeps,
+    () => tableLeft
+  );
+  // Read the current table origin after header placement and column transitions.
   const fragmentFirstRows = new Set<string>();
   const vMergePlan = vMergePlanFor(
     structure,
@@ -498,7 +506,9 @@ export function paginateTableInFlow(
     const row = probeRow ?? bodyRows[bodyRowIndex]!;
     if (rows.length === 0) fragmentFirstRows.add(row.id);
     else fragmentFirstRows.delete(row.id);
-    vMerge = admitVMergeSpansAt(vMergePlan, bodyRowIndex, flow.cursorY, contentHeight());
+    vMerge =
+      fragmentCarry.current?.optionsAt(bodyRowIndex) ??
+      admitVMergeSpansAt(vMergePlan, bodyRowIndex, flow.cursorY, contentHeight());
     // Keep ordinary admission separate from the repeated border override, and
     // remeasure at the current Y after moving through wrapping exclusions.
     baselineBodyHeight =
@@ -516,7 +526,12 @@ export function paginateTableInFlow(
   };
 
   for (const [bodyRowIndex, authoredRow] of bodyRows.entries()) {
-    const row = carry.rowAt(bodyRowIndex, authoredRow);
+    const row = fragmentCarry.current.rowAt(
+      bodyRowIndex,
+      carry.rowAt(bodyRowIndex, authoredRow),
+      flow.cursorY,
+      contentHeight()
+    );
     if (initialHeaderGroupDegraded && bodyRowIndex >= headerRows.length) repeatsEnabled = true;
     const forceBreak = forceNextFragment;
     forceNextFragment = false;
