@@ -17,6 +17,7 @@ import {
   measureRowHeight,
   TablePaginationError,
   type CellPlaceCursor,
+  type LayoutRowBoundedResult,
   type TableFlowDeps,
 } from './semantic-table-layout.ts';
 import type { CellContentInsets } from './table-cell-geometry.ts';
@@ -71,6 +72,21 @@ const TEXT_NAMES = new Set([
   'fldChar',
   'instrText',
   'fldSimple',
+  'lastRenderedPageBreak',
+  'proofErr',
+  'bookmarkStart',
+  'bookmarkEnd',
+  'tab',
+  'tabs',
+  'numPr',
+  'numId',
+  'ilvl',
+  'keepNext',
+  'keepLines',
+  'ins',
+  'del',
+  'delText',
+  'hyperlink',
 ]);
 
 function textOnly(cell: SemanticTableCell, budget: { remaining: number }): boolean {
@@ -98,14 +114,21 @@ interface Group {
   readonly last: number;
   readonly source: SemanticTableRow;
   readonly heads: Head[];
+  physicalHeights: number[];
   heights: number[];
   active: boolean;
+  fragmentStart?: { readonly index: number; readonly top: number };
   headRecord?: TableRowFragmentRecord;
 }
 
 export interface VMergeFragmentCarry {
   rowAt(index: number, row: SemanticTableRow, top: number, bottom: number): SemanticTableRow;
-  optionsAt(index: number): RowVMergeLayoutOptions | undefined;
+  optionsAt(index: number, top: number, bottom: number): RowVMergeLayoutOptions | undefined;
+  adjustPlacement(
+    index: number,
+    placed: LayoutRowBoundedResult,
+    bottom: number
+  ): LayoutRowBoundedResult;
   finish(rows: TableRowFragmentRecord[]): TableRowFragmentRecord[];
   publish(
     records: TableRowFragmentRecord[],
@@ -139,7 +162,15 @@ export function createVMergeFragmentCarry(
       const key = `${index}:${last}`;
       let group = grouped.get(key);
       if (!group) {
-        group = { first: index, last, source: row, heads: [], heights: [], active: false };
+        group = {
+          first: index,
+          last,
+          source: row,
+          heads: [],
+          physicalHeights: [],
+          heights: [],
+          active: false,
+        };
         grouped.set(key, group);
       }
       group.heads.push({ cell, cursor: null, complete: false });
@@ -212,6 +243,7 @@ export function createVMergeFragmentCarry(
       cache: undefined,
       borderOwnershipBudget: undefined,
       vMergeResolveBudget: undefined,
+      onCellBreakKey: undefined,
       nextLineId: () => `probe-vmerge-fragment-${lineId++}`,
     };
     const cols = structure.columnWidthsPt;
@@ -223,6 +255,7 @@ export function createVMergeFragmentCarry(
       );
     }
     if (heights.some((height) => !Number.isFinite(height) || height <= EPSILON)) return false;
+    group.physicalHeights = [...heights];
     let total = heights.reduce((sum, height) => sum + height, 0);
     for (const head of group.heads) {
       const needed = measureRowHeight(
@@ -303,6 +336,155 @@ export function createVMergeFragmentCarry(
     };
   }
 
+  // A page cut can leave less than one line unused. The unbroken height cannot
+  // predict that loss. Measure the carried cursor again before placing this fragment.
+  function growForRemainingText(group: Group, index: number, top: number): void {
+    if (
+      group.fragmentStart &&
+      (group.fragmentStart.index !== index || group.fragmentStart.top === top)
+    )
+      return;
+    group.fragmentStart = { index, top };
+    let grow = group.last;
+    while (grow >= index && rows[grow]!.height.rule === 'exact') grow--;
+    if (grow < index) return;
+    let lineId = 0;
+    const probeDeps: TableFlowDeps = {
+      ...stripAnchorSinksForProbe(deps),
+      cache: undefined,
+      borderOwnershipBudget: undefined,
+      vMergeResolveBudget: undefined,
+      onCellBreakKey: undefined,
+      nextLineId: () => `probe-vmerge-remainder-${lineId++}`,
+    };
+    const available = group.heights
+      .slice(index - group.first)
+      .reduce((sum, height) => sum + height, 0);
+    let needed = available;
+    for (const head of group.heads) {
+      if (head.complete) continue;
+      const row: SemanticTableRow = {
+        ...group.source,
+        height: { rule: 'auto' },
+        cantSplit: false,
+        cells: [{ ...head.cell, vAlign: 'top' }],
+      };
+      const cursors = initialCellCursors(row);
+      if (head.cursor) cursors[0] = head.cursor;
+      const probe = layoutRowFragmentBounded(
+        row,
+        structure.columnWidthsPt,
+        left(),
+        top,
+        Infinity,
+        false,
+        head.cursor !== null,
+        0,
+        probeDeps,
+        cursors,
+        structure.cellSpacingPt
+      );
+      const height = probe.bottom - top;
+      if (probe.remainder !== null || !Number.isFinite(height) || height < 0)
+        throw new TablePaginationError(
+          'table-row-split-unsupported',
+          'Cannot measure remaining merged text'
+        );
+      needed = Math.max(needed, height);
+    }
+    if (needed > available + EPSILON) group.heights[grow - group.first]! += needed - available;
+  }
+
+  function adjustedLastRow(
+    group: Group,
+    placed: LayoutRowBoundedResult,
+    bottom: number
+  ): LayoutRowBoundedResult {
+    const top = group.fragmentStart?.top ?? placed.record.box.y;
+    let lineId = 0;
+    const probeDeps: TableFlowDeps = {
+      ...stripAnchorSinksForProbe(deps),
+      cache: undefined,
+      borderOwnershipBudget: undefined,
+      vMergeResolveBudget: undefined,
+      onCellBreakKey: undefined,
+      nextLineId: () => `probe-vmerge-final-row-${lineId++}`,
+    };
+    let requiredBottom = placed.bottom;
+    const pending = group.heads
+      .filter((head) => !head.complete)
+      .map((head) => {
+        const row: SemanticTableRow = {
+          ...group.source,
+          height: { rule: 'auto' },
+          cantSplit: false,
+          cells: [{ ...head.cell, vAlign: 'top' }],
+        };
+        const cursors = initialCellCursors(row);
+        if (head.cursor) cursors[0] = head.cursor;
+        const measure = layoutRowFragmentBounded(
+          row,
+          structure.columnWidthsPt,
+          left(),
+          top,
+          Infinity,
+          false,
+          head.cursor !== null,
+          0,
+          probeDeps,
+          cursors,
+          structure.cellSpacingPt
+        );
+        if (measure.remainder !== null || !Number.isFinite(measure.bottom))
+          throw new TablePaginationError(
+            'table-row-split-unsupported',
+            'Cannot measure the final merged row'
+          );
+        requiredBottom = Math.max(requiredBottom, measure.bottom);
+        return { head, row, cursors };
+      });
+    const end = Math.min(bottom, requiredBottom);
+    let incomplete = false;
+    let fitted = placed.fitted;
+    for (const { head, row, cursors } of pending) {
+      const probe = layoutRowFragmentBounded(
+        row,
+        structure.columnWidthsPt,
+        left(),
+        top,
+        end,
+        false,
+        head.cursor !== null,
+        0,
+        probeDeps,
+        cursors,
+        structure.cellSpacingPt
+      );
+      incomplete ||= probe.remainder !== null;
+      fitted ||= probe.fitted;
+    }
+    if (end <= placed.bottom + EPSILON && !incomplete)
+      return fitted === placed.fitted ? placed : { ...placed, fitted };
+    const height = end - placed.record.box.y;
+    const record: TableRowFragmentRecord = {
+      ...placed.record,
+      box: { ...placed.record.box, height },
+      cells: placed.record.cells.map((cell) => ({ ...cell, box: { ...cell.box, height } })),
+    };
+    // Completed neighbours must not restart when only the merged head needs another page.
+    const completed = initialCellCursors(rows[group.last]!).map((cursor, index) => ({
+      ...cursor,
+      blockIndex: rows[group.last]!.cells[index]!.blocks.length,
+    }));
+    return {
+      ...placed,
+      record,
+      bottom: end,
+      fitted,
+      remainder: placed.remainder ?? (incomplete ? completed : null),
+    };
+  }
+
   return {
     rowAt(index, row, top, bottom) {
       const group = atRow.get(index);
@@ -311,13 +493,28 @@ export function createVMergeFragmentCarry(
         const total = group.heights.reduce((sum, height) => sum + height, 0);
         group.active =
           top + total > bottom + EPSILON &&
-          group.heights.every((height) => height <= bottom + EPSILON);
+          group.physicalHeights.every((height) => height <= bottom + EPSILON);
       }
       return group.active ? emptied(group, row) : row;
     },
-    optionsAt(index) {
+    optionsAt(index, top, _bottom) {
       const group = atRow.get(index);
-      return group?.active ? { heightFloorPt: group.heights[index - group.first] } : undefined;
+      if (!group?.active) return undefined;
+      growForRemainingText(group, index, top);
+      // The protected authored row keeps its physical minimum. A derived merged
+      // tail can be taller than a page and is placed by adjustPlacement instead
+      // of turning that tail into an atomic whole-row move or declining the carry.
+      const heights =
+        index === group.last && rows[index]!.height.rule !== 'exact'
+          ? group.physicalHeights
+          : group.heights;
+      return { heightFloorPt: heights[index - group.first] };
+    },
+    adjustPlacement(index, placed, bottom) {
+      const group = atRow.get(index);
+      return group?.active && index === group.last && rows[index]!.height.rule !== 'exact'
+        ? adjustedLastRow(group, placed, bottom)
+        : placed;
     },
     finish(records) {
       if (!groups.some((group) => group.active)) return records;
@@ -361,6 +558,7 @@ export function createVMergeFragmentCarry(
         const placed = new Map(
           group.heads.map((head) => [head.cell.id, placeHead(group, head, first, bottom, x)])
         );
+        group.fragmentStart = undefined;
         const headRecord: TableRowFragmentRecord = {
           ...group.headRecord,
           ...(first.id === group.source.id ? {} : { isContinuation: true }),
@@ -392,7 +590,11 @@ export function createVMergeFragmentCarry(
           const originalInsets = insets.get(first);
           if (originalInsets) insets.set(headRecord, originalInsets);
         }
-        if (rowIndex.get(last.id) === group.last && group.heads.some((head) => !head.complete)) {
+        if (
+          rowIndex.get(last.id) === group.last &&
+          !last.hasContinuation &&
+          group.heads.some((head) => !head.complete)
+        ) {
           throw new TablePaginationError(
             'table-row-split-unsupported',
             'Merged text remains after its authored row span'

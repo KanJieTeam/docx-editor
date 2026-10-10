@@ -6,8 +6,7 @@
   "reason": "The change only derives layout rows and native continuation cursors. Canonical OOXML, source offsets, replicated operations, and awareness messages remain unchanged.",
   "tests": [
     "packages/core/src/layout/__tests__/table-vmerge-fragment-carry.test.ts",
-    "packages/core/src/layout/__tests__/table-vmerge-head-row-boundary.test.ts",
-    "packages/pro/src/collaboration/__tests__/document-table-vmerge-rows.test.ts"
+    "packages/pro/src/collaboration/__tests__/document-vmerge-fragment-carry.test.ts"
   ],
   "changeset": "vmerge-fragment-text",
   "migration": null

@@ -4,6 +4,7 @@ import { layoutSemanticDocument } from '../semantic-layout.ts';
 import { caretAt } from '../semantic-interaction.ts';
 import { cellAddressAt, tableAnchorAt, tableContextAt } from '../semantic-cell-selection.ts';
 import { planTableCommand } from '../../editor/table-command-plan.ts';
+import { TreeDocumentStore } from '@docx-editor.dev/core/store';
 import type {
   ParagraphFragmentRecord,
   SemanticLayout,
@@ -16,8 +17,8 @@ const measurer = {
   measure: (text: string) => [...text].length * 5,
   lineMetrics: () => ({ height: 12, baseline: 10 }),
 };
-const p = (runs: string) =>
-  `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr>${runs}</w:p>`;
+const p = (runs: string, properties = '') =>
+  `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/>${properties}</w:pPr>${runs}</w:p>`;
 const text = (value: string) =>
   `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${value}</w:t></w:r>`;
 const field = (value: string) =>
@@ -35,20 +36,40 @@ function fixture({
   fitting = false,
   unknown = false,
   borders = false,
+  rowTwips = 360,
+  wrap = false,
+  repeat = 6,
+  fixed = false,
+  decoration = '',
 } = {}) {
-  const merged = Array.from({ length: count }, (_, index) =>
-    p(
+  const merged = Array.from({ length: count }, (_, index) => {
+    let runs =
       text(`MERGED-LINE-${String(index + 1).padStart(2, '0')} `) +
-        (fields ? field('I') : text('text'))
-    )
-  ).join('');
+      (fields ? field('I') : text(wrap ? 'wrapped merged content '.repeat(repeat) : 'text'));
+    let properties = '';
+    if (decoration === 'markers')
+      runs = `<w:bookmarkStart w:id="${index}" w:name="mark${index}"/><w:proofErr w:type="spellStart"/>${runs}<w:r><w:lastRenderedPageBreak/></w:r><w:proofErr w:type="spellEnd"/><w:bookmarkEnd w:id="${index}"/>`;
+    if (decoration === 'hyperlink') runs = `<w:hyperlink w:anchor="target">${runs}</w:hyperlink>`;
+    if (decoration === 'revision')
+      runs = `<w:ins w:id="${index}" w:author="Test">${runs}</w:ins><w:del w:id="${index + 100}" w:author="Test"><w:r><w:delText>DELETED</w:delText></w:r></w:del>`;
+    if (decoration === 'tab') {
+      runs += '<w:r><w:tab/></w:r>' + text('tabbed');
+      properties = '<w:tabs><w:tab w:val="left" w:pos="2000"/></w:tabs>';
+    }
+    if (decoration === 'numbering')
+      properties =
+        '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="0"/></w:numPr><w:keepNext w:val="0"/><w:keepLines w:val="0"/>';
+    return p(runs, properties);
+  }).join('');
   const prefix = fitting
     ? ''
     : '<w:p><w:pPr><w:spacing w:line="4400" w:lineRule="exact"/></w:pPr>' +
       text('Introduction') +
       '</w:p>';
   const tableProperties =
-    '<w:tblPr><w:tblW w:w="10000" w:type="dxa"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/></w:tblCellMar><w:tblBorders>' +
+    '<w:tblPr><w:tblW w:w="10000" w:type="dxa"/>' +
+    (fixed ? '<w:tblLayout w:type="fixed"/>' : '') +
+    '<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/></w:tblCellMar><w:tblBorders>' +
     ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']
       .map((side) => `<w:${side} w:val="${borders ? 'single' : 'nil'}" w:sz="4"/>`)
       .join('') +
@@ -60,7 +81,9 @@ function fixture({
   const body = Array.from(
     { length: 30 },
     (_, index) =>
-      '<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="360" w:hRule="' +
+      '<w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="' +
+      rowTwips +
+      '" w:hRule="' +
       (exact ? 'exact' : 'atLeast') +
       '"/></w:trPr>' +
       '<w:tc><w:tcPr><w:vMerge' +
@@ -123,6 +146,198 @@ function rowsByPage(layout: SemanticLayout) {
 }
 
 describe('merged text across protected physical rows', () => {
+  for (const decoration of ['markers', 'hyperlink', 'revision', 'tab', 'numbering']) {
+    test(`carries native ${decoration} without removing source elements`, () => {
+      const part = fixture({ exact: false, rowTwips: 370, count: 50, fixed: true, decoration });
+      const before = serializeOoxmlPart(part);
+      const layout = layoutSemanticDocument(part, 0, {
+        geometry,
+        measurer,
+        displayMode: 'proposed',
+      });
+      const content = merged(layout);
+      expect(new Set(content.map(({ block }) => block.paragraphId)).size).toBe(50);
+      expect(content.some(({ page }) => page > 1)).toBe(true);
+      expect(new Set(content.map(({ cellId }) => cellId)).size).toBe(1);
+      expect(
+        content
+          .flatMap(({ block }) => block.lines.flatMap((line) => line.spans))
+          .some((span) => span.text.includes('DELETED'))
+      ).toBe(false);
+      expect(serializeOoxmlPart(part)).toBe(before);
+    });
+  }
+  for (const wrap of [false, true]) {
+    test(`remeasures carried ${wrap ? 'wrapped' : 'one-line'} text when 18.5pt rows leave a partial line`, () => {
+      const count = wrap ? 20 : 50;
+      const part = fixture({ exact: false, rowTwips: 370, count, wrap, fixed: true });
+      const before = serializeOoxmlPart(part);
+      const layout = layoutSemanticDocument(part, 0, { geometry, measurer });
+      const content = paragraphs(layout).filter(({ block }) =>
+        block.lines.some((line) =>
+          line.spans
+            .map((span) => span.text)
+            .join('')
+            .startsWith('MERGED-LINE-')
+        )
+      );
+      expect(new Set(content.map(({ block }) => block.paragraphId)).size).toBe(count);
+      expect(rowsByPage(layout).reduce((sum, value) => sum + value, 0)).toBe(30);
+      for (let index = 1; index <= count; index++) {
+        const expected =
+          `MERGED-LINE-${String(index).padStart(2, '0')} ` +
+          (wrap ? 'wrapped merged content '.repeat(6) : 'text');
+        const start = content.find(({ block }) =>
+          block.lines.some((line) =>
+            line.spans
+              .map((span) => span.text)
+              .join('')
+              .startsWith(`MERGED-LINE-${String(index).padStart(2, '0')}`)
+          )
+        );
+        expect(start).toBeDefined();
+        const actual = paragraphs(layout)
+          .filter(({ block }) => block.paragraphId === start!.block.paragraphId)
+          .flatMap(({ block }) =>
+            block.lines.flatMap((line) => line.spans.map((span) => span.text))
+          )
+          .join('');
+        expect(actual).toBe(expected);
+      }
+      expect(serializeOoxmlPart(part)).toBe(before);
+      const reopened = readOoxmlPart(before, {
+        name: '/word/document.xml',
+        contentType: 'application/xml',
+      });
+      if (!reopened.ok) throw new Error(reopened.reason);
+      expect(layoutSemanticDocument(reopened.part, 0, { geometry, measurer })).toEqual(layout);
+    });
+  }
+  test('rechecks wrapped remainder at each page height', () => {
+    for (const repeat of [5, 7, 8, 9]) {
+      const part = fixture({
+        exact: false,
+        rowTwips: 370,
+        count: 20,
+        wrap: true,
+        repeat,
+        fixed: true,
+      });
+      for (const height of [710, 725]) {
+        const layout = layoutSemanticDocument(part, 0, {
+          geometry: { ...geometry, height },
+          measurer,
+        });
+        const content = paragraphs(layout);
+        const ids = new Set(
+          content
+            .filter(({ block }) =>
+              block.lines.some((line) =>
+                line.spans
+                  .map((span) => span.text)
+                  .join('')
+                  .startsWith('MERGED-LINE-')
+              )
+            )
+            .map(({ block }) => block.paragraphId)
+        );
+        expect(ids.size).toBe(20);
+        for (const id of ids) {
+          const actual = content
+            .filter(({ block }) => block.paragraphId === id)
+            .flatMap(({ block }) =>
+              block.lines.flatMap((line) => line.spans.map((span) => span.text))
+            )
+            .join('');
+          expect(actual.endsWith('wrapped merged content '.repeat(repeat))).toBe(true);
+        }
+      }
+    }
+  });
+  test('typing into a merged cell grows the remaining non-exact row after the page cut', () => {
+    const store = new TreeDocumentStore(
+      fixture({ exact: false, rowTwips: 370, count: 20, fixed: true })
+    );
+    const before = layoutSemanticDocument(store.part, store.revision, { geometry, measurer });
+    const target = merged(before).at(-1)!.block.paragraphId;
+    const inserted = ' typed merged content'.repeat(70);
+    const result = store.transact((tx) =>
+      tx.apply({ op: 'insertText', paragraphId: target, offset: 19, text: inserted })
+    );
+    expect(result.ok).toBe(true);
+    const layout = layoutSemanticDocument(store.part, store.revision, { geometry, measurer });
+    const actual = paragraphs(layout)
+      .filter(({ block }) => block.paragraphId === target)
+      .flatMap(({ block }) => block.lines.flatMap((line) => line.spans.map((span) => span.text)))
+      .join('');
+    expect(actual).toBe('MERGED-LINE-20 text' + inserted);
+    expect(rowsByPage(layout).reduce((sum, value) => sum + value, 0)).toBe(30);
+  });
+  for (const count of [98, 99, 120])
+    for (const fields of [false, true])
+      test(`a grown final row carries all ${count} ${fields ? 'fields' : 'paragraphs'} when page cuts exceed a fresh page`, () => {
+        const part = fixture({ exact: false, rowTwips: 370, count, fixed: true, fields });
+        const before = serializeOoxmlPart(part);
+        const layout = layoutSemanticDocument(part, 0, { geometry, measurer });
+        const content = merged(layout);
+        expect(content).toHaveLength(count);
+        expect(new Set(content.map(({ block }) => block.paragraphId)).size).toBe(count);
+        expect(rowsByPage(layout).reduce((sum, value) => sum + value, 0)).toBe(30);
+        // Only the derived merged tail grows; the 30 authored minimum-height rows
+        // still open on the first page and finish on the second page.
+        expect(rowsByPage(layout)).toEqual([21, 9, ...Array(layout.pages.length - 2).fill(0)]);
+        expect(new Set(content.map(({ cellId }) => cellId)).size).toBe(1);
+        expect(new Set(content.map(({ rowId }) => rowId)).size).toBe(1);
+        for (const { page, block } of content) {
+          expect(block.box.y + block.box.height).toBeLessThanOrEqual(640.001);
+          expect(caretAt(layout, { paragraphId: block.paragraphId, offset: 0 })?.pageIndex).toBe(
+            page - 1
+          );
+          if (fields) {
+            const atom = block.lines.flatMap((line) => line.spans).find((span) => span.fieldAtom)!;
+            expect(atom.range.end - atom.range.start).toBe(1);
+          }
+        }
+        expect(serializeOoxmlPart(part)).toBe(before);
+        const reopened = readOoxmlPart(before, {
+          name: '/word/document.xml',
+          contentType: 'application/xml',
+        });
+        if (!reopened.ok) throw new Error(reopened.reason);
+        expect(layoutSemanticDocument(reopened.part, 0, { geometry, measurer })).toEqual(layout);
+      });
+
+  test('exact spans keep their authored clipping when the head cannot fit', () => {
+    const part = fixture({ exact: true, rowTwips: 370, count: 50, fixed: true });
+    const before = serializeOoxmlPart(part);
+    const layout = layoutSemanticDocument(part, 0, { geometry, measurer });
+    expect(merged(layout).length).toBeLessThan(50);
+    expect(
+      tables(layout)
+        .flat()
+        .flatMap((table) => table.rows)
+        .some((row) => row.isContinuation && row.box.height === 0)
+    ).toBe(false);
+    expect(serializeOoxmlPart(part)).toBe(before);
+  });
+
+  test('all-markup carries inserted and deleted text through the native revision projection', () => {
+    const layout = layoutSemanticDocument(
+      fixture({ exact: false, rowTwips: 370, count: 50, fixed: true, decoration: 'revision' }),
+      0,
+      {
+        geometry,
+        measurer,
+        displayMode: 'all-markup',
+      }
+    );
+    expect(merged(layout)).toHaveLength(50);
+    expect(
+      merged(layout).every(({ block }) =>
+        block.lines.flatMap((line) => line.spans).some((span) => span.text === 'DELETED')
+      )
+    ).toBe(true);
+  });
   for (const exact of [true, false])
     for (const fields of [true, false]) {
       test(`${exact ? 'exact' : 'atLeast'} rows carry every ${fields ? 'field' : 'paragraph'} without changing the tree`, () => {
