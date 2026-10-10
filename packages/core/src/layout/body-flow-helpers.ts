@@ -101,8 +101,19 @@ export function paragraphHoldsNothing(
 const lineHoldsContent = (line: PendingLine): boolean =>
   line.drawings.length > 0 || line.spans.some((span) => /[^\f\n]/.test(span.text));
 
+/** A standalone break has no marker, fill, rule, or additional painted line to fit. */
+function holdsStandalonePageBreak(
+  entry: PaintableParagraph,
+  lines: readonly PendingLine[]
+): boolean {
+  if (entry.listItem !== undefined || entry.shading !== undefined) return false;
+  const { top, bottom, left, right, between, bar } = entry.borders;
+  if (top ?? bottom ?? left ?? right ?? between ?? bar) return false;
+  return lines.every(holdsOnlyPageBreak);
+}
+
 /**
- * Whether a paragraph opens with a page break and has content after it: its first line holds
+ * Whether a paragraph opens with a page break: its first line holds
  * nothing but the break. That line never takes a sheet of its own. It stays at the bottom of
  * the page it starts on, and the break then starts the content on the next sheet.
  *
@@ -110,20 +121,23 @@ const lineHoldsContent = (line: PendingLine): boolean =>
  * shading, and space before are not either: the break line draws no rule, the space before
  * and the top rule open the text on the next sheet, and shading fills the break line where
  * it would sit. An anchored drawing is content, so those paragraphs keep the ordinary fit
- * rule. So does a paragraph with nothing after the break, and one that anchors floating
- * tables or text frames.
+ * rule. A plain standalone break also stays behind. A break-only paragraph with a list
+ * marker, shading, or borders keeps the ordinary fit rule. Floating tables and text frames
+ * keep their own anchor rules.
  */
 export function opensWithPageBreak(
   entry: PaintableParagraph,
   lines: readonly PendingLine[],
-  drawingContext: InlineDrawingLayoutContext | undefined
+  drawingContext: InlineDrawingLayoutContext | undefined,
+  allowStandalone = true
 ): boolean {
   const first = lines[0];
   return (
     first !== undefined &&
     first.start === 0 &&
     holdsOnlyPageBreak(first) &&
-    lines.some((line, index) => index > 0 && lineHoldsContent(line)) &&
+    (lines.some((line, index) => index > 0 && lineHoldsContent(line)) ||
+      (allowStandalone && holdsStandalonePageBreak(entry, lines))) &&
     !(drawingContext && anchoredDrawingAtomsInParagraph(entry.paragraph, drawingContext).length > 0)
   );
 }

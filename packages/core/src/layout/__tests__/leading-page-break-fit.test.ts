@@ -191,10 +191,9 @@ describe('lines that still move to the next sheet', () => {
     expect(pageTexts(layout)).toEqual([lastFill(14), 'lead', 'after']);
   });
 
-  test('a paragraph with nothing after its break keeps the ordinary fit', () => {
-    // Out of scope for this rule: the break line still takes the next sheet.
+  test('a plain standalone break stays behind on a full page', () => {
     const breakOnly = `<w:p><w:pPr>${exact}</w:pPr>${br}</w:p>`;
     const layout = lay(load(fill(14) + breakOnly + paragraph('after') + sect));
-    expect(pageTexts(layout)).toEqual([lastFill(14), '', 'after']);
+    expect(pageTexts(layout)).toEqual([lastFill(14), 'after']);
   });
 });

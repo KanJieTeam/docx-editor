@@ -1,0 +1,13 @@
+{
+  "impact": "no-impact",
+  "fields": [],
+  "before": "A standalone break that does not fit opens an extra sheet after a full table.",
+  "after": "Derived layout keeps a plain standalone break on the current sheet.",
+  "reason": "The change preserves canonical breaks, UTF-16 offsets, replicated operations, and awareness. It changes only local pagination geometry.",
+  "tests": [
+    "packages/core/src/layout/__tests__/standalone-page-break-fit.test.ts",
+    "packages/pro/src/collaboration/__tests__/standalone-page-break-fit.test.ts"
+  ],
+  "changeset": null,
+  "migration": null
+}

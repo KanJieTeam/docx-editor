@@ -2226,7 +2226,14 @@ function layoutBlocksPass(
       leadingBreakGroups.admits(previousEntry, entry) &&
       paragraphFrames.checkpoint() === undefined &&
       !tableFloat.positionedTablesByAnchor(positionedTables).has(paragraphId) &&
-      opensWithPageBreak(entry, lines, options.inlineDrawingLayout);
+      opensWithPageBreak(
+        entry,
+        lines,
+        options.inlineDrawingLayout,
+        // Section marks share the preceding break's sheet through their own placement rule.
+        !sectionMark &&
+          !(nextEntry?.kind === 'paragraph' && paragraphSectionNode(nextEntry.paragraph))
+      );
     // `w:contextualSpacing` (17.3.1.9) drops the gap between paragraphs of the SAME style.
     // ListParagraph styles can set it to suppress paragraph gaps between list items.
     const spacing = contextualParagraphSpacing(
