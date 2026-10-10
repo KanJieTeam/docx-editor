@@ -6,8 +6,9 @@
   "reason": "The change only selects measurement and paint faces. It preserves canonical OOXML, replicated offsets, operations, and awareness.",
   "tests": [
     "packages/core/src/layout/__tests__/hansi-font-slots.test.ts",
-    "packages/pro/src/collaboration/__tests__/hansi-font-slots.test.ts"
+    "packages/pro/src/collaboration/__tests__/hansi-font-slots.test.ts",
+    "packages/core/src/binding/__tests__/document-rendered-fonts.test.ts"
   ],
-  "changeset": null,
+  "changeset": "hansi-font-slots",
   "migration": null
 }
