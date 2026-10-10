@@ -405,7 +405,8 @@ export const wordFeatures: WordFeature[] = [
     rendering: 'full',
     roundTrip: 'full',
     tier: 'community',
-    notes: 'Numbering attached to custom paragraph styles resolves with Word’s precedence rules.',
+    notes:
+      'Numbering attached to custom paragraph styles resolves with Word’s precedence rules. A level without a visible marker retains the resolved first-line or hanging indent.',
   },
   {
     id: 'lists.continuation',

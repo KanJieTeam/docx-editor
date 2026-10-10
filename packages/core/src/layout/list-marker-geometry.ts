@@ -107,7 +107,11 @@ export function listFirstLineOffset(
   tabStops: ResolvedTabStops = EMPTY_TAB_STOPS,
   rightEdge = Number.POSITIVE_INFINITY
 ): number {
-  if (!hasMarker(item)) return 0;
+  // An empty numbering level has no marker or suffix to place. Keep the paragraph's
+  // authored first-line position, including a hanging indent.
+  if (!hasMarker(item)) {
+    return item.indent.hanging > 0 ? -item.indent.hanging : item.indent.firstLine;
+  }
   const markerWidth = listMarkerWidth(item, measurer);
   const box = listMarkerBox(item, markerWidth, 0, 0);
   if (!box) return 0;

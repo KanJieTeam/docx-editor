@@ -1,0 +1,12 @@
+{
+  "impact": "no-impact",
+  "fields": [],
+  "before": "A numbering level without a visible marker ignores the first-line indent.",
+  "after": "A numbering level without a visible marker retains the resolved first-line or hanging indent.",
+  "reason": "This change affects layout only. Canonical nodes, operations, and collaboration messages remain unchanged.",
+  "tests": [
+    "packages/core/src/layout/__tests__/empty-list-marker-indent.test.ts"
+  ],
+  "changeset": null,
+  "migration": null
+}
