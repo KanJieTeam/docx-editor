@@ -148,7 +148,8 @@ export const wordFeatures: WordFeature[] = [
     tier: 'community',
     notes:
       'Copies character formatting, and paragraph formatting when the selection covers ' +
-      'the paragraph mark. Paragraph borders and character styles stay on the target.',
+      'the paragraph mark. Paragraph borders and character styles stay on the target. ' +
+      'Line-fitting spacing adjustments do not become document formatting.',
   },
   {
     id: 'text.sub-superscript',
