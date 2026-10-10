@@ -15,8 +15,10 @@ import type { LegacyFormFieldData } from '../store/package/field-nodes.ts';
 import type { InlineDrawingLayoutInput } from './drawing-layout.ts';
 import { eastAsiaRunsOfSegments, type FontSlot } from './script-itemization.ts';
 import {
+  eastAsiaHintScope,
   hasEastAsiaSymbolHint,
   hasTimesNewRomanEastAsiaException,
+  type EastAsiaHintScope,
 } from './east-asia-symbol-hint.ts';
 import type { ButtonFieldSpec } from './field-button.ts';
 import type { DocPropertyField } from './field-doc-property.ts';
@@ -112,6 +114,17 @@ export interface FieldAtomMarker {
    * first fragment, gated per field on the calibration verdict.
    */
   readonly pageRef?: PageRefFieldProjection;
+  /**
+   * The first model offset of the editable saved result this piece belongs to.
+   *
+   * Present only when saved results are laid out as text (`fieldResults: 'editable'`). The
+   * result is ordinary text then, so its pieces have their own offsets; every piece of one
+   * result shares this value, which keeps a multi-run link result one anchor and lets the
+   * caret find the whole result it is in.
+   */
+  readonly resultStart?: number;
+  /** The model offset just past the same result, beside {@link resultStart}. */
+  readonly resultEnd?: number;
 }
 
 /**
@@ -463,6 +476,8 @@ export interface PendingFieldProjection {
   atomic: boolean;
   /** True when this closed FORMTEXT field exposes its authored result as ordinary text. */
   editableResult: boolean;
+  /** True when this closed field's saved result is laid out as text (`fieldResults` mode). */
+  savedResult: boolean;
   atomStart: number;
   props: readonly OoxmlProperty[];
   style: ResolvedRunStyle;
@@ -586,7 +601,7 @@ export function applyEastAsiaFontSlots(
   /** Indices of the pieces whose text joins the classification, in paragraph order. */
   const streamed: number[] = [];
   const segments: string[] = [];
-  const hintedSegments: boolean[] = [];
+  const hintedSegments: (false | EastAsiaHintScope)[] = [];
   for (let index = 0; index < pieces.length; index += 1) {
     const piece = pieces[index]!;
     if (piece.positionalTab || piece.breakKind || piece.inlineDrawing) continue;
@@ -597,10 +612,12 @@ export function applyEastAsiaFontSlots(
     // Leave the special Times New Roman East Asian fallback to existing resolution, and never
     // move a symbol-encoded face (Wingdings, Symbol, a `w:sym` piece): its glyphs live in
     // the symbol font, and the East Asian face would paint them as notdef boxes.
-    hintedSegments.push(
+    const hinted =
       hasEastAsiaSymbolHint(piece.props) &&
-        !isSymbolEncodedFamily(piece.style.fontFamily) &&
-        !hasTimesNewRomanEastAsiaException(piece.props, piece.style.fontFamilyEastAsia, themeFonts)
+      !isSymbolEncodedFamily(piece.style.fontFamily) &&
+      !hasTimesNewRomanEastAsiaException(piece.props, piece.style.fontFamilyEastAsia, themeFonts);
+    hintedSegments.push(
+      hinted ? eastAsiaHintScope(piece.props, piece.style.fontFamilyEastAsia, themeFonts) : false
     );
   }
   const ranges = eastAsiaRunsOfSegments(segments, hintedSegments);
