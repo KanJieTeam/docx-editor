@@ -174,7 +174,7 @@ import {
 } from './font-composition.ts';
 import { availableFontFamilies, configuredDefaultFontFamily } from './font-catalog.ts';
 import {
-  documentFontSubstitutionPlan,
+  documentFontResolutionRequest,
   admittedDocumentSubstitutions,
   applyDocumentFontSubstitutions,
 } from '../layout/document-font-substitution.ts';
@@ -448,20 +448,16 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
    * While font work is still in flight the answer would flicker: embedded faces register
    * at resolution, so a file whose own fonts are arriving must not flash a notice first.
    *
-   * The notice reads `renderedFontFamilies()`, never `documentFonts()`: a family joins it
-   * only when a rendered glyph resolves to it through the style cascade, so a declaration
-   * with no glyph behind it (a blank document's `w:docDefaults` Calibri, a latent Balloon
-   * Text style) answers `[]` and the first typed character moves the answer. No
-   * `rendersText()` gate on top: it counts only literal `w:t` and would hide a document
-   * whose only glyphs are marks (note references, tab leaders) in a substitute face.
+   * Report rendered glyph families, including projected marks. The detection helper
+   * combines admitted document aliases with platform and metric-twin checks.
    */
   const deriveFontSubstitutions = (): readonly string[] => {
     if (!surface || fontsResolving) return EMPTY_FONT_SUBSTITUTIONS;
-    const rendered = surface.session.renderedFontFamilies();
-    const unresolved = detectFontSubstitutions(rendered, fontFamilyCovered, probeLocalFont);
-    return rendered.filter(
-      (family) =>
-        documentSubstitutedFamilies.has(family.toLowerCase()) || unresolved.includes(family)
+    return detectFontSubstitutions(
+      surface.session.renderedFontFamilies(),
+      fontFamilyCovered,
+      probeLocalFont,
+      documentSubstitutedFamilies
     );
   };
 
@@ -869,14 +865,11 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       // the resolver is told what the file actually asks for and can skip everything
       // else. A resolver that throws lands in this function's catch and degrades to the
       // fixed measurer, exactly like a failed byte source.
-      const defaultFamily = configuredDefaultFontFamily(fontConfiguration());
-      const documentFonts = documentFontSubstitutionPlan(
+      const { plan: documentFonts, request } = documentFontResolutionRequest(
         mounted.session,
         families,
-        [],
-        defaultFamily
+        fontConfiguration()
       );
-      const request = { families: documentFonts.families, defaultFamily };
       const raw =
         typeof configured !== 'function'
           ? configured

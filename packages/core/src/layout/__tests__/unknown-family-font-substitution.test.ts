@@ -79,6 +79,7 @@ test('canonical package aliases preserve complete primary and alternate names', 
   expect(documentFontSubstitutionPlan(document, ['Georgia;Verdana']).families).toEqual([
     'Georgia;Verdana',
     'Courier New',
+    'DengXian',
   ]);
   expect(serializeOoxmlPart(document.part())).toBe(before);
 });
@@ -89,6 +90,19 @@ test('known primary faces win over whole alternate names', () => {
     sources: [source('Georgia;Verdana'), source('Courier New')],
   });
   expect(applyDocumentFontSubstitutions(fonts, plan).substitutions).toBeUndefined();
+});
+
+test('unused script defaults do not spend the resolver request bound', () => {
+  const archive = unzipSync(documentBytes('Unknown Latin', 'Unknown Alternate'));
+  archive['word/document.xml'] = strToU8(
+    `<w:document xmlns:w="${W}"><w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="Unknown Latin"/></w:rPr><w:t>PUBLIC</w:t></w:r></w:p></w:body></w:document>`
+  );
+  const opened = openHeadlessDocument(zipSync(archive));
+  if (!opened.ok) throw new Error(opened.reason);
+  expect(documentFontSubstitutionPlan(opened.view, ['Unknown Latin']).families).toEqual([
+    'Unknown Latin',
+    'Unknown Alternate',
+  ]);
 });
 
 test('unknown primary uses the whole alternate, never a listed primary candidate', () => {
@@ -258,4 +272,67 @@ test('an isolated East Asian unknown uses the document script default, never a L
     result.substitutions?.find((substitution) => substitution.from.family === 'Meiryo;SimSun')?.to
       .family
   ).toBe('SimSun');
+});
+
+function slotDefaultPlan(runDefaults?: string, theme?: string, settings?: string) {
+  const files = unzipSync(documentBytes('Unknown Primary', ''));
+  files['word/document.xml'] = strToU8(
+    `<w:document xmlns:w="${W}"><w:body><w:p><w:r><w:rPr>` +
+      '<w:rFonts w:ascii="Unknown Latin" w:hAnsi="Unknown High" w:eastAsia="Unknown East" w:cs="Unknown Complex"/>' +
+      '</w:rPr><w:t>PUBLIC é文</w:t></w:r></w:p></w:body></w:document>'
+  );
+  if (runDefaults !== undefined)
+    files['word/styles.xml'] = strToU8(
+      `<w:styles xmlns:w="${W}"><w:docDefaults><w:rPrDefault><w:rPr>${runDefaults}</w:rPr></w:rPrDefault></w:docDefaults></w:styles>`
+    );
+  if (theme) files['word/theme/theme1.xml'] = strToU8(theme);
+  if (settings) files['word/settings.xml'] = strToU8(settings);
+  const opened = openHeadlessDocument(zipSync(files));
+  if (!opened.ok) throw new Error(opened.reason);
+  return documentFontSubstitutionPlan(opened.view, [
+    'Unknown Latin',
+    'Unknown High',
+    'Unknown East',
+    'Unknown Complex',
+  ]);
+}
+
+test('unknown slot defaults share layout format faces beneath an authored empty rPrDefault', () => {
+  const plan = slotDefaultPlan('');
+  expect(plan.fallbacks.get('unknown latin')).toBe('Times New Roman');
+  expect(plan.fallbacks.get('unknown high')).toBe('Times New Roman');
+  expect(plan.fallbacks.get('unknown east')).toBe('SimSun');
+});
+
+test('omitted defaults retain the application profile and built-in East Asian theme face', () => {
+  const plan = slotDefaultPlan();
+  expect(plan.fallbacks.get('unknown latin')).toBe('Calibri');
+  expect(plan.fallbacks.get('unknown high')).toBe('Calibri');
+  expect(plan.fallbacks.get('unknown east')).toBe('DengXian');
+});
+
+test('explicit document defaults keep ascii, hAnsi, East Asian, and complex faces independent', () => {
+  const plan = slotDefaultPlan(
+    '<w:rFonts w:ascii="Georgia" w:hAnsi="Verdana" w:eastAsia="SimHei" w:cs="Arial"/>'
+  );
+  expect(plan.fallbacks.get('unknown latin')).toBe('Georgia');
+  expect(plan.fallbacks.get('unknown high')).toBe('Verdana');
+  expect(plan.fallbacks.get('unknown east')).toBe('SimHei');
+  expect(plan.fallbacks.get('unknown complex')).toBe('Arial');
+});
+
+test('document defaults resolve independent theme tokens and empty theme slots through main selection', () => {
+  const theme =
+    '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:fontScheme name="PUBLIC">' +
+    '<a:majorFont><a:latin typeface="Georgia"/><a:ea typeface=""/></a:majorFont>' +
+    '<a:minorFont><a:latin typeface="Courier New"/><a:ea typeface=""/></a:minorFont>' +
+    '</a:fontScheme></a:themeElements></a:theme>';
+  const plan = slotDefaultPlan(
+    '<w:rFonts w:asciiTheme="minorAscii" w:hAnsiTheme="majorHAnsi" w:eastAsiaTheme="minorEastAsia"/>',
+    theme,
+    `<w:settings xmlns:w="${W}"><w:themeFontLang w:eastAsia="ja-JP"/></w:settings>`
+  );
+  expect(plan.fallbacks.get('unknown latin')).toBe('Courier New');
+  expect(plan.fallbacks.get('unknown high')).toBe('Georgia');
+  expect(plan.fallbacks.get('unknown east')).toBe('MS Mincho');
 });

@@ -4,8 +4,16 @@ import { fontTableAlternates } from '../store/package/font-table-alternates.ts';
 import { fontFamilyName } from '../store/package/font-family-name.ts';
 import type { OoxmlElement, OoxmlNode } from '../store/package/ooxml-tree.ts';
 import { WML_NAMESPACE_URI } from '../store/package/ooxml-shared.ts';
-import { eastAsianDefaultFamily } from '../store/package/theme-font-scheme.ts';
-import { composeFontConfiguration, MAX_RESOLVER_FAMILIES } from './font-composition.ts';
+import { applicationRunDefaults } from './application-run-defaults.ts';
+import { readDocDefaults } from './style-definition-reader.ts';
+import { resolveRunStyle } from './run-style.ts';
+import { applyHAnsiFontSlots } from './hansi-font-slots.ts';
+import {
+  composeFontConfiguration,
+  configuredDefaultFontFamily,
+  MAX_RESOLVER_FAMILIES,
+  type FontCatalogConfiguration,
+} from './font-composition.ts';
 import {
   fontRequestKey,
   HARD_MAX_FONT_SOURCES,
@@ -50,18 +58,6 @@ function wordAttribute(node: OoxmlElement, name: string): string | undefined {
   )?.value;
 }
 
-function child(node: OoxmlElement | null | undefined, name: string): OoxmlElement | undefined {
-  for (const candidate of (node?.children ?? []) as readonly OoxmlNode[]) {
-    if (
-      candidate.kind !== 'textValue' &&
-      candidate.namespaceUri === WML_NAMESPACE_URI &&
-      candidate.localName === name
-    )
-      return candidate;
-  }
-  return undefined;
-}
-
 /** Avoid assigning one global substitute when a whole name needs different script defaults. */
 function scriptDefaults(
   view: Pick<HeadlessDocumentView, 'currentPackage' | 'stylesRoot' | 'documentThemeFonts'>,
@@ -69,29 +65,22 @@ function scriptDefaults(
 ): {
   fallbacks: ReadonlyMap<string, string>;
   ambiguousFamilies: readonly string[];
-  defaults: readonly string[];
+  defaults: ReadonlyMap<string, readonly string[]>;
 } {
-  const defaultsProperties = child(
-    child(child(view.stylesRoot(), 'docDefaults'), 'rPrDefault'),
-    'rPr'
-  );
-  const defaultFonts = child(defaultsProperties, 'rFonts');
-  const language = child(defaultsProperties, 'lang');
+  const styles = view.stylesRoot();
   const theme = view.documentThemeFonts();
-  const latin =
+  // Use the same format/application profile and authored cascade as layout.
+  const props = [...applicationRunDefaults(styles), ...(styles ? readDocDefaults(styles).run : [])];
+  const style = resolveRunStyle(props, theme);
+  const latin = fontFamilyName(style.fontFamily ?? undefined) ?? defaultFamily;
+  const highAnsi =
     fontFamilyName(
-      defaultFonts && (wordAttribute(defaultFonts, 'ascii') ?? wordAttribute(defaultFonts, 'hAnsi'))
-    ) ??
-    theme.minor ??
-    defaultFamily;
-  const eastAsia =
-    fontFamilyName(defaultFonts && wordAttribute(defaultFonts, 'eastAsia')) ??
-    theme.minorEastAsia ??
-    eastAsianDefaultFamily(language && wordAttribute(language, 'eastAsia'));
+      applyHAnsiFontSlots([{ text: 'é', props, style, start: 0, end: 1 }], theme)[0]?.style
+        .fontFamily ?? undefined
+    ) ?? latin;
+  const eastAsia = fontFamilyName(style.fontFamilyEastAsia ?? undefined);
   const complex =
-    fontFamilyName(defaultFonts && wordAttribute(defaultFonts, 'cs')) ??
-    theme.minorBidi ??
-    defaultFamily;
+    fontFamilyName(style.complexLane?.fontFamily ?? undefined) ?? theme.minorBidi ?? defaultFamily;
   const needs = new Map<string, Set<string>>();
   let inspected = 0;
   for (const part of view.currentPackage().parts.values()) {
@@ -102,7 +91,7 @@ function scriptDefaults(
       if (node.namespaceUri === WML_NAMESPACE_URI && node.localName === 'rFonts') {
         for (const [slot, target] of [
           ['ascii', latin],
-          ['hAnsi', latin],
+          ['hAnsi', highAnsi],
           ['eastAsia', eastAsia],
           ['cs', complex],
         ] as const) {
@@ -117,7 +106,8 @@ function scriptDefaults(
       for (const next of node.children) stack.push(next);
     }
     // An incomplete scan cannot prove that a family has only one script target.
-    if (stack.length > 0) return { fallbacks: new Map(), ambiguousFamilies: [], defaults: [] };
+    if (stack.length > 0)
+      return { fallbacks: new Map(), ambiguousFamilies: [], defaults: new Map() };
   }
   const fallbacks = new Map<string, string>();
   const ambiguousFamilies: string[] = [];
@@ -128,9 +118,7 @@ function scriptDefaults(
   return {
     fallbacks,
     ambiguousFamilies,
-    defaults: [
-      ...new Set([latin, eastAsia, complex].filter((family): family is string => family !== null)),
-    ],
+    defaults: new Map([...needs].map(([family, targets]) => [family, [...targets]])),
   };
 }
 
@@ -149,9 +137,9 @@ export function documentFontSubstitutionPlan(
   });
   const requested = new Map<string, string>();
   // Origins already receive the Latin default through request.defaultFamily.
-  const scriptRequests = scripts.defaults.filter(
-    (family) => family.trim().toLowerCase() !== defaultFamily.trim().toLowerCase()
-  );
+  const scriptRequests = families
+    .flatMap((family) => scripts.defaults.get(family.trim().toLowerCase()) ?? [])
+    .filter((family) => family.trim().toLowerCase() !== defaultFamily.trim().toLowerCase());
   for (const raw of [...families, ...targets, ...defaults, ...scriptRequests]) {
     const family = fontFamilyName(raw);
     if (family && !requested.has(family.trim().toLowerCase()))
@@ -164,6 +152,17 @@ export function documentFontSubstitutionPlan(
     fallbacks: scripts.fallbacks,
     ambiguousFamilies: scripts.ambiguousFamilies,
   };
+}
+
+/** Keep the resolver request and document fallback plan on the same configured default. */
+export function documentFontResolutionRequest(
+  view: Pick<HeadlessDocumentView, 'currentPackage' | 'stylesRoot' | 'documentThemeFonts'>,
+  families: readonly string[],
+  configuration?: FontCatalogConfiguration
+) {
+  const defaultFamily = configuredDefaultFontFamily(configuration);
+  const plan = documentFontSubstitutionPlan(view, families, [], defaultFamily);
+  return { plan, request: { families: plan.families, defaultFamily } };
 }
 
 /** A direct face wins. A whole table alias precedes a host's generic substitute. */
