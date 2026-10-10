@@ -447,6 +447,7 @@ function themeCacheMaterial(themeFonts: ThemeFonts): Record<string, unknown> {
     minorBidi: themeFonts.minorBidi ?? null,
     majorSupplemental: themeFonts.majorSupplemental ?? null,
     minorSupplemental: themeFonts.minorSupplemental ?? null,
+    chineseFontTableFaces: themeFonts.chineseFontTableFaces ?? null,
   };
 }
 
@@ -598,7 +599,7 @@ export function cascadeParagraphFormatting(
   return cascadeParagraphWithNumbering(table, directPPr, tableCellStyle);
 }
 
-function cascadeParagraphWithNumbering(
+export function cascadeParagraphWithNumbering(
   table: StyleCascadeTable,
   directPPr: OoxmlNode | undefined,
   tableCellStyle?: TableCellStyleFormatting,
