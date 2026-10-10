@@ -5,6 +5,7 @@ Production use requires a commercial agreement: licensing@eigenpal.com
 */
 import { projectedTextTarget } from './projected-text-target.ts';
 import { recordSplitTextSources, splitProductsOf } from './split-text-recording.ts';
+import * as Y from 'yjs';
 import type {
   CanonicalNodeDescriptor,
   CanonicalPrimitiveEffect,
@@ -404,6 +405,7 @@ function planJournal(
   const projection = new JournalProjection(registry);
   const removed: LogicalId[] = [];
   const reinserted = new Set<LogicalId>();
+  const insertedParents = new Map<LogicalId, Set<LogicalId>>();
   const mintedText = new Set<string>();
   const mintedNodes = new Set<string>();
   const replacementsByEffect = new Map<CanonicalPrimitiveEffect, LogicalId[]>();
@@ -418,6 +420,9 @@ function planJournal(
           const childId = parent.children[at];
           if (childId === undefined) continue;
           removed.push(childId);
+          const parents = insertedParents.get(childId);
+          parents?.delete(effect.parentLogicalId);
+          if (parents?.size === 0) reinserted.delete(childId);
           // The runs this same splice inserts at the dropped slot are its replacements.
           if (effect.childLogicalIds.length > 0) {
             const ids = replacementsByEffect.get(effect) ?? [];
@@ -426,7 +431,12 @@ function planJournal(
           }
         }
       }
-      for (const childId of effect.childLogicalIds) reinserted.add(childId);
+      for (const childId of effect.childLogicalIds) {
+        reinserted.add(childId);
+        const parents = insertedParents.get(childId) ?? new Set<LogicalId>();
+        parents.add(effect.parentLogicalId);
+        insertedParents.set(childId, parents);
+      }
     } else if (effect.kind === 'moveNode') {
       reinserted.add(effect.logicalId);
     } else if (effect.kind === 'putNode') {
@@ -478,8 +488,21 @@ export function applyPrimitiveJournal(
           planned.replacementsByEffect.get(effect) ?? [],
           effect.childLogicalIds
         );
+        recordInsertedInlineCuts(
+          registry,
+          effect.parentLogicalId,
+          effect.childLogicalIds,
+          planned.mintedNodes
+        );
       }
     }
+    const touchedRuns = new Set(
+      journal.effects
+        .filter((effect) => effect.kind === 'spliceChildren')
+        .map((effect) => effect.parentLogicalId)
+    );
+    for (const runId of touchedRuns)
+      recordInsertedLiteralCuts(registry, runId, planned.mintedNodes);
     tombstoneRemoved(registry, journal.effects, planned, formerChildren);
   }, JOURNAL_ORIGIN);
   return { ok: true };
@@ -526,7 +549,8 @@ function recordSplitProvenance(
     if (kind !== 'run' && kind !== 'text') continue;
     // A pre-existing node moved elsewhere was not replaced by this splice. Only intermediate
     // nodes minted in this journal can be reinserted split ancestors.
-    if (planned.reinserted.has(removedId) && !planned.mintedNodes.has(removedId)) continue;
+    if (kind !== 'text' && planned.reinserted.has(removedId) && !planned.mintedNodes.has(removedId))
+      continue;
     const root = resolveSplitRoot(registry, removedId, planned.reinserted);
     if (kind === 'text') {
       // An inline element (a line break or a tab) inserted inside a run replaces its `w:t`
@@ -543,6 +567,91 @@ function recordSplitProvenance(
     const runs = insertedIds.filter((runId) => registry.kindOf(runId) === 'run');
     recordSplitTextSources(registry, removedId, runs);
     registry.recordRunSplit(root, removedId, runs);
+  }
+}
+
+/** Record boundary insertions as well as interior text splits, inside the author journal. */
+function recordInsertedInlineCuts(
+  registry: DocumentRegistry,
+  parent: LogicalId,
+  inserted: readonly LogicalId[],
+  minted: ReadonlySet<LogicalId>
+): void {
+  const atoms = new Set(
+    inserted.filter(
+      (id) =>
+        minted.has(id) && (registry.kindOf(id) === 'hardBreak' || registry.kindOf(id) === 'tab')
+    )
+  );
+  if (atoms.size === 0) return;
+  const record = registry.record(parent);
+  if (!record || record.kind === 'textValue' || record.kind !== 'run') return;
+  const ranges = new Map<
+    LogicalId,
+    { sourceId: string; text: Y.Text; start: number; end: number; continuation?: string }
+  >();
+  for (const child of record.childIds) {
+    if (registry.kindOf(child) !== 'text') continue;
+    const textRecord = registry.record(child);
+    const leaf = textRecord && 'childIds' in textRecord ? textRecord.childIds[0] : undefined;
+    if (!leaf) continue;
+    const range = registry.splitTextRange(leaf);
+    const text = registry.schema.nodes.get(leaf)?.get('t');
+    if (range)
+      ranges.set(child, { ...range, ...(minted.has(child) ? { continuation: child } : {}) });
+    else if (text instanceof Y.Text)
+      ranges.set(child, { sourceId: leaf, text, start: 0, end: text.length });
+  }
+  let following:
+    | { sourceId: string; text: Y.Text; start: number; end: number; continuation?: string }
+    | undefined;
+  const unresolved = new Set(atoms);
+  for (let index = record.childIds.length - 1; index >= 0; index -= 1) {
+    const id = record.childIds[index]!;
+    following = ranges.get(id) ?? following;
+    if (atoms.has(id) && following) {
+      registry.registerInlineSourceCut(
+        id,
+        following.sourceId,
+        following.text,
+        following.start,
+        following.continuation
+      );
+      unresolved.delete(id);
+    }
+  }
+  let preceding: typeof following;
+  for (const id of record.childIds) {
+    preceding = ranges.get(id) ?? preceding;
+    if (unresolved.has(id) && preceding)
+      registry.registerInlineSourceCut(id, preceding.sourceId, preceding.text, preceding.end);
+  }
+}
+
+function recordInsertedLiteralCuts(
+  registry: DocumentRegistry,
+  parent: LogicalId,
+  minted: ReadonlySet<LogicalId>
+): void {
+  const record = registry.record(parent);
+  if (!record || record.kind !== 'run' || !('childIds' in record)) return;
+  let previous: string | undefined;
+  for (const id of record.childIds) {
+    if (minted.has(id) && registry.kindOf(id) === 'text' && previous) {
+      const value = registry.record(id),
+        leaf = value && 'childIds' in value ? value.childIds[0] : undefined;
+      const neighbor = registry.inlineSourceCut(previous);
+      if (leaf && neighbor && !registry.splitTextRange(leaf))
+        registry.registerInlineSourceCut(
+          id,
+          neighbor.sourceId,
+          neighbor.text,
+          neighbor.index,
+          undefined,
+          previous
+        );
+    }
+    previous = id;
   }
 }
 

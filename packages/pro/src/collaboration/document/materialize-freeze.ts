@@ -275,14 +275,14 @@ export function expandAncestors(
 ): Set<LogicalId> {
   const expanded = new Set(ids);
   for (const id of ids) {
-    let parent = registry.parentOf(id);
+    let parent = registry.projectionParentOf(id);
     // Stop at any id already expanded: it dedupes shared ancestor chains, and it is the
     // cycle guard. Two peers cross-nesting concurrently merge to parentOf(X)=Y and
     // parentOf(Y)=X — every value here is remote input, and an unguarded climb spins the
     // receive path forever on every replica.
     while (parent && !expanded.has(parent)) {
       expanded.add(parent);
-      parent = registry.parentOf(parent);
+      parent = registry.projectionParentOf(parent);
     }
   }
   return expanded;

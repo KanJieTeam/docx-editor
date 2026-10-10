@@ -1,0 +1,17 @@
+{
+  "impact": "migration-required",
+  "fields": ["sharedSchemaVersion", "repairVersion"],
+  "before": "An inserted break or tab has no persistent source-character boundary. A concurrent formatting split can strand it beneath the replaced run.",
+  "after": "The creation journal records a source-character boundary on the inserted atom. Current readers validate and index that boundary through undo, redo, and cold joins.",
+  "reason": "Released readers do not interpret the new inlineSourceCut metadata. Updated placement semantics must not share a room with the earlier repair rules.",
+  "tests": [
+    "packages/pro/src/collaboration/__tests__/inline-source-cuts.test.ts",
+    "packages/pro/src/collaboration/__tests__/inline-source-order.test.ts",
+    "packages/pro/src/collaboration/__tests__/inline-source-placement.test.ts",
+    "packages/core/src/collaboration/__tests__/document-port.test.ts",
+    "packages/pro/src/collaboration/__tests__/document-schema-version.test.ts",
+    "packages/pro/src/collaboration/__tests__/document-schema-admission.test.ts"
+  ],
+  "changeset": "inline-source-cuts",
+  "migration": "upgrade-inline-source-boundaries"
+}

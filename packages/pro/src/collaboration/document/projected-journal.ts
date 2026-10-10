@@ -243,18 +243,20 @@ class TextCoordinates {
 class VisibleJournalProjection extends JournalProjection {
   private readonly filtered = new Set<string>();
   constructor(
-    registry: DocumentRegistry,
+    private readonly sourceRegistry: DocumentRegistry,
     private readonly hidden: ReadonlySet<string>,
     private readonly raw: JournalProjection,
     private readonly text: TextCoordinates
   ) {
-    super(registry);
+    super(sourceRegistry);
   }
   override node(id: string): ReturnType<JournalProjection['node']> {
     const node = super.node(id);
     if (node && !this.filtered.has(id)) {
       this.filtered.add(id);
-      node.children = node.children.filter((child) => !this.hidden.has(child));
+      node.children = [...this.sourceRegistry.projectedInlineChildren(id, node.children)].filter(
+        (child) => !this.hidden.has(child) && !this.sourceRegistry.isTombstoned(child)
+      );
     }
     if (node?.isText) {
       const range = this.text.range(id);
@@ -301,6 +303,7 @@ export function projectJournalToShared(
     string,
     Extract<CanonicalPrimitiveEffect, { kind: 'putNode' }>['descriptor']
   >();
+  const preparedParents = new Set<string>();
   const kindOf = (id: string): string | null => descriptors.get(id)?.kind ?? registry.kindOf(id);
   const recording: SplitTextRecordingRegistry = {
     limits: registry.limits,
@@ -313,7 +316,13 @@ export function projectJournalToShared(
       const descriptor = descriptors.get(id);
       const original = descriptor ? null : registry.record(id);
       if (original && original.kind !== 'textValue')
-        return { ...original, childIds: shape.children };
+        return {
+          ...original,
+          childIds: (preparedParents.has(id)
+            ? shape.children
+            : registry.projectedInlineChildren(id, shape.children)
+          ).filter((child) => !hidden.has(child) && !registry.isTombstoned(child)),
+        };
       if (!descriptor || descriptor.kind === 'textValue') return null;
       return {
         logicalId: id,
@@ -342,8 +351,28 @@ export function projectJournalToShared(
   };
   try {
     for (const effect of journal.effects) {
+      if (effect.kind === 'spliceChildren' && !preparedParents.has(effect.parentLogicalId)) {
+        const parent = raw.node(effect.parentLogicalId);
+        if (parent && !parent.isText) {
+          const current = registry.projectedInlineChildren(effect.parentLogicalId, parent.children);
+          if (
+            current.length !== parent.children.length ||
+            current.some((id, index) => id !== parent.children[index])
+          )
+            emit({
+              kind: 'spliceChildren',
+              parentLogicalId: effect.parentLogicalId,
+              start: 0,
+              deleteCount: parent.children.length,
+              childLogicalIds: current,
+            });
+        }
+        preparedParents.add(effect.parentLogicalId);
+      }
       const result = validateEffect(registry, effect, visible);
-      if (result && !result.ok) return result;
+      if (result && !result.ok) {
+        return result;
+      }
       projectEffect(visible, effect);
       if (effect.kind === 'putNode')
         descriptors.set(effect.descriptor.logicalId, effect.descriptor);
@@ -358,7 +387,9 @@ export function projectJournalToShared(
       } else if (effect.kind === 'spliceChildren') {
         const parent = raw.node(effect.parentLogicalId);
         if (!parent || parent.isText) return { ok: false, code: 'invalid-bound' };
-        const positions = parent.children.flatMap((id, index) => (hidden.has(id) ? [] : [index]));
+        const positions = parent.children.flatMap((id, index) =>
+          hidden.has(id) || registry.isTombstoned(id) ? [] : [index]
+        );
         const removed = positions
           .slice(effect.start, effect.start + effect.deleteCount)
           .map((index) => parent.children[index]!);
@@ -394,7 +425,9 @@ export function projectJournalToShared(
         const parent = raw.node(effect.destinationParentLogicalId);
         if (!parent || parent.isText) return { ok: false, code: 'invalid-bound' };
         const children = parent.children.filter((id) => id !== effect.logicalId);
-        const positions = children.flatMap((id, index) => (hidden.has(id) ? [] : [index]));
+        const positions = children.flatMap((id, index) =>
+          hidden.has(id) || registry.isTombstoned(id) ? [] : [index]
+        );
         emit({
           ...effect,
           destinationIndex: positions[effect.destinationIndex] ?? children.length,

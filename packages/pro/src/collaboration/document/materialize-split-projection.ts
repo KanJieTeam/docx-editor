@@ -16,7 +16,7 @@ export class MaterializeSplitProjection {
     const dirty: LogicalId[] = [];
     const nextLosers = registry.replacementLoserRuns();
     const addParent = (runId: LogicalId): void => {
-      const parent = registry.parentOf(runId);
+      const parent = registry.projectionParentOf(runId);
       if (parent !== null) dirty.push(parent);
     };
     for (const id of nextLosers) if (!this.lastLosers.has(id)) addParent(id);

@@ -1158,7 +1158,7 @@ export const wordFeatures: WordFeature[] = [
     tier: 'premium',
     docsLink: '/docs/2.x/pro/collaboration',
     notes:
-      'Yjs replicates text, formatting, document structure, review content, tables of contents, notes, headers, footers, drawings, and custom nodes. Presence includes participants, carets, and cross-paragraph selections. Each participant can undo only their edits. One simultaneous run-formatting split converges without duplicate text. A later split after one concurrent run-formatting round can duplicate text. Replicas still converge. Use WebRTC, Hocuspocus, or another Yjs 13 provider. Optional offline editing merges buffered changes after reconnection. Applying an edited ProseMirror document is unavailable while a replica is attached.',
+      'Yjs replicates text, formatting, document structure, review content, tables of contents, notes, headers, footers, drawings, and custom nodes. Presence includes participants, carets, and cross-paragraph selections. Each participant can undo only their edits. Inserted line breaks and tabs retain their text boundaries through concurrent formatting, typing, deletion, undo, redo, and cold joins. Saved rooms require migration to docx-collaboration 1.4.2.1. One simultaneous run-formatting split converges without duplicate text. A later split after one concurrent run-formatting round can duplicate text. Replicas still converge. Use WebRTC, Hocuspocus, or another Yjs 13 provider. Optional offline editing merges buffered changes after reconnection. Applying an edited ProseMirror document is unavailable while a replica is attached.',
   },
   {
     id: 'collab.find-replace',

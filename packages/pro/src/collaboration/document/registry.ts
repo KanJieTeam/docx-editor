@@ -3,13 +3,20 @@ Copyright (c) 2026 EigenPal, Inc. All rights reserved.
 Licensed under the EigenPal Pro Evaluation License 1.0 — see packages/pro/LICENSE.md.
 Production use requires a commercial agreement: licensing@eigenpal.com
 */
+import { applyRegistryNodeEvents } from './registry-node-events.ts';
+import {
+  authoredInlineSourceRange,
+  noteInlineSourceOwner,
+} from './registry-inline-source-reads.ts';
 import { observeDirtyPaths } from './registry-dirty-paths.ts';
 import { captureInsertionBoundary } from './split-text-boundaries.ts';
 import { SplitTextSources, type SplitTextRange } from './split-text-sources.ts';
+import { InlineSourceCuts, type InlineSourceCut } from './inline-source-cuts.ts';
+import { InlineSourcePlacement } from './inline-source-placement.ts';
 import * as Y from 'yjs';
 import type { CanonicalBinaryDescriptor } from '@docx-editor.dev/core/collaboration/replication';
 import { partNameKey } from '@docx-editor.dev/core/store';
-import { yjsItemKey, type LogicalId, type NodeIdentityMeta, wordFacingIdsOf } from './identity.ts';
+import { type LogicalId, type NodeIdentityMeta, wordFacingIdsOf } from './identity.ts';
 import { SplitDedupIndex, type SplitTextOverlays } from './split-dedup.ts';
 import { runIsPresent } from './run-text-reads.ts';
 import {
@@ -70,6 +77,9 @@ import {
 } from './registry-side-maps.ts';
 import {
   elementRecordOf,
+  itemKeyOf,
+  asTrackedType,
+  readString,
   nodeKindOf,
   nodeShapeOf,
   sameChildOrder,
@@ -83,20 +93,6 @@ import {
 } from './registry-package-reads.ts';
 import { retainsNumberingInfrastructure } from './undo-numbering.ts';
 import { nodeRecordDeleteFilter } from './undo-delete-filter.ts';
-
-function itemKeyOf(type: Y.Map<unknown>): string | null {
-  const item = (type as unknown as { _item?: { id: { client: number; clock: number } } })._item;
-  if (!item) return null;
-  return yjsItemKey(item.id.client, item.id.clock);
-}
-
-function asTrackedType(type: unknown): Y.AbstractType<unknown> {
-  return type as Y.AbstractType<unknown>;
-}
-
-function readString(value: unknown): string {
-  return typeof value === 'string' ? value : '';
-}
 
 /** Child-ID arrays are the only replicated membership and order authority. */
 export class DocumentRegistry {
@@ -116,6 +112,8 @@ export class DocumentRegistry {
   /** Deterministic dedup of concurrent format splits (#581). */
   private readonly splitDedup: SplitDedupIndex;
   private readonly splitTextSources: SplitTextSources;
+  private readonly inlineSourceCuts: InlineSourceCuts;
+  private readonly inlineSourcePlacement: InlineSourcePlacement;
   private bulkLoad = 0;
   private unobservedWrites = 0;
   /** Node total as of the last observed event batch. Negative means "not counted yet". */
@@ -137,6 +135,8 @@ export class DocumentRegistry {
     this.limits = mergeLimits(limits);
     this.splitDedup = new SplitDedupIndex(this.schema.nodes);
     this.splitTextSources = new SplitTextSources(this.schema.nodes, this.doc, this.limits);
+    this.inlineSourceCuts = new InlineSourceCuts(this.schema.nodes, this.doc, this.limits);
+    this.inlineSourcePlacement = new InlineSourcePlacement(this);
     this.stopObserving = observeRegistrySchema(this.schema, {
       onNodeEvents: (events) => {
         if (this.bulkLoad > 0) return;
@@ -271,6 +271,9 @@ export class DocumentRegistry {
 
   parentOf(logicalId: LogicalId): LogicalId | null {
     return this.parentIndex.get(logicalId) ?? null;
+  }
+  projectionParentOf(id: LogicalId): LogicalId | null {
+    return this.inlineSourcePlacement.parentOf(id) ?? this.parentOf(id);
   }
 
   identityMeta(logicalId: LogicalId): NodeIdentityMeta | null {
@@ -524,28 +527,79 @@ export class DocumentRegistry {
 
   /** Runs a concurrent format split superseded and this replica must not materialize (#581). */
   replacementLoserRuns(): ReadonlySet<LogicalId> {
+    return this.inlineSourcePlacement.visibleLosers(this.rawReplacementLosers());
+  }
+
+  rawReplacementLosers(): ReadonlySet<LogicalId> {
     if (this.hasUnobservedWrites()) this.splitDedup.invalidate();
     return this.splitDedup.loserRuns({ isPresent: (id) => runIsPresent(this, id) });
   }
 
   splitTextRange(id: LogicalId): SplitTextRange | null {
-    return this.splitTextSources.range(id);
+    const range = this.splitTextSources.range(id);
+    return range ? { ...range, end: this.inlineSourcePlacement.effectiveEnd(id, range.end) } : null;
+  }
+
+  authoredSourceRange(id: LogicalId): SplitTextRange | null {
+    return authoredInlineSourceRange(this, this.splitTextSources, id);
+  }
+
+  sourceAliases(source: string): readonly string[] {
+    return [source, ...this.splitTextSources.sourceAliases(source)];
+  }
+
+  listedParents(id: string): readonly string[] {
+    return [...(this.listings.get(id) ?? [])];
   }
 
   projectedTextValue(id: LogicalId): string | null {
-    return this.splitTextSources.value(id);
+    return this.inlineSourcePlacement.textValue(id, this.splitTextSources.value(id));
+  }
+
+  projectedInlineChildren(id: LogicalId, children: readonly LogicalId[]): readonly LogicalId[] {
+    const extras = this.adoptedChildren(id);
+    const relevant =
+      this.inlineSourcePlacement.hasChildren(id) ||
+      extras.some((child) => {
+        if (this.inlineSourceCut(child)) return true;
+        const shape = this.nodeShape(child);
+        return (
+          shape?.children.some((leaf) => {
+            const source = this.authoredSourceRange(leaf)?.sourceId;
+            return source !== undefined && this.inlineSourceCuts.hasSource(source);
+          }) ?? false
+        );
+      });
+    if (!relevant) return this.inlineSourcePlacement.children(id, children);
+    const merged = [...children];
+    for (const child of extras) if (!merged.includes(child)) merged.push(child);
+    return this.inlineSourcePlacement.children(id, merged);
   }
 
   registerSplitText(product: LogicalId, source: LogicalId, start: number, end: number): void {
     this.splitTextSources.register(product, source, start, end);
   }
 
+  registerInlineSourceCut(...args: Parameters<InlineSourceCuts['register']>): void {
+    this.inlineSourceCuts.register(...args);
+  }
+
+  inlineSourceCut(atom: LogicalId): InlineSourceCut | null {
+    return this.inlineSourceCuts.read(atom);
+  }
+
+  inlineAtomsForSource(source: string): readonly LogicalId[] {
+    return this.inlineSourceCuts.atomIds(source);
+  }
+
   normalizeRestoredSplitTextAnchors(): void {
     this.splitTextSources.normalizeRestoredAnchors();
+    this.inlineSourceCuts.normalizeRestoredAnchors();
   }
 
   concurrentSplitTextOverlays(): SplitTextOverlays {
-    return this.splitTextSources.overlays();
+    const base = this.splitTextSources.overlays();
+    return this.inlineSourcePlacement.overlays(base.values, base.changedIds);
   }
 
   /**
@@ -678,6 +732,8 @@ export class DocumentRegistry {
     this.bindingsByNode = new Map();
     this.splitDedup.reset();
     this.splitTextSources.reset();
+    this.inlineSourceCuts.reset();
+    this.inlineSourcePlacement.reset();
     this.schema.nodes.forEach((rec, parentId) => {
       if (rejectDangerousKey(parentId)) return;
       const children = childArrayOf(rec);
@@ -720,6 +776,7 @@ export class DocumentRegistry {
       );
     });
     this.assignFirstReachable(null);
+    this.inlineSourcePlacement.reconcile(this.inlineSourceCuts.dirtySources());
   }
 
   assertNoParentFields(): void {
@@ -732,67 +789,22 @@ export class DocumentRegistry {
 
   private applyChildArrayEvents(events: Y.YEvent<Y.AbstractType<unknown>>[]): void {
     this.unobservedWrites = 0;
-    // These events describe every write, local or remote, so they carry the whole count.
     this.pendingNodeAdds = 0;
-    const changed = new Set<LogicalId>();
-    for (const event of events) {
-      // Text and boundary metadata do not change which split branches are reachable.
-      if (
-        !(event.target instanceof Y.Text) &&
-        (event.path.length === 0 ||
-          event.target instanceof Y.Array ||
-          (event.target instanceof Y.Map &&
-            [...event.changes.keys.keys()].some((key) =>
-              ['deleted', 'replacedBy', 'splitFrom', 'splitLineage', 'children'].includes(
-                String(key)
-              )
-            )))
-      )
-        this.splitDedup.invalidate();
-      if (event.path.length > 0) this.splitTextSources.noteChanged(String(event.path[0]));
-      // A remote applyUpdate delivers a new element record with its children already filled.
-      // Yjs does not emit a child-array event for that initial fill. Skipping it left
-      // `parentOf` null, so an attribute-only journal could not dirty the part root and the
-      // receiving replica kept the cached `commentsExtended.xml`.
-      if (event.path.length === 0 && event.target instanceof Y.Map) {
-        for (const [key, change] of event.changes.keys) {
-          if (this.nodeCountCache >= 0 && change.action !== 'update') {
-            this.nodeCountCache += change.action === 'add' ? 1 : -1;
-          }
-          if (change.action === 'delete' || rejectDangerousKey(String(key))) continue;
-          // A run a peer split off carries its origin; index it so the loser-dedup sees the
-          // concurrent split the moment the remote record arrives, not only after a rebuild.
-          this.splitDedup.indexExisting(String(key));
-          this.splitTextSources.indexExisting(String(key));
-          for (const childId of this.syncChildListings(String(key))) changed.add(childId);
-        }
-        continue;
-      }
-      // Undo retains record containers. Redo restores scalar provenance on those existing
-      // maps, so a late joiner must index field changes as well as new map entries.
-      if (
-        event.target instanceof Y.Map &&
-        event.path.length === 1 &&
-        (event.changes.keys.has('splitFrom') || event.changes.keys.has('splitLineage'))
-      ) {
-        this.splitDedup.indexExisting(String(event.path[0]));
-      }
-      if (event.target instanceof Y.Array && event.path.length > 0) {
-        const parentId = String(event.path[0]);
-        for (const childId of this.syncChildListings(parentId)) changed.add(childId);
-        if (this.isTombstoned(parentId)) this.syncAdoptee(parentId);
-        continue;
-      }
-      if (
-        event.target instanceof Y.Map &&
-        event.path.length === 1 &&
-        (event.changes.keys.has(NODE_DELETED_FIELD) ||
-          event.changes.keys.has(NODE_REPLACED_BY_FIELD))
-      ) {
-        this.syncAdoptee(String(event.path[0]));
-      }
-    }
+    const changed = applyRegistryNodeEvents(events, {
+      splitDedup: this.splitDedup,
+      splitTextSources: this.splitTextSources,
+      inlineSourceCuts: this.inlineSourceCuts,
+      noteInlineSourceOwner: (id) => noteInlineSourceOwner(this, this.inlineSourceCuts, id),
+      noteNodeCount: (action) => {
+        if (this.nodeCountCache >= 0 && action !== 'update')
+          this.nodeCountCache += action === 'add' ? 1 : -1;
+      },
+      syncChildListings: (id) => this.syncChildListings(id),
+      isTombstoned: (id) => this.isTombstoned(id),
+      syncAdoptee: (id) => this.syncAdoptee(id),
+    });
     if (changed.size > 0) this.resolveParents(changed);
+    this.inlineSourcePlacement.reconcile(this.inlineSourceCuts.dirtySources());
   }
 
   private applyAttributeMapEvent(event: Y.YMapEvent<string>): void {

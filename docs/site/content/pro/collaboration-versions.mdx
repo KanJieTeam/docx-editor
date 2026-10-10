@@ -63,6 +63,14 @@ The upgrade column describes moving from the previous stable release. Matching f
 
 ## Choose the upgrade path
 
+### Upgrade inline source boundaries
+
+The source-boundary update uses `docx-collaboration:1.4.2.1`. Earlier readers do not understand its stored atom boundaries. Do not change an existing room's version fields. Keep its state and pending updates intact.
+
+Export the old room with a build that supports its original format. Review the exported text and formatting before migration. This upgrade does not reconstruct content already lost by an earlier conflict. Use the reviewed DOCX to create a separate room with the updated build and fresh persistence keys. Follow [Upgrade saved rooms](#upgrade-saved-rooms) for participant exports and pending work. The replacement room starts with empty collaboration undo history.
+
+Upgrade every client, server, and export worker before admitting the replacement room. Refuse clients or persisted rooms with a different complete format value. Ordinary DOCX files do not store these shared boundaries and require no room migration.
+
 Upgrading from 2.17.0 to 2.18.0 requires a saved-room migration. Export with the compatible previous build, then follow [Upgrade saved rooms](#upgrade-saved-rooms).
 
 | Situation | What you do |

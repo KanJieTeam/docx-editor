@@ -31,6 +31,7 @@ import {
   type CanonicalPrimitiveJournal,
 } from './primitive-journal.ts';
 import type { TreeModelChange } from '../store/store/tree-store.ts';
+import { canonicalPrimitiveTransactionIsObserved } from '../store/package/canonical-primitive-capture.ts';
 
 const BODY: StoryScope = Object.freeze({ kind: 'body' });
 const MAX_COLLABORATIVE_PARAGRAPH_TEXT = 1_000_000;
@@ -161,6 +162,10 @@ export function normalizeCollaborationTextPackage(
   partName: string,
   ops: readonly TreeDocOp[]
 ): OoxmlPackage {
+  // Full-document replicas address individual text leaves. A package-level merge would
+  // remove those leaves outside the primitive journal and invalidate their source cuts.
+  // Paragraph-text replicas do not observe that journal and retain their normalization.
+  if (canonicalPrimitiveTransactionIsObserved()) return pkg;
   let part = pkg.parts.get(partName);
   if (!part) return pkg;
   let changed = false;

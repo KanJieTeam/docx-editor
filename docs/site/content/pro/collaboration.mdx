@@ -672,11 +672,15 @@ Direct automation writes retain timed capture and can share an undo step within 
 
 Caret formatting has a separate local undo step. It does not create a shared document edit. Undo and redo preserve other participants' edits.
 
-Repeated concurrent formatting, typing, deletion, and undo preserve document text across participants.
+Line-break and tab edits preserve document text through repeated concurrent formatting, typing, deletion, undo, and reconnection.
 
 ### Concurrent line breaks and tabs
 
-Text insertion and deletion survive a concurrent line break or tab in the same text run. Two concurrent splits of the same text keep one replacement, including only one participant's break or tab. Undo of the other split can restore the original text over both splits. A concurrent formatting change in the same run can still remove an inserted line break. For that limitation, see [Concurrent formatting and line breaks](https://github.com/eigenpal/docx-editor/issues/1133).
+Inserted line breaks and tabs keep their text positions through concurrent formatting, typing, deletion, undo, redo, and cold joins. Independent concurrent line breaks and tabs remain in the document. Participants retain their own undo steps.
+
+Saved rooms require migration to `docx-collaboration 1.4.2.1`. See [Upgrade inline source boundaries](/docs/2.x/pro/collaboration-versions#upgrade-inline-source-boundaries).
+
+Other repeated concurrent run-formatting splits can still duplicate text. Replicas still converge. See [Feature support](/docs/2.x/feature-support).
 
 ### Numeric limits
 

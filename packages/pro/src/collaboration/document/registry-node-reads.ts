@@ -14,7 +14,7 @@ Production use requires a commercial agreement: licensing@eigenpal.com
  */
 
 import * as Y from 'yjs';
-import type { LogicalId } from './identity.ts';
+import { yjsItemKey, type LogicalId } from './identity.ts';
 import {
   NODE_TEXT_FIELD,
   namespaceUriOf,
@@ -33,6 +33,20 @@ export interface NodeShape {
   isText: boolean;
   textLength: number;
   children: LogicalId[];
+}
+
+export function itemKeyOf(type: Y.Map<unknown>): string | null {
+  const item = (type as unknown as { _item?: { id: { client: number; clock: number } } })._item;
+  if (!item) return null;
+  return yjsItemKey(item.id.client, item.id.clock);
+}
+
+export function asTrackedType(type: unknown): Y.AbstractType<unknown> {
+  return type as Y.AbstractType<unknown>;
+}
+
+export function readString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
 }
 
 /** One node's class, text length and child ids. `children` is fresh, so callers may splice it. */

@@ -33,6 +33,8 @@ function fixture(limits: Partial<DocumentLimits> = {}) {
   const registry = {
     limits: { ...DEFAULT_DOCUMENT_LIMITS, ...limits },
     replacementLoserRuns: () => hidden,
+    projectedInlineChildren: (_id: string, children: readonly string[]) => children,
+    isTombstoned: () => false,
     nodeCount: () => nodes.size,
     splitTextRange: () => null,
     kindOf: (id: string) => (nodes.get(id)?.isText ? 'textValue' : 'element'),

@@ -16,7 +16,11 @@ interface TextLeaf {
   readonly value: string;
 }
 
-function leaves(registry: SplitTextRecordingRegistry, root: string): readonly TextLeaf[] | null {
+function leaves(
+  registry: SplitTextRecordingRegistry,
+  root: string,
+  project = false
+): readonly TextLeaf[] | null {
   const found: TextLeaf[] = [];
   const pending = [{ id: root, depth: 0 }];
   const seen = new Set<string>();
@@ -33,8 +37,27 @@ function leaves(registry: SplitTextRecordingRegistry, root: string): readonly Te
       if (length > registry.limits.maxTextLength) return null;
       found.push({ id, value });
     } else if (isElementRecord(node) && !node.kind.endsWith('Properties')) {
-      for (let index = node.childIds.length - 1; index >= 0; index -= 1) {
-        pending.push({ id: node.childIds[index]!, depth: depth + 1 });
+      const projected =
+        project && 'projectedInlineChildren' in registry
+          ? (
+              registry as SplitTextRecordingRegistry &
+                Pick<DocumentRegistry, 'projectedInlineChildren'>
+            ).projectedInlineChildren(id, node.childIds)
+          : node.childIds;
+      for (let index = projected.length - 1; index >= 0; index -= 1) {
+        if (
+          project &&
+          'isTombstoned' in registry &&
+          (registry as DocumentRegistry).isTombstoned(projected[index]!)
+        )
+          continue;
+        if (
+          project &&
+          'replacementLoserRuns' in registry &&
+          (registry as DocumentRegistry).replacementLoserRuns().has(projected[index]!)
+        )
+          continue;
+        pending.push({ id: projected[index]!, depth: depth + 1 });
       }
     }
   }
@@ -51,7 +74,7 @@ export function recordSplitTextSources(
   source: string,
   products: readonly string[]
 ): boolean {
-  const before = leaves(registry, source);
+  const before = leaves(registry, source, true);
   const after: TextLeaf[] = [];
   if (!before || before.length === 0) return false;
   for (const product of products) {

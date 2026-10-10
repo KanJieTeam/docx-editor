@@ -548,7 +548,7 @@ export class PackageMaterializer {
       if (!childIds.includes(extra)) childIds.push(extra);
     }
     const children: OoxmlNode[] = [];
-    for (const childId of childIds) {
+    for (const childId of this.registry.projectedInlineChildren(logicalId, childIds)) {
       if (childId === logicalId) {
         this.push('self-child', childId);
         continue;

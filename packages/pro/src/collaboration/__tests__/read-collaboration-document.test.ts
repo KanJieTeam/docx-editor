@@ -86,9 +86,11 @@ async function seededRoom(text: string): Promise<{ ydoc: Y.Doc; destroy: () => v
 describe('readCollaborationDocument', () => {
   for (const [field, version, code] of [
     ['sharedSchemaVersion', 2, 'schema-version-mismatch'],
-    ['sharedSchemaVersion', 4, 'schema-version-mismatch'],
+    ['sharedSchemaVersion', 3, 'schema-version-mismatch'],
+    ['sharedSchemaVersion', 5, 'schema-version-mismatch'],
     ['protocolVersion', 0, 'protocol-version-mismatch'],
-    ['repairVersion', 2, 'schema-version-mismatch'],
+    ['repairVersion', 1, 'schema-version-mismatch'],
+    ['repairVersion', 3, 'schema-version-mismatch'],
     ['canonicalModelVersion', 2, 'schema-version-mismatch'],
   ] as const) {
     test(`refuses ${field} ${version} before interpreting persisted split metadata`, async () => {

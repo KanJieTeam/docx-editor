@@ -6,12 +6,14 @@ import { readOoxmlPackage } from '../../store/package/ooxml-package.ts';
 import { TreePackageStore } from '../../store/store/tree-package-store.ts';
 import { ORIGIN_IDS } from '../../store/registry/frozen-ids.ts';
 import type { CollaborationApplyResult } from '../replication.ts';
+import { commitSessionTreeOps } from '../../binding/tree-session-apply.ts';
+import type { OoxmlNode } from '../../store/package/ooxml-tree.ts';
 
-function bytesWithParagraphIds(ids: readonly (string | null)[]): Uint8Array {
+function bytesWithParagraphIds(ids: readonly (string | null)[], runChildren?: string): Uint8Array {
   const paragraphs = ids
     .map(
       (id, index) =>
-        `<w:p${id ? ` w14:paraId="${id}" w14:textId="${id}"` : ''}><w:r><w:t>Paragraph ${index}</w:t></w:r></w:p>`
+        `<w:p${id ? ` w14:paraId="${id}" w14:textId="${id}"` : ''}><w:r>${runChildren ?? `<w:t>Paragraph ${index}</w:t>`}</w:r></w:p>`
     )
     .join('');
   return zipSync({
@@ -31,8 +33,8 @@ xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:body>${parag
   });
 }
 
-function open(ids: readonly (string | null)[]) {
-  const loaded = readOoxmlPackage(bytesWithParagraphIds(ids));
+function open(ids: readonly (string | null)[], runChildren?: string) {
+  const loaded = readOoxmlPackage(bytesWithParagraphIds(ids, runChildren));
   if (!loaded.ok) throw new Error(loaded.reason);
   const main = loaded.package.parts.get(loaded.package.mainDocumentPart);
   if (!main) throw new Error('missing main part');
@@ -41,6 +43,51 @@ function open(ids: readonly (string | null)[]) {
 }
 
 describe('canonical collaboration document port', () => {
+  for (const observed of [false, true]) {
+    test(`text normalization keeps primitive source identities only while observed (${observed})`, () => {
+      const { store, port } = open(['11111111'], '<w:t>X</w:t><w:t>r A</w:t>');
+      const leaves = (): readonly OoxmlNode[] => {
+        const found: OoxmlNode[] = [];
+        const walk = (node: OoxmlNode): void => {
+          if (node.kind === 'textValue') {
+            found.push(node);
+            return;
+          }
+          for (const child of node.children) walk(child);
+        };
+        walk(store.partFor({ kind: 'body' })!.root);
+        return found;
+      };
+      const before = leaves().map((node) => node.id);
+      const stop = observed ? port.observePrimitiveJournal!(() => {}) : () => {};
+      const edit = (operationId: string): void => {
+        const result = commitSessionTreeOps(
+          store,
+          [{ op: 'insertText', paragraphId: port.paragraphs()[0]!.nodeId, offset: 0, text: 'Y' }],
+          undefined,
+          undefined,
+          { kind: 'body' },
+          {
+            recordsHistory: false,
+            actorId: 'alice',
+            operationId,
+          }
+        );
+        expect(result.committed).toBe(true);
+        port.flushPendingJournals();
+      };
+      try {
+        edit('first');
+        expect(leaves().map((node) => node.id)).toEqual(observed ? before : [before[0]!]);
+        expect(port.paragraphs()[0]!.text).toBe('YXr A');
+      } finally {
+        stop();
+      }
+      edit('after-unsubscribe');
+      expect(leaves()).toHaveLength(1);
+      expect(port.paragraphs()[0]!.text).toBe('YYXr A');
+    });
+  }
   test('normalizes missing and duplicate paragraph identities deterministically', () => {
     const first = open([null, '11111111', '11111111']).port.paragraphs();
     const second = open([null, '11111111', '11111111']).port.paragraphs();

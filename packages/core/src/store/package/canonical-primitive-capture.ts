@@ -67,6 +67,11 @@ export function isCanonicalPrimitiveCaptureActive(): boolean {
   return frame !== undefined && frame.observed && frame.suppressDepth === 0;
 }
 
+/** Keep source node identities even in a suppressed package hook of an observed transaction. */
+export function canonicalPrimitiveTransactionIsObserved(): boolean {
+  return topFrame()?.observed === true;
+}
+
 /**
  * Subscribe to one settled journal per committed `TreePackageStore` transaction.
  *
