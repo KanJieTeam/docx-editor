@@ -2828,7 +2828,8 @@ export function readTableBorders(tblPr: OoxmlElement | undefined): TableBorderBo
 // @public
 export function readTableStructure(table: OoxmlNode, contentWidthPt: number, depth: number, styleCascade?: StyleCascadeTable,
 displayMode?: RevisionDisplayMode, authorFilter?: RevisionAuthorFilter, compatibilityMode?: number,
-autofit?: TableAutofitContext): SemanticTableStructure | null;
+autofit?: TableAutofitContext,
+textBox?: boolean): SemanticTableStructure | null;
 
 // @public
 export interface RefFieldContext {
@@ -3282,7 +3283,7 @@ export interface ReviewRevisionItem {
     // (undocumented)
     readonly date?: string;
     readonly formattingChanges?: readonly {
-        readonly property: 'bold' | 'italic' | 'underline' | 'strike' | 'fontFamily' | 'fontSize' | 'color' | 'alignment' | 'leftIndent' | 'rightIndent' | 'firstLineIndent' | 'hangingIndent' | 'spaceBefore' | 'spaceAfter';
+        readonly property: 'bold' | 'italic' | 'underline' | 'strike' | 'fontFamily' | 'fontSize' | 'color' | 'alignment' | 'leftIndent' | 'rightIndent' | 'firstLineIndent' | 'hangingIndent' | 'spaceBefore' | 'spaceAfter' | 'direction';
         readonly value: string | null;
     }[];
     readonly formattingKind?: string;
@@ -3865,6 +3866,7 @@ export interface SemanticTableStructure {
     readonly indentPt: number;
     readonly layoutFixed: boolean;
     readonly legacyContentAlignment?: true;
+    readonly legacyTrailingOuterEdge?: true;
     readonly outerRuleOffsetPt?: number;
     // (undocumented)
     readonly rows: readonly SemanticTableRow[];
@@ -4745,7 +4747,5 @@ export interface WordSegment {
 
 // @public
 export function wordSegmentsToGraphemeRecords(text: string, segments: readonly WordSegment[]): readonly GraphemeWordSegmentRecord[];
-
-// (No @packageDocumentation comment for this package)
 
 ```
