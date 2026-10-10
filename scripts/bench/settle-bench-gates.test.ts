@@ -49,7 +49,9 @@ test('a keystroke on the huge document performs the pinned amount of work', () =
   // that is fine — what matters is that it never MOVES without a deliberate baseline update.
   // Unformatted paragraph marks no longer inflate smaller text to the style's
   // font size. This changes page boundaries, including the edited page's suffix.
-  expect(report.pages).toBe(542);
+  // Twenty standalone page breaks stay after their full tables. They no longer
+  // move to empty pages before they apply their page advances.
+  expect(report.pages).toBe(522);
   expect(report.paragraphs).toBe(12820);
   expect(report.work).toEqual({
     // The last pass of a one-character keystroke: a handful of re-placed paragraphs against
@@ -60,7 +62,7 @@ test('a keystroke on the huge document performs the pinned amount of work', () =
     // so the reflow's second body pass reuses every section and only the first pass is full.
     placed: 10,
     total: 6540,
-    reusedPages: 537,
+    reusedPages: 517,
     fullPasses: 1,
     staleDiscards: 0,
     cancelledRuns: 0,
