@@ -93,7 +93,7 @@ describe('availableFontFamilies', () => {
   });
 
   test('invalid document names are dropped, never repaired', () => {
-    const catalog = availableFontFamilies(undefined, ['Georgia', 'x'.repeat(65), 'bad;name']);
+    const catalog = availableFontFamilies(undefined, ['Georgia', 'x'.repeat(65), 'bad;name()']);
     expect(catalog).toEqual(STANDARD_FONTS);
   });
 
@@ -109,7 +109,7 @@ describe('availableFontFamilies', () => {
 });
 
 test('document-only families still join the standard catalog', () => {
-  expect(availableFontFamilies(undefined, ['Sagona', 'sagona', 'bad;name'])).toEqual(
+  expect(availableFontFamilies(undefined, ['Sagona', 'sagona', 'bad;name()'])).toEqual(
     withStandardFonts('Sagona')
   );
 });

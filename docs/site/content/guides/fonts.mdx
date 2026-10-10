@@ -19,6 +19,10 @@ Custom resolvers can return `supportedFamilies: ['Brand Sans', 'Brand Serif']` a
 
 A picker choice does not mean the font is installed or loaded. Opening the picker does not load font bytes. Your font configuration still controls measurement and font resolution.
 
+## Font alternatives in documents
+
+A source reference can contain up to eight semicolon-separated family names within 64 characters, such as `宋体;SimSun`. Each name passes the font-name safety checks. Quotes, paths, controls, and empty alternatives reject the entire reference. Font resolvers receive the individual names. The first configured family controls measurement and drawing. If that family lacks a requested style, the existing fallback supplies synthetic emphasis instead of selecting another family. Saved OOXML keeps the authored reference. Font choices you apply through the picker remain single family names.
+
 ## Configure font sources
 
 Pass a font resolver to `useDocxSource`. For packaged substitutes, use `packagedFonts()`. The examples use the React hook; Vue provides the same API. Call the hook inside a component.

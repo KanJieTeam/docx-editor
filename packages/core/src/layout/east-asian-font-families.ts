@@ -1,6 +1,6 @@
 // Resolve language-selected font needs through the same cascade and slots as layout.
 import type { OoxmlElement } from '../store/package/ooxml-tree.ts';
-import { validFontFamily } from '../store/package/run-defaults.ts';
+import { fontFamilyAlternatives } from '../store/package/font-family-reference.ts';
 import {
   buildStyleCascadeTable,
   cascadeParagraphFormatting,
@@ -60,11 +60,11 @@ function inspectFontNode(node: OoxmlElement, context: ScanContext) {
       if (!piece.text) continue;
       if (piece.fontSlot !== 'eastAsia' && !supplementalFamilies.has(piece.style.fontFamily ?? ''))
         continue;
-      const family = validFontFamily(
+      const names = fontFamilyAlternatives(
         (piece.fontSlot === 'eastAsia' ? piece.style.fontFamilyEastAsia : piece.style.fontFamily) ??
           undefined
       );
-      if (family) families.add(family);
+      for (const family of names) families.add(family);
     }
   }
   const next =

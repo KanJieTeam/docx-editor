@@ -1,3 +1,4 @@
+import { validFontFamilyReference } from './font-family-reference.ts';
 // The `w:rFonts` theme-token table, shared by every lane that resolves one.
 //
 // ECMA-376 §17.18.96 (ST_Theme) names eight tokens; each is a (major|minor) × (ascii|
@@ -71,8 +72,6 @@ function firstDescendant(root: OoxmlElement, localName: string): OoxmlElement | 
   return null;
 }
 
-const FONT_NAME = /^[\p{L}\p{N}\p{M} \-.+_]{1,64}$/u;
-
 function schemeTypeface(
   scheme: OoxmlElement,
   slot: 'majorFont' | 'minorFont',
@@ -81,7 +80,7 @@ function schemeTypeface(
   const font = child(scheme, slot);
   const element = font ? child(font, face) : null;
   const raw = element?.attributes.find((attribute) => attribute.localName === 'typeface')?.value;
-  return raw !== undefined && FONT_NAME.test(raw) ? raw : null;
+  return validFontFamilyReference(raw);
 }
 
 // Canonical trees are immutable. Keep script maps stable when a body edit changes
@@ -261,7 +260,7 @@ function supplementalFaces(scheme: OoxmlElement): Partial<ThemeSchemeFaces> {
       if (!isElement(node) || node.localName !== 'font') continue;
       const script = node.attributes.find((a) => a.localName === 'script')?.value;
       const face = node.attributes.find((a) => a.localName === 'typeface')?.value;
-      if (script && /^[A-Z][a-z]{3}$/.test(script) && face && FONT_NAME.test(face))
+      if (script && /^[A-Z][a-z]{3}$/.test(script) && face && validFontFamilyReference(face))
         faces[script] = face;
     }
     if (Object.keys(faces).length) result[key] = Object.freeze(faces);

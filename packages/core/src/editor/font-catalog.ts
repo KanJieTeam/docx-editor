@@ -1,3 +1,4 @@
+import { fontFamilyAlternatives } from '../store/package/font-family-reference.ts';
 import { supportedFontFamilies } from '../layout/supported-font-families.ts';
 // Selectable families are independent of the document and loaded font bytes.
 // The standard choices match the standalone FontPicker. Configured and document
@@ -37,13 +38,6 @@ const STANDARD_FONT_FAMILIES: readonly string[] = Object.freeze([
 ]);
 
 /**
- * The same family-name bound `document-catalog.ts` and the paint sink enforce: kept in
- * sync by value because each module re-validates at its own boundary (see the note
- * there). Every name this module emits can end up in a CSS `font-family` declaration.
- */
-const FONT_NAME = /^[\p{L}\p{N}\p{M} \-.+_]{1,64}$/u;
-
-/**
  * Every family a font picker can offer: standard choices plus the configured catalog
  * (default face, substitution Word-names, host-registered sources) merged with the document's
  * declared families. Deduplicated case-insensitively — configuration first, so its
@@ -57,9 +51,10 @@ export function availableFontFamilies(
 ): readonly string[] {
   const byFold = new Map<string, string>();
   const add = (family: string | undefined): void => {
-    if (family === undefined || !FONT_NAME.test(family)) return;
-    const fold = family.toLowerCase();
-    if (!byFold.has(fold)) byFold.set(fold, family);
+    for (const name of fontFamilyAlternatives(family)) {
+      const fold = name.toLowerCase();
+      if (!byFold.has(fold)) byFold.set(fold, name);
+    }
   };
 
   add(configuredDefaultFontFamily(configuration));

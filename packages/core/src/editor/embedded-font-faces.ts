@@ -1,3 +1,4 @@
+import { fontFamilyAlternatives } from '../store/package/font-family-reference.ts';
 // Paint-side twin of embedded-font auto-wiring, done safely (issue #78).
 //
 // Measurement never touches the browser's font machinery: HarfBuzz shapes the admitted
@@ -166,7 +167,16 @@ export async function registerEmbeddedFontFaces(
   let disposed = false;
   return {
     installed: added.length,
-    alias: (family) => (disposed ? undefined : aliases.get(familyKey(family))),
+    alias: (family) => {
+      if (disposed) return undefined;
+      const exact = aliases.get(familyKey(family));
+      if (exact !== undefined) return exact;
+      for (const name of fontFamilyAlternatives(family)) {
+        const alias = aliases.get(familyKey(name));
+        if (alias !== undefined) return alias;
+      }
+      return undefined;
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

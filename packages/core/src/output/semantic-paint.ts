@@ -1,3 +1,5 @@
+import { validFontFamilyReference } from '../store/package/font-family-reference.ts';
+import { fontFamilyStack } from '../layout/font-family-stack.ts';
 import { applyRevisionPresentation } from './semantic-paint-revisions.ts';
 import type { ResolvedRevisionMarkup } from '../contracts/revision-markup.ts';
 import { appendEmptyLineAnchor } from './semantic-paint-empty-line.ts';
@@ -470,12 +472,6 @@ function appendAnchoredDrawingsForRecords(
 }
 
 const HEX = /^[0-9A-Fa-f]{6}$/;
-// Unicode-aware: `\w` is ASCII-only, so every CJK family name — 游ゴシック, 맑은 고딕 — failed
-// validation and the run silently fell back to the inherited face, losing the typeface of an
-// entire document. Quote, backslash, semicolon, comma and control characters stay excluded,
-// which is what keeps the quoted CSS string unbreakable.
-const FONT_NAME = /^[\p{L}\p{N}\p{M} \-.+_]{1,64}$/u;
-
 /** ST_Underline to the nearest CSS decoration style. */
 // MAPS, not object literals. These are indexed by a value that came out of a document, so
 // an object literal would answer `constructor` and `__proto__` with something inherited —
@@ -635,23 +631,16 @@ function applyRunFaceStyle(element: HTMLElement, style: ResolvedRunStyle, ctx: P
   // resolved family paints in the surface's default face — the face it was MEASURED in —
   // never in whatever font the page happens to inherit.
   const family =
-    style.fontFamily && FONT_NAME.test(style.fontFamily)
-      ? style.fontFamily
-      : ctx.defaultFontFamily && FONT_NAME.test(ctx.defaultFontFamily)
-        ? ctx.defaultFontFamily
-        : null;
+    validFontFamilyReference(style.fontFamily ?? undefined) ??
+    validFontFamilyReference(ctx.defaultFontFamily);
   if (family) {
     // An alias names bytes the host registered for THIS document under a family a file
     // cannot collide with. It leads, with the declared family behind it: document text
     // gets the embedded glyphs while the page-global CSS font namespace keeps its own
-    // meaning for the declared name. `FONT_NAME` gates the declared family; the alias is
+    // meaning for the declared name. The stack validates every name; each alias is
     // engine-minted, never file-derived.
-    const alias = ctx.fontAlias?.(family);
-    // The measurer's fallback stack trails the family so an unresolvable name falls
-    // back to the SAME face measurement fell back to — not to the inherited font.
-    css.fontFamily = alias
-      ? `"${alias}", "${family}", ${DEFAULT_CANVAS_FONT_STACK}`
-      : `"${family}", ${DEFAULT_CANVAS_FONT_STACK}`;
+    const stack = fontFamilyStack(family, ctx.fontAlias);
+    css.fontFamily = `${stack}, ${DEFAULT_CANVAS_FONT_STACK}`;
   }
   if (style.color && HEX.test(style.color)) css.color = `#${style.color}`;
   const highlight = style.highlight ? HIGHLIGHT_COLOR_HEX.get(style.highlight) : undefined;

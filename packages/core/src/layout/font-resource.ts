@@ -1,3 +1,4 @@
+import { fontFamilyAlternatives } from '../store/package/font-family-reference.ts';
 // The implementation lives in the store lane (`store/package/sha256.ts`), where both
 // byte-fingerprinting trust boundaries sit; this import + re-export keeps the layout entry
 // point and every shaping consumer unchanged. layout → store is a lane-legal edge.
@@ -696,11 +697,23 @@ export const createFontResourceSnapshot = (
     );
   }
 
+  const configuredFamilies = new Set([
+    ...sampledResources.map((resource) => resource.request.family.trim().toLowerCase()),
+    ...sampledSubstitutions.map((substitution) => substitution.from.family.trim().toLowerCase()),
+  ]);
+
   const resolve = (requested: FontRequest): ResolvedFont | FontResolutionError => {
     const safeRequested = freezeRequest(requested);
-    const requestedKey = fontRequestKey(safeRequested);
-    const substituted = substitutions.get(requestedKey);
-    const resolvedRequest = substituted?.to ?? safeRequested;
+    let selected = safeRequested;
+    const exactKey = fontRequestKey(safeRequested);
+    if (!resources.has(exactKey) && !substitutions.has(exactKey)) {
+      const family = fontFamilyAlternatives(safeRequested.family).find((name) =>
+        configuredFamilies.has(name.toLowerCase())
+      );
+      if (family) selected = freezeRequest({ ...safeRequested, family });
+    }
+    const substituted = substitutions.get(fontRequestKey(selected));
+    const resolvedRequest = substituted?.to ?? selected;
     const stored = resources.get(fontRequestKey(resolvedRequest));
     if (!stored) return new FontResolutionError('missing', safeRequested);
     if (stored.kind === 'forbidden') {
@@ -723,7 +736,7 @@ export const createFontResourceSnapshot = (
         actualHash: stored.actualHash,
       });
     }
-    if (!substituted) return stored.font;
+    if (!substituted && selected === safeRequested) return stored.font;
     return createOwnedResolvedFont(
       {
         request: stored.font.request,
@@ -736,8 +749,8 @@ export const createFontResourceSnapshot = (
       trustedFontTableTags(stored.font),
       {
         requested: safeRequested,
-        resolved: substituted.to,
-        ...(substituted.lineMetrics ? { lineMetrics: substituted.lineMetrics } : {}),
+        resolved: resolvedRequest,
+        ...(substituted?.lineMetrics ? { lineMetrics: substituted.lineMetrics } : {}),
       }
     );
   };

@@ -1,3 +1,4 @@
+import { validFontFamilyReference } from './font-family-reference.ts';
 // Effective run defaults: what a run inherits when it carries no direct `w:rFonts`/`w:sz`.
 //
 // The layout resolves DIRECT run formatting only, so a span whose font or size comes from
@@ -81,7 +82,7 @@ export function familyFromRFonts(
   if (themed !== null) return themed;
   const direct = attributeValue(rFonts, 'ascii') ?? attributeValue(rFonts, 'hAnsi');
   if (direct === undefined) return null;
-  return FONT_NAME.test(direct) ? direct : null;
+  return validFontFamilyReference(direct);
 }
 
 /** The independently resolved East Asian family named by an `w:rFonts` element. */
@@ -93,7 +94,7 @@ export function eastAsiaFamilyFromRFonts(
   if (themed !== null) return themed;
   const direct = attributeValue(rFonts, 'eastAsia');
   if (direct === undefined) return null;
-  return FONT_NAME.test(direct) ? direct : null;
+  return validFontFamilyReference(direct);
 }
 
 /** A validated literal family name from another Word font-bearing attribute such as `w:sym`. */

@@ -1,3 +1,4 @@
+import { fontFamilyStack } from './font-family-stack.ts';
 import { isRunKerningEnabled } from './run-kerning.ts';
 // Browser/canvas-backed text measurement for the semantic layout lane.
 //
@@ -138,14 +139,6 @@ function createBoundedLruCache<K, V>(capacity: number): BoundedLruCache<K, V> {
 }
 
 /**
- * The same shape `semantic-paint.ts` enforces at the CSS sink (`FONT_NAME`).
- *
- * Kept in sync by value rather than import: layout must not depend on the output lane, and
- * the paint module re-validates at its own sink either way.
- */
-const FONT_NAME = /^[\p{L}\p{N}\p{M} \-.+_]{1,64}$/u;
-
-/**
  * The canvas text-metrics surface the editor injects.
  *
  * Structural subset of `CanvasRenderingContext2D` — declared here so the layout lane stays
@@ -275,14 +268,8 @@ export function tryCreateCanvasMeasurer(options: CanvasMeasurerOptions = {}): Te
     // shorthand, so a name that could close the string is refused rather than escaped.
     // The alias is engine-minted, never file-derived, and is validated on the same rule
     // so one code path cannot become the hole the other closed.
-    const declared = style.fontFamily && FONT_NAME.test(style.fontFamily) ? style.fontFamily : null;
-    const aliased = declared ? fontAlias?.(declared) : undefined;
-    const alias = aliased && FONT_NAME.test(aliased) ? aliased : null;
-    const family = declared
-      ? alias
-        ? `"${alias}", "${declared}", ${fallbackFamily}`
-        : `"${declared}", ${fallbackFamily}`
-      : fallbackFamily;
+    const stack = fontFamilyStack(style.fontFamily, fontAlias);
+    const family = stack ? `${stack}, ${fallbackFamily}` : fallbackFamily;
     const weight = style.bold ? 'bold' : 'normal';
     const slant = style.italic ? 'italic' : 'normal';
     const variant = style.smallCaps ? 'small-caps' : 'normal';

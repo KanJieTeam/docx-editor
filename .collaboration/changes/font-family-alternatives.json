@@ -1,0 +1,14 @@
+{
+  "impact": "compatible",
+  "fields": [],
+  "before": "Font alternatives fail source validation and use fallback metrics.",
+  "after": "Validated alternatives select the first configured family without source changes.",
+  "reason": "Canonical XML, operation schemas, and collaboration version fields remain unchanged.",
+  "tests": [
+    "packages/core/src/layout/__tests__/font-family-alternatives.test.ts",
+    "packages/core/src/store/package/__tests__/font-family-reference-boundary.test.ts",
+    "packages/core/src/layout/__tests__/font-family-alternatives-measurement.test.ts"
+  ],
+  "changeset": "font-family-alternatives",
+  "migration": null
+}

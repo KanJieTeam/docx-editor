@@ -1,3 +1,4 @@
+import { fontFamilyAlternatives } from '../store/package/font-family-reference.ts';
 // Document-derived catalogs: the fonts a document uses and the styles it defines.
 //
 // Both derivations read the CANONICAL TREES — the current main part, the immutable
@@ -143,9 +144,10 @@ function subtreeFontsOf(
   }
   const byFold = new Map<string, string>();
   const add = (family: string | null | undefined): void => {
-    if (!family || !FONT_NAME.test(family)) return;
-    const fold = family.toLowerCase();
-    if (!byFold.has(fold)) byFold.set(fold, family);
+    for (const name of fontFamilyAlternatives(family)) {
+      const fold = name.toLowerCase();
+      if (!byFold.has(fold)) byFold.set(fold, name);
+    }
   };
   // Iterative walk: the parse already bounds tree depth, but this derivation must not
   // be the one place a deep generic subtree can overflow the call stack. Children are
