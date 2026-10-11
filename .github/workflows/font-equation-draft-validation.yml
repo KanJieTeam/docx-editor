@@ -19,7 +19,7 @@ jobs:
       matrix:
         include:
           - id: signed-collection
-            commit: 972e7dadf1c65b0293c307308e84d2d11053c627
+            commit: 039db6b9d20a9eae3d98ac89472597bd95b285bf
             test-files: >-
               ./packages/core/src/editor/__tests__/embedded-font-faces.test.ts
               ./packages/core/src/editor/__tests__/signed-collection-registration.test.ts
@@ -183,7 +183,7 @@ jobs:
       matrix:
         include:
           - id: signed-collection
-            commit: 972e7dadf1c65b0293c307308e84d2d11053c627
+            commit: 039db6b9d20a9eae3d98ac89472597bd95b285bf
             test-files: >-
               ./packages/core/src/editor/__tests__/embedded-font-faces.test.ts
               ./packages/core/src/editor/__tests__/signed-collection-registration.test.ts
