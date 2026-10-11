@@ -28,15 +28,18 @@ const formatted =
   '<w:rFonts w:ascii="Public Math" w:hAnsi="Public Math"/><w:b/>' +
   '</w:rPr><m:t>Q</m:t></m:r></m:e><m:sub><m:r><m:t>4</m:t></m:r></m:sub>' +
   '<m:sup><m:r><m:rPr><m:lit/></m:rPr><m:t>al</m:t></m:r></m:sup></m:sSubSup>';
-const barred = '<m:bar><m:barPr><m:pos m:val="top"/></m:barPr>' +
-  '<m:e><m:r><m:t>N</m:t></m:r></m:e></m:bar>';
+const barred =
+  '<m:bar><m:barPr><m:pos m:val="top"/></m:barPr>' + '<m:e><m:r><m:t>N</m:t></m:r></m:e></m:bar>';
 
-for (const [name, source] of [['formatted script', formatted], ['bar', barred]] as const) {
+for (const [name, source] of [
+  ['formatted script', formatted],
+  ['bar', barred],
+] as const) {
   test(`two editors preserve ${name} through edits, undo, removal, and save`, async () => {
     const { createDocxEditor } = await import('@docx-editor.dev/core/editor');
     const bytes = zipDocument(
       `<w:p xmlns:m="${M}"><w:r><w:t>Left</w:t></w:r>` +
-      `<m:oMath>${source}</m:oMath><w:r><w:t>Right</w:t></w:r></w:p>`
+        `<m:oMath>${source}</m:oMath><w:r><w:t>Right</w:t></w:r></w:p>`
     );
     const leftDoc = new Y.Doc();
     const rightDoc = new Y.Doc();
@@ -44,14 +47,19 @@ for (const [name, source] of [['formatted script', formatted], ['bar', barred]] 
     const rightAwareness = new Awareness(rightDoc);
     const documentId = `equation-source-${name}`;
     const leftRoom = await createDocumentCollaboration({
-      ydoc: leftDoc, awareness: leftAwareness, documentId,
+      ydoc: leftDoc,
+      awareness: leftAwareness,
+      documentId,
       identity: { actorId: 'alice', name: 'Alice' },
       bootstrap: { kind: 'create', document: bytes },
     });
     Y.applyUpdate(rightDoc, Y.encodeStateAsUpdate(leftDoc), 'relay');
     const rightRoom = await createDocumentCollaboration({
-      ydoc: rightDoc, awareness: rightAwareness, documentId,
-      identity: { actorId: 'bob', name: 'Bob' }, bootstrap: { kind: 'join', timeoutMs: 5000 },
+      ydoc: rightDoc,
+      awareness: rightAwareness,
+      documentId,
+      identity: { actorId: 'bob', name: 'Bob' },
+      bootstrap: { kind: 'join', timeoutMs: 5000 },
     });
     const toRight = (update: Uint8Array, origin: unknown) => {
       if (origin !== 'relay') Y.applyUpdate(rightDoc, update, 'relay');
@@ -64,10 +72,16 @@ for (const [name, source] of [['formatted script', formatted], ['bar', barred]] 
     const leftContainer = document.createElement('div');
     const rightContainer = document.createElement('div');
     document.body.append(leftContainer, rightContainer);
-    const left = createDocxEditor({ container: leftContainer, document: leftRoom.document,
-      modules: [collaborationModule({ session: leftRoom.session })] });
-    const right = createDocxEditor({ container: rightContainer, document: rightRoom.document,
-      modules: [collaborationModule({ session: rightRoom.session })] });
+    const left = createDocxEditor({
+      container: leftContainer,
+      document: leftRoom.document,
+      modules: [collaborationModule({ session: leftRoom.session })],
+    });
+    const right = createDocxEditor({
+      container: rightContainer,
+      document: rightRoom.document,
+      modules: [collaborationModule({ session: rightRoom.session })],
+    });
     const equationXml = (saved: Uint8Array | ArrayBuffer): string[] => {
       const read = readOoxmlPackage(saved instanceof Uint8Array ? saved : new Uint8Array(saved));
       if (!read.ok) throw new Error(read.reason);
@@ -106,8 +120,11 @@ for (const [name, source] of [['formatted script', formatted], ['bar', barred]] 
       const leftPart = readOoxmlPackage(new Uint8Array(await left.save()));
       const rightPart = readOoxmlPackage(new Uint8Array(await right.save()));
       if (!leftPart.ok || !rightPart.ok) throw new Error('Save and reopen failed');
-      expect(serializeOoxmlPart(leftPart.package.parts.get(leftPart.package.mainDocumentPart)!))
-        .toEqual(serializeOoxmlPart(rightPart.package.parts.get(rightPart.package.mainDocumentPart)!));
+      expect(
+        serializeOoxmlPart(leftPart.package.parts.get(leftPart.package.mainDocumentPart)!)
+      ).toEqual(
+        serializeOoxmlPart(rightPart.package.parts.get(rightPart.package.mainDocumentPart)!)
+      );
       expect(right.surface!.equations.removeEquation(equation.id)).toBe(true);
       expect(equationXml(await left.save())).toEqual([]);
       expect(equationXml(await right.save())).toEqual([]);
@@ -117,11 +134,16 @@ for (const [name, source] of [['formatted script', formatted], ['bar', barred]] 
     } finally {
       leftDoc.off('update', toRight);
       rightDoc.off('update', toLeft);
-      left.destroy(); right.destroy();
-      leftContainer.remove(); rightContainer.remove();
-      leftRoom.destroy(); rightRoom.destroy();
-      leftAwareness.destroy(); rightAwareness.destroy();
-      leftDoc.destroy(); rightDoc.destroy();
+      left.destroy();
+      right.destroy();
+      leftContainer.remove();
+      rightContainer.remove();
+      leftRoom.destroy();
+      rightRoom.destroy();
+      leftAwareness.destroy();
+      rightAwareness.destroy();
+      leftDoc.destroy();
+      rightDoc.destroy();
     }
   });
 }
