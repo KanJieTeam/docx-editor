@@ -1312,6 +1312,10 @@ export interface DocxEditorConfig {
     modules?: readonly EditorModule[];
     // (undocumented)
     onFontError?: (error: EditorFontError) => void;
+    readonly renderOnlyCollectionPolicy?: {
+        readonly allowUnsignedDerivedFaces: boolean;
+        readonly requireSignedFonts: boolean;
+    };
     reviewDisplayMode?: ReviewDisplayMode;
     revisionMarkup?: RevisionMarkupOptions;
     revisionStyles?: RevisionStyles;
