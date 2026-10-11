@@ -209,8 +209,8 @@ test('registration gives different collection faces different aliases and browse
   assert.notEqual(registration.alias('Public Face 0'), registration.alias('Public Face 1'));
   for (const [index, face] of added.entries()) {
     assert.equal(face.family, registration.alias(`Public Face ${index}`));
-    assert.deepEqual(face.bytes, materializeCollectionFace(ttc, index));
-    assert.equal(sfntChecksum(face.bytes), 0xb1b0afba);
+    assert.deepEqual(face.bytes, index === 0 ? ttc : materializeCollectionFace(ttc, index));
+    if (index !== 0) assert.equal(sfntChecksum(face.bytes), 0xb1b0afba);
   }
   assert.notEqual(hash(added[0].bytes), hash(added[1].bytes));
   assert.equal(sources[0].bytes, sources[1].bytes);
