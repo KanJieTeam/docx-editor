@@ -13,7 +13,7 @@ export interface EquationRunFormat {
   readonly normalText?: boolean;
 }
 
-function element(node: OoxmlNode, namespace: string, localName: string): node is OoxmlElement {
+function element(node: OoxmlNode, namespace: string, localName: string): boolean {
   return (
     node.kind !== 'textValue' && node.namespaceUri === namespace && node.localName === localName
   );
@@ -41,11 +41,11 @@ export function equationRunFormat(run: OoxmlElement): EquationRunFormat | null {
   } = {};
   const seen = new Set<string>();
   for (const child of run.children) {
+    if (child.kind === 'textValue') return null;
     if (element(child, MATH, 't')) continue;
     const word = element(child, WML_NAMESPACE_URI, 'rPr');
     const math = element(child, MATH, 'rPr');
-    if ((!word && !math) || child.kind === 'textValue' || child.attributes.length !== 0)
-      return null;
+    if ((!word && !math) || child.attributes.length !== 0) return null;
     const namespace = word ? WML_NAMESPACE_URI : MATH;
     if (seen.has(namespace)) return null;
     seen.add(namespace);
