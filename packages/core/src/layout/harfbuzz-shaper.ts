@@ -21,6 +21,7 @@ import {
   type VersionedShapingLibrary,
 } from './shaped-run.ts';
 import { ShapeCacheKeys } from './shape-cache-key.ts';
+import { punctuationKerningRanges } from './punctuation-kerning.ts';
 import {
   harfBuzzUnsupportedRuntimeDiagnostic,
   harfBuzzVersionMismatchDiagnostic,
@@ -787,6 +788,9 @@ class ProductionHarfBuzzTextShaper implements HarfBuzzTextShaper {
       const features = Object.entries(environment.features).map(
         ([tag, value]) => new this.#harfBuzz.Feature(tag, value)
       );
+      if (input.noPunctuationKerning === true)
+        for (const range of punctuationKerningRanges(text, before.length))
+          features.push(new this.#harfBuzz.Feature('kern', 0, range.start, range.end));
       this.#instrumentation?.onShapeCall?.();
       this.#harfBuzz.shape(font, buffer, features);
       const glyphCount = buffer.getLength();

@@ -68,6 +68,10 @@ The matrix reports editing, rendering, and round-trip support separately. A feat
 
 Raised and lowered text contributes to automatic and minimum line heights. This includes inherited `w:position` values combined with subscript or superscript. Exact line spacing retains its authored height.
 
+#### Punctuation kerning
+
+Direct `w:noPunctuationKerning` disables font kerning at punctuation graphemes. Letter kerning remains enabled. The setting applies only when `w:kern` enables kerning at the resolved font size. A false or absent flag preserves normal kerning. Source text, field ranges, and authored spacing remain unchanged. Font-specific CJK punctuation width adjustments remain partial.
+
 ### Paragraphs and styles
 
 <FeatureMatrix category="paragraphs" />

@@ -89,6 +89,8 @@ export interface ShapeInput {
    * {@link MAX_SHAPING_CONTEXT} UTF-16 units each; glyphs and clusters cover `text` alone.
    */
   readonly context?: ShapingContext;
+  /** Disable only punctuation kern features while preserving the complete shaped run. */
+  readonly noPunctuationKerning?: true;
 }
 
 /** Pre- and post-context for one shaping call. See {@link ShapeInput.context}. @public */

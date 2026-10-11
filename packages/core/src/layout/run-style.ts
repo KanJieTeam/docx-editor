@@ -85,6 +85,8 @@ export interface ResolvedRunStyle {
     /** Resolved w:rtl context; absent when authored Unicode controls govern the paragraph. */
     readonly runDirection?: 'ltr' | 'rtl';
     readonly wordSpacingPt?: number;
+    /** Layout-only document policy; never a canonical run property. */
+    readonly noPunctuationKerning?: true;
     /** Neighbouring text a joining script reads across a formatting-run boundary. */
     readonly context?: import('./shaped-run.ts').ShapingContext;
   };
@@ -544,6 +546,7 @@ export function runStylesEqual(a: ResolvedRunStyle, b: ResolvedRunStyle): boolea
     a.shaping?.baseLevel === b.shaping?.baseLevel &&
     a.shaping?.runDirection === b.shaping?.runDirection &&
     a.shaping?.wordSpacingPt === b.shaping?.wordSpacingPt &&
+    a.shaping?.noPunctuationKerning === b.shaping?.noPunctuationKerning &&
     a.shaping?.context?.before === b.shaping?.context?.before &&
     a.shaping?.context?.after === b.shaping?.context?.after &&
     a.fontFamily === b.fontFamily &&

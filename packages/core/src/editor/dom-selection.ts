@@ -364,6 +364,13 @@ export function positionFromDomPoint(
         offset: offset > 0 ? identity.end : identity.start,
       };
     }
+    const found = spanFor(element);
+    if (found) {
+      return {
+        paragraphId: found.identity.paragraphId,
+        offset: offsetWithin(found.identity, textOffsetWithin(found.element, element, offset)),
+      };
+    }
     const resolved = positionFromChildIndex(element, offset);
     if (resolved) return resolved;
     // An EMPTY line still has a caret position: the paragraph it belongs to, at its start.
@@ -378,7 +385,7 @@ export function positionFromDomPoint(
   // one offset it occupies.
   return {
     paragraphId: found.identity.paragraphId,
-    offset: offsetWithin(found.identity, offset),
+    offset: offsetWithin(found.identity, textOffsetWithin(found.element, node, offset)),
   };
 }
 
@@ -504,10 +511,9 @@ function domPointFromPositionIn(
   for (const span of spans) {
     const identity = identityOf(span);
     if (!identity || identity.paragraphId !== position.paragraphId) continue;
-    const text = textNodeOf(span);
     const length = span.textContent?.length ?? 0;
     const end = identity.end;
-    if (!text) continue;
+    if (!textPointOf(span, 0)) continue;
     // Exact field boundaries resolved above. Cache text has no editable positions.
     // A field-only paragraph is not empty: an offset beyond its source range must fail,
     // rather than falling back to the paragraph start.
@@ -525,10 +531,8 @@ function domPointFromPositionIn(
       // model range wherever a field is: one model unit can be 24 glyphs, and asking a text
       // node for character 1 of 24 would put the native selection inside a word the model
       // has no position inside.
-      const point = {
-        node: text,
-        offset: Math.min(position.offset - identity.start, length),
-      };
+      const point = textPointOf(span, Math.min(position.offset - identity.start, length));
+      if (!point) continue;
       if (position.offset < end) return point;
       fallback = point;
     }
@@ -578,17 +582,33 @@ function domPointFromPositionIn(
 }
 
 /**
- * The text node a span's characters actually live in.
+ * The text point for a character offset across all native shaping segments.
  *
  * A run that is BOTH underlined and struck mounts its text under nested decoration spans, so
  * the run element's first child is an element rather than the text. Handing that to
  * `setBaseAndExtent` with a character offset turns the offset into a CHILD INDEX, and the
  * browser rejects the whole write — no caret and no highlight anywhere inside such a run.
+ * Punctuation kerning can add sibling text segments. Their offsets accumulate in source order.
  */
-function textNodeOf(span: Element): Node | null {
-  let node: Node | null = span.firstChild;
-  while (node && node.nodeType === Node.ELEMENT_NODE) node = node.firstChild;
-  return node && node.nodeType === Node.TEXT_NODE ? node : null;
+function textPointOf(span: Element, offset: number): { node: Node; offset: number } | null {
+  const walker = span.ownerDocument.createTreeWalker(span, 4 /* SHOW_TEXT */);
+  let remaining = offset;
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const length = node.textContent?.length ?? 0;
+    if (remaining <= length) return { node, offset: remaining };
+    remaining -= length;
+  }
+  return null;
+}
+
+/** Count all preceding text segments without deriving positions from painted geometry. */
+function textOffsetWithin(span: Element, node: Node, offset: number): number {
+  const range = span.ownerDocument.createRange();
+  const limit = node.nodeType === 3 ? (node.textContent?.length ?? 0) : node.childNodes.length;
+  range.setStart(span, 0);
+  range.setEnd(node, Math.max(0, Math.min(offset, limit)));
+  return range.toString().length;
 }
 
 /** The painted line belonging to a paragraph, whether or not it holds any runs. */

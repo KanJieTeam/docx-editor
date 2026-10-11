@@ -1,4 +1,5 @@
 import { isRunKerningEnabled } from './run-kerning.ts';
+import { punctuationKerningSegments } from './punctuation-kerning.ts';
 // Browser/canvas-backed text measurement for the semantic layout lane.
 //
 // Layout itself stays DOM-free: this module is an optional adapter of the `TextMeasurer`
@@ -298,12 +299,18 @@ export function tryCreateCanvasMeasurer(options: CanvasMeasurerOptions = {}): Te
     measure(text, style) {
       if (text.length === 0) return 0;
       const font = fontOf(style);
-      const key = `${font}\0${isRunKerningEnabled(style)}\0${text}`;
+      const key = `${font}\0${isRunKerningEnabled(style)}\0${style.shaping?.noPunctuationKerning === true}\0${text}`;
       const cached = widthCache.get(key);
       if (cached !== undefined) return scaled(cached, text, style);
       ctx.font = font;
       if ('fontKerning' in ctx) ctx.fontKerning = isRunKerningEnabled(style) ? 'normal' : 'none';
-      const width = ctx.measureText(text).width;
+      const width =
+        style.shaping?.noPunctuationKerning && isRunKerningEnabled(style)
+          ? punctuationKerningSegments(text).reduce((sum, segment) => {
+              if ('fontKerning' in ctx) ctx.fontKerning = segment.punctuation ? 'none' : 'normal';
+              return sum + ctx.measureText(segment.text).width;
+            }, 0)
+          : ctx.measureText(text).width;
       widthCache.set(key, width);
       return scaled(width, text, style);
     },

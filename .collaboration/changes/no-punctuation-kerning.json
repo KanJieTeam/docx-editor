@@ -1,0 +1,16 @@
+{
+  "impact": "no-impact",
+  "fields": [],
+  "before": "Layout ignores the direct document punctuation kerning setting.",
+  "after": "Layout disables font kerning at punctuation graphemes when the document setting requires it. Letter kerning remains enabled.",
+  "reason": "The change affects layout and paint. Canonical trees, operation fields, and collaboration messages remain unchanged.",
+  "tests": [
+    "packages/core/src/layout/__tests__/no-punctuation-kerning.test.ts",
+    "packages/core/src/layout/__tests__/punctuation-kerning-context.test.ts",
+    "packages/core/src/output/__tests__/no-punctuation-kerning-paint.test.ts",
+    "packages/core/src/editor/__tests__/no-punctuation-kerning-selection.test.ts",
+    "packages/core/src/editor/__tests__/no-punctuation-kerning-save.test.ts"
+  ],
+  "changeset": "no-punctuation-kerning",
+  "migration": null
+}

@@ -310,7 +310,7 @@ export function createShapedMeasurer(
               : [style.shaping.script, style.shaping.direction, text]
           )}`
         : `0:${text}`;
-      const widthKey = `${isRunKerningEnabled(style) ? 1 : 0}:${runLigatureFeatureKey(style)}:${shapingKey}`;
+      const widthKey = `${isRunKerningEnabled(style) ? 1 : 0}:${runLigatureFeatureKey(style)}:${style.shaping?.noPunctuationKerning === true ? 1 : 0}:${shapingKey}`;
       let advance = byText.get(widthKey);
       if (advance === undefined) {
         let total = 0;

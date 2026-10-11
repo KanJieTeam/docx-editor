@@ -40,7 +40,7 @@ export class ShapeCacheKeys {
       id = this.#ids.size;
       this.#ids.set(fingerprint, id);
     }
-    const base = `${id}\u0000${typed(input.fontSizeHalfPoints)}\u0000${typed(input.bidiLevel)}\u0000`;
+    const base = `${id}\u0000${typed(input.fontSizeHalfPoints)}\u0000${typed(input.bidiLevel)}\u0000${input.noPunctuationKerning === true ? 1 : 0}\u0000`;
     const context = input.context;
     // One tag character says which form follows, so no text can pose as a context key.
     if (!context || (context.before === '' && context.after === '')) return `${base}-${input.text}`;

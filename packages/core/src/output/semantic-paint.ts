@@ -5,6 +5,7 @@ import { paintListMarkerPicture } from './semantic-paint-list-marker-picture.ts'
 import { paintNoteSeparatorSpan } from './semantic-paint-note-rule.ts';
 import { paintRunBorders } from './semantic-paint-run-borders.ts';
 import { isRunKerningEnabled } from '../layout/run-kerning.ts';
+import { punctuationKerningSegments } from '../layout/punctuation-kerning.ts';
 import { paintLegacyDropdown } from './semantic-paint-legacy-dropdown.ts';
 import { paintLegacyCheckbox } from './semantic-paint-legacy-checkbox.ts';
 import { paragraphIsRtl } from '../layout/rtl-paragraph.ts';
@@ -726,7 +727,14 @@ function mountRunText(
     applyStrikeDecoration(run.style, strike, scale);
   }
 
-  host.textContent = text; // SAFE: textContent, never innerHTML
+  if (style.shaping?.noPunctuationKerning && isRunKerningEnabled(style)) {
+    for (const segment of punctuationKerningSegments(text)) {
+      const child = document.createElement('span');
+      child.style.fontKerning = segment.punctuation ? 'none' : 'normal';
+      child.textContent = segment.text;
+      host.append(child);
+    }
+  } else host.textContent = text; // SAFE: textContent, never innerHTML
 }
 
 function positioned(

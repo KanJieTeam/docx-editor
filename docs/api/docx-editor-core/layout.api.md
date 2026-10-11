@@ -366,6 +366,7 @@ export interface CjkTypographySettings {
     readonly after: Readonly<Record<string, string>>;
     readonly before: Readonly<Record<string, string>>;
     readonly compression: 'doNotCompress' | 'compressPunctuation' | 'compressPunctuationAndJapaneseKana';
+    readonly noPunctuationKerning?: true;
     readonly strict: boolean;
 }
 
@@ -3033,6 +3034,7 @@ export interface ResolvedRunStyle {
         readonly context?: ShapingContext;
         readonly direction: 'ltr' | 'rtl';
         readonly level: number;
+        readonly noPunctuationKerning?: true;
         readonly runDirection?: 'ltr' | 'rtl';
         readonly script: string;
         readonly wordSpacingPt?: number;
@@ -4056,6 +4058,7 @@ export interface ShapeInput {
     readonly environment: ShapingEnvironment;
     // (undocumented)
     readonly fontSizeHalfPoints: number;
+    readonly noPunctuationKerning?: true;
     // (undocumented)
     readonly text: string;
 }
