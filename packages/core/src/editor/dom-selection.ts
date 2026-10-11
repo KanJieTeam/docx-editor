@@ -473,6 +473,20 @@ function fieldBoundaryPoint(
     }
     if (identity.end === position.offset) ending = span;
   }
+  if (ending) {
+    // Projected hard breaks share the field's atomic range but lack its paint marker.
+    // End after the last such span, so a clicked line keeps both its line and model offset.
+    const range = identityOf(ending)!;
+    for (const span of spans) {
+      const identity = identityOf(span);
+      if (
+        identity?.paragraphId === position.paragraphId &&
+        identity.start === range.start &&
+        identity.end === range.end
+      )
+        ending = span;
+    }
+  }
   return ending?.parentNode
     ? { node: ending.parentNode, offset: [...ending.parentNode.childNodes].indexOf(ending) + 1 }
     : null;
