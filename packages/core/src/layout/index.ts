@@ -397,6 +397,7 @@ export { createFixedMeasurer } from './fixed-measurer.ts';
 export type { CjkTypographySettings } from './cjk-typography.ts';
 export {
   layoutEquation,
+  type EquationBarGeometry,
   type EquationFractionGeometry,
   type EquationGeometry,
   type EquationNaryGeometry,
