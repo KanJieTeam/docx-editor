@@ -193,7 +193,7 @@ import {
 import { resolverGlyphFontFamilies } from './resolver-glyph-font-families.ts';
 import { tryCreateBrowserCanvasContext } from './browser-canvas-context.ts';
 import {
-  registerEmbeddedFontFaces,
+  registerEmbeddedFontFacesForHost,
   type EmbeddedFontFaceRegistration,
 } from './embedded-font-faces.ts';
 import {
@@ -1064,9 +1064,9 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
               };
         })
         .filter((source): source is NonNullable<typeof source> => source !== null);
-      const registration = await registerEmbeddedFontFaces(
+      const registration = await registerEmbeddedFontFacesForHost(
         admitted,
-        undefined,
+        config.renderOnlyCollectionPolicy,
         fonts.substitutions ?? []
       );
       if (destroyed || seq !== loadSeq) {

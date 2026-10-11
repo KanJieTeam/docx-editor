@@ -20,6 +20,10 @@
 import type { FontSource, FontSourceSubstitution } from '../contracts/editor.ts';
 import { boundedStructuralFontValidator } from '../layout/font-resource.ts';
 import { materializeCollectionFace } from './font-collection-face.ts';
+import {
+  materializeRenderOnlyCollectionFace,
+  type RenderOnlyCollectionPolicy,
+} from './render-only-collection-face.ts';
 
 /** The slice of `FontFace` this module needs; injectable for tests. */
 export interface FontFaceLike {
@@ -33,6 +37,8 @@ export interface FontFaceSetLike {
 }
 
 export interface EmbeddedFontFaceEnvironment {
+  /** Trusted host policy. Omit this to retain signed nonzero-face refusal. */
+  readonly renderOnlyCollectionPolicy?: RenderOnlyCollectionPolicy | undefined;
   readonly fontSet?: FontFaceSetLike | undefined;
   readonly createFontFace?: (
     family: string,
@@ -93,6 +99,15 @@ function defaultEnvironment(): EmbeddedFontFaceEnvironment {
   };
 }
 
+/** Keep the editor's host policy separate from its default browser environment. */
+export function registerEmbeddedFontFacesForHost(
+  sources: readonly FontSource[],
+  renderOnlyCollectionPolicy: RenderOnlyCollectionPolicy | undefined,
+  substitutions: readonly FontSourceSubstitution[] = []
+): Promise<EmbeddedFontFaceRegistration> {
+  return registerEmbeddedFontFaces(sources, undefined, substitutions, renderOnlyCollectionPolicy);
+}
+
 /**
  * Register admitted faces under engine-minted aliases and return the lookup the painter
  * uses. Resolves after every face has either loaded into the set or failed; per-face
@@ -111,7 +126,10 @@ function defaultEnvironment(): EmbeddedFontFaceEnvironment {
 export async function registerEmbeddedFontFaces(
   sources: readonly FontSource[],
   environment: EmbeddedFontFaceEnvironment = defaultEnvironment(),
-  substitutions: readonly FontSourceSubstitution[] = []
+  substitutions: readonly FontSourceSubstitution[] = [],
+  renderOnlyCollectionPolicy:
+    | RenderOnlyCollectionPolicy
+    | undefined = environment.renderOnlyCollectionPolicy
 ): Promise<EmbeddedFontFaceRegistration> {
   const { fontSet, createFontFace } = environment;
   if (!fontSet || !createFontFace || sources.length === 0) return NO_REGISTRATION;
@@ -150,7 +168,14 @@ export async function registerEmbeddedFontFaces(
             // signature and all tables; only other faces require materialization.
             const browserBytes =
               isCollection && face.faceIndex !== 0
-                ? materializeCollectionFace(face.bytes, face.faceIndex)
+                ? renderOnlyCollectionPolicy?.allowUnsignedDerivedFaces === true &&
+                  renderOnlyCollectionPolicy.requireSignedFonts === false
+                  ? materializeRenderOnlyCollectionFace(
+                      face.bytes,
+                      face.faceIndex,
+                      renderOnlyCollectionPolicy
+                    ).bytes
+                  : materializeCollectionFace(face.bytes, face.faceIndex)
                 : face.bytes;
             if (!isCollection && face.faceIndex !== 0)
               throw new Error('Font face index requires a collection');

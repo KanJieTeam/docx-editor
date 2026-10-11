@@ -1,0 +1,15 @@
+{
+  "impact": "no-impact",
+  "fields": [],
+  "before": "Font registration refuses signed collection faces after the first face.",
+  "after": "An explicit trusted registration environment can request an unsigned rendering file. Default and signed-required environments retain their refusal.",
+  "reason": "The change affects local font registration. Canonical parts, shared operations, raw source hashes, and face indexes stay unchanged. Hosts choose the local policy through createDocxEditor. The policy is not sent through collaboration.",
+  "tests": [
+    "packages/core/src/editor/__tests__/render-only-collection-face.test.ts",
+    "packages/core/src/editor/__tests__/signed-collection-registration.test.ts",
+    "packages/core/src/editor/__tests__/embedded-font-faces.test.ts",
+    "packages/pro/src/collaboration/__tests__/render-only-collection-faces.test.ts"
+  ],
+  "changeset": "render-only-signed-collection-faces",
+  "migration": null
+}

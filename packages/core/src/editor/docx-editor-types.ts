@@ -80,6 +80,15 @@ export interface DocxEditorConfig {
    * requests — the engine never supplies one, so that stays your call.
    */
   fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
+  /**
+   * Trusted host opt-in for unsigned rendering files derived from signed collections.
+   * Omitted policies retain refusal for signed nonzero faces. This does not verify signatures.
+   * Documents cannot set this policy. It does not change admitted source bytes or shared state.
+   */
+  readonly renderOnlyCollectionPolicy?: {
+    readonly allowUnsignedDerivedFaces: boolean;
+    readonly requireSignedFonts: boolean;
+  };
   author?: string;
   /** BCP-47 locale for regional date input and generated labels; defaults to en-US. */
   locale?: string;
