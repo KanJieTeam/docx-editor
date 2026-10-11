@@ -26,7 +26,7 @@ jobs:
               ./packages/pro/src/collaboration/__tests__/render-only-collection-faces.test.ts
             expected-tests: 17
           - id: equation-source-format
-            commit: 7b3ef3ced624eed268804e77637487aae5f6f773
+            commit: 845555c4a1aaf3c05373f282dbb468f79a74f157
             test-files: >-
               ./packages/core/src/store/__tests__/omml-run-format.test.ts
               ./packages/core/src/store/__tests__/omml-typography-projection.test.ts
@@ -66,12 +66,6 @@ jobs:
           node --version > validation-evidence/node-version.txt
           bun --version > validation-evidence/bun-version.txt
           node node_modules/typescript7/bin/tsc --version > validation-evidence/type-version.txt
-      - name: Full source type check
-        id: type
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          bun run typecheck 2>&1 | tee validation-evidence/type.log
       - name: Full format check
         id: format
         continue-on-error: true
@@ -162,7 +156,6 @@ jobs:
       - name: Keep incomplete checks failing
         if: always()
         env:
-          TYPE: ${{ steps.type.outcome }}
           FORMAT: ${{ steps.format.outcome }}
           LINT: ${{ steps.lint.outcome }}
           PEER: ${{ steps.peer.outcome }}
@@ -172,7 +165,6 @@ jobs:
           SOURCE_GUARD: ${{ steps.source_guard.outcome }}
           FORMAT_WRITE: ${{ steps.format_write.outcome }}
         run: |
-          test "$TYPE" = success
           test "$FORMAT" = success
           test "$LINT" = success
           test "$PEER" = success
@@ -181,3 +173,101 @@ jobs:
           test "$API_EXTRACT" = success
           test "$SOURCE_GUARD" = success
           test "$FORMAT_WRITE" = success
+
+  validate-types:
+    needs: validate
+    if: always() && github.repository == 'KanJieTeam/docx-editor'
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - id: signed-collection
+            commit: 972e7dadf1c65b0293c307308e84d2d11053c627
+            test-files: >-
+              ./packages/core/src/editor/__tests__/embedded-font-faces.test.ts
+              ./packages/core/src/editor/__tests__/signed-collection-registration.test.ts
+              ./packages/pro/src/collaboration/__tests__/render-only-collection-faces.test.ts
+            expected-tests: 17
+          - id: equation-source-format
+            commit: 845555c4a1aaf3c05373f282dbb468f79a74f157
+            test-files: >-
+              ./packages/core/src/store/__tests__/omml-run-format.test.ts
+              ./packages/core/src/store/__tests__/omml-typography-projection.test.ts
+              ./packages/core/src/layout/__tests__/equation-run-format-layout.test.ts
+              ./packages/core/src/editor/__tests__/surface-equation-source-format.test.ts
+              ./packages/pro/src/collaboration/__tests__/document-equation-source-editors.test.ts
+            expected-tests: 33
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout the same reviewed feature commit
+        uses: actions/checkout@v7
+        with:
+          repository: KanJieTeam/docx-editor
+          ref: ${{ matrix.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install the full frozen dependency graph
+        run: bun install --frozen-lockfile
+      - name: Bind all original workspace type scripts
+        env:
+          EXPECTED_TYPE_PACKAGES: "[{\"path\":\"benchmarks/collaboration-server/package.json\",\"name\":\"docx-editor-benchmark-collaboration-server\",\"gitBlob\":\"f10dd5cbce171e2536531a0e6ab317c59e31503b\",\"sha256\":\"d6ebd8e2f11d4a62254a797ebd67f2ab6057e281b5be0136c932f1e71bd22099\",\"typecheck\":\"node ../../node_modules/typescript7/bin/tsc --noEmit -p .\"},{\"path\":\"examples/anchor-navigation/package.json\",\"name\":\"docx-editor-example-anchor-navigation\",\"gitBlob\":\"aa9730d5dd0ca838ceb49962062d9d5e71abca14\",\"sha256\":\"3cae0e7d09eec87daf48972b20d3135e44c55e4a949867d383dd05b7437a080b\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"examples/collaboration-hocuspocus/package.json\",\"name\":\"docx-editor-example-collaboration-hocuspocus\",\"gitBlob\":\"98f51055d7f9459fbcf95e016d80d56bccc9400b\",\"sha256\":\"c4965ea16a72cbf0da5d4e71e1e65b7f8f99824cff887906caa7cf4fc6dc4ceb\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"examples/collaboration/package.json\",\"name\":\"@docx-editor.dev/example-collaboration\",\"gitBlob\":\"a32462ba6d8dad8d7b5da59f8ab64c326f23dcdd\",\"sha256\":\"456ad7ab678c10cea79c7863e0c062f4818573dc70fca33a09f81e905628432e\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"examples/document-refresh/package.json\",\"name\":\"docx-editor-example-document-refresh\",\"gitBlob\":\"df7d136a2b40473bf4677ebbad44f8793a93b28f\",\"sha256\":\"8d942c5062dde9155b9426e568bcf0a1a2c6fa61082d8889a05aa7ca07ae3eed\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"examples/docx-to-markdown/package.json\",\"name\":\"docx-editor-example-docx-to-markdown\",\"gitBlob\":\"db3e96fc6e5508105275a3015309952bd9cad4fd\",\"sha256\":\"bacee6834f9c4adfe42529ca37db3456764009cbb2ffc926018f48245ef6c069\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"examples/docx-to-pdf/package.json\",\"name\":\"docx-editor-example-docx-to-pdf\",\"gitBlob\":\"00b674eedaf5d032d07952664057d7e5b9d170a3\",\"sha256\":\"de0d3c6ee298f83e84e77cdaefe7dea23b472a7ff8d640c0538501df52dae1ea\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"examples/editor-api-consumers/package.json\",\"name\":\"@docx-editor-examples/editor-api-consumers\",\"gitBlob\":\"ee93499a89ff7b8bc6484b138c84306428ff3c37\",\"sha256\":\"eac6e107f4edf6d8da3dcaf026844c7a75e6a23df71fc9277a83257c0353e33a\",\"typecheck\":\"tsc --noEmit -p tsconfig.json\"},{\"path\":\"examples/server-agent-review/package.json\",\"name\":\"docx-editor-example-server-agent-review\",\"gitBlob\":\"684b1860b10fcc19f66d8e49a0aa6e113ed24504\",\"sha256\":\"1279eef16a6e4be8d66aead83e645a08cc6349e15c4c25aa7caf14efebe1cb35\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"examples/write-agent/package.json\",\"name\":\"docx-editor-example-write-agent\",\"gitBlob\":\"0c88195ae54945eeec757aea0d02f69d99146641\",\"sha256\":\"95d70c777ad38064850d32cc2893be08d54515b9ac4eea1d73ddccff02fd004c\",\"typecheck\":\"node node_modules/typescript7/bin/tsc --noEmit\"},{\"path\":\"packages/core/package.json\",\"name\":\"@docx-editor.dev/core\",\"gitBlob\":\"95821f87f6d62f8d177effd5a8b1269d0f75ecca\",\"sha256\":\"83e8a2060ec5b71cc67b090f35e7880f84ef1f65198debbe36799d1e5402f636\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"packages/docx-to-markdown/package.json\",\"name\":\"@docx-editor.dev/docx-to-markdown\",\"gitBlob\":\"45d3d31c00dd9696570042e9a61afbf6c4eccf62\",\"sha256\":\"eaf35ed3afc22cbdef2c84851652b921c862474189443af9d86a4452aac33e89\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"packages/docx-to-pdf/package.json\",\"name\":\"@docx-editor.dev/docx-to-pdf\",\"gitBlob\":\"73d21bc304bde6358c486bf1f1f4d1fddb6b7921\",\"sha256\":\"9a5354ce8f806b08acb69bc39a0bfa7db0e118c377f19e40985adfa54dd42092\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"packages/editor-api/package.json\",\"name\":\"@docx-editor.dev/editor-api\",\"gitBlob\":\"10ff1b0aaffd91a68a789eb543acfcb500690a8b\",\"sha256\":\"ac5b10c53f4a6544b33d52d07074a0fc59eaa893e0c8d5fd67afc0b480cea112\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"packages/fonts-cjk/package.json\",\"name\":\"@docx-editor.dev/fonts-cjk\",\"gitBlob\":\"50a0d937a197cc72889a2f285abfd3f1447f6860\",\"sha256\":\"3335a9116d29621782c2b55ef8baa48324253ef75e3ff7627c5d03bcd6c13fef\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"packages/fonts/package.json\",\"name\":\"@docx-editor.dev/fonts\",\"gitBlob\":\"20590770b3bab358a41de97375ef3ba9b5b3d266\",\"sha256\":\"5ddca1c279b279963dbcf58f158ee901d1a8e6cec619fa86acc3f3f0472a48c3\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"packages/i18n/package.json\",\"name\":\"@docx-editor.dev/i18n\",\"gitBlob\":\"df8eff428fdb5d988d8dcf5437eca95e622361c3\",\"sha256\":\"bdf3c883409cc1acf0efe3b5ea022282606b679c9f7c5553561d434eed5393bc\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"packages/nuxt/package.json\",\"name\":\"@docx-editor.dev/nuxt\",\"gitBlob\":\"2ae590d5ee184066412d9fec40ea70ed58998b32\",\"sha256\":\"bc394f8c98319772474558fbdf1c1ffabe99b6cdf880b9c8b27b38c3543999fc\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"packages/pro/package.json\",\"name\":\"@docx-editor.dev/pro\",\"gitBlob\":\"7430c7571c33c5891b12793d153185fc31c086b0\",\"sha256\":\"bc1202b97481ac52f9a0f6cf6ca1ae5c52239d6aff09370d0199e202b605dbf6\",\"typecheck\":\"tsc --noEmit && tsc --noEmit -p tsconfig.vue.json\"},{\"path\":\"packages/react/package.json\",\"name\":\"@docx-editor.dev/react\",\"gitBlob\":\"acfaed626da6d0db2a6753a69566fe8b5cdbf64a\",\"sha256\":\"7b1e67c5fc52798e7a59292f85143bb8d24058852f656ba2bbc44530623f0f10\",\"typecheck\":\"tsc --noEmit\"},{\"path\":\"packages/vue/package.json\",\"name\":\"@docx-editor.dev/vue\",\"gitBlob\":\"e41ab63e2be28deb7813f45d44a6ddb3013292f5\",\"sha256\":\"a9a809fa2fe2a1e990863b6c26a35cb51cd67d1926428810db1b961bbfa9d6b1\",\"typecheck\":\"tsc --noEmit\"}]"
+        run: |
+          test "$(git rev-parse HEAD)" = ${{ matrix.commit }}
+          mkdir -p validation-evidence
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import assert from 'node:assert/strict';
+          import { createHash } from 'node:crypto';
+          const root = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          assert.equal(root.scripts.typecheck, "bun run --filter '*' typecheck");
+          const dirs = root.workspaces.flatMap(pattern => {
+            if (!pattern.includes('*')) return [pattern];
+            assert(pattern.endsWith('/*') && pattern.indexOf('*') === pattern.length - 1);
+            const base = pattern.slice(0, -2);
+            return fs.readdirSync(base, { withFileTypes: true }).filter(row => row.isDirectory()).map(row => path.posix.join(base, row.name));
+          });
+          const actual = dirs.map(dir => {
+            const file = path.posix.join(dir, 'package.json');
+            if (!fs.existsSync(file)) return null;
+            const bytes = fs.readFileSync(file);
+            const pkg = JSON.parse(bytes);
+            return typeof pkg.scripts?.typecheck === 'string' ? { path: file, name: pkg.name, sha256: createHash('sha256').update(bytes).digest('hex'), typecheck: pkg.scripts.typecheck } : null;
+          }).filter(Boolean).sort((a, b) => a.path.localeCompare(b.path));
+          const expected = JSON.parse(process.env.EXPECTED_TYPE_PACKAGES).map(({path, name, sha256, typecheck}) => ({path, name, sha256, typecheck})).sort((a, b) => a.path.localeCompare(b.path));
+          assert.equal(actual.length, 21);
+          assert.deepEqual(actual, expected);
+          fs.writeFileSync('validation-evidence/type-workspaces.json', JSON.stringify({ original: root.scripts.typecheck, execution: "bun run --sequential --no-exit-on-error --filter '*' typecheck", docs: 'https://bun.com/docs/pm/filter', packages: actual }, null, 2) + '\n');
+          NODE
+      - name: Run all unchanged workspace type scripts sequentially
+        id: type
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bun run --sequential --no-exit-on-error --filter '*' typecheck 2>&1 | tee validation-evidence/type.log
+      - name: Preserve source identity and actual type exit evidence
+        if: always()
+        run: |
+          git diff --exit-code -- packages examples benchmarks package.json bun.lock
+          printf '%s\n' '${{ steps.type.outcome }}' > validation-evidence/type-outcome.txt
+      - name: Upload actual type reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.id }}-draft-type-${{ matrix.commit }}
+          path: validation-evidence/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Keep failed or incomplete type checks failing
+        if: always()
+        run: test '${{ steps.type.outcome }}' = success
