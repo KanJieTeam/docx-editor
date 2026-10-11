@@ -26,7 +26,7 @@ jobs:
               ./packages/pro/src/collaboration/__tests__/render-only-collection-faces.test.ts
             expected-tests: 17
           - id: equation-source-format
-            commit: 845555c4a1aaf3c05373f282dbb468f79a74f157
+            commit: b1110efe311a0fbd05642e2dff7b2289dc65c3f8
             test-files: >-
               ./packages/core/src/store/__tests__/omml-run-format.test.ts
               ./packages/core/src/store/__tests__/omml-typography-projection.test.ts
@@ -190,7 +190,7 @@ jobs:
               ./packages/pro/src/collaboration/__tests__/render-only-collection-faces.test.ts
             expected-tests: 17
           - id: equation-source-format
-            commit: 845555c4a1aaf3c05373f282dbb468f79a74f157
+            commit: b1110efe311a0fbd05642e2dff7b2289dc65c3f8
             test-files: >-
               ./packages/core/src/store/__tests__/omml-run-format.test.ts
               ./packages/core/src/store/__tests__/omml-typography-projection.test.ts
