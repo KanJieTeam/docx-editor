@@ -1,0 +1,183 @@
+name: Font and equation draft validation
+
+on:
+  push:
+    branches: [test/render-only-signed-collection-validation-20261012]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-collection-draft-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'KanJieTeam/docx-editor'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: signed-collection
+            commit: 972e7dadf1c65b0293c307308e84d2d11053c627
+            test-files: >-
+              ./packages/core/src/editor/__tests__/embedded-font-faces.test.ts
+              ./packages/core/src/editor/__tests__/signed-collection-registration.test.ts
+              ./packages/pro/src/collaboration/__tests__/render-only-collection-faces.test.ts
+            expected-tests: 17
+          - id: equation-source-format
+            commit: 7b3ef3ced624eed268804e77637487aae5f6f773
+            test-files: >-
+              ./packages/core/src/store/__tests__/omml-run-format.test.ts
+              ./packages/core/src/store/__tests__/omml-typography-projection.test.ts
+              ./packages/core/src/layout/__tests__/equation-run-format-layout.test.ts
+              ./packages/core/src/editor/__tests__/surface-equation-source-format.test.ts
+              ./packages/pro/src/collaboration/__tests__/document-equation-source-editors.test.ts
+            expected-tests: 33
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout the reviewed feature commit
+        uses: actions/checkout@v7
+        with:
+          repository: KanJieTeam/docx-editor
+          ref: ${{ matrix.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check source identity
+        run: |
+          test "$(git rev-parse HEAD)" = ${{ matrix.commit }}
+          git diff --exit-code
+          mkdir -p validation-evidence
+          git rev-parse HEAD > validation-evidence/source-head.txt
+          git ls-files docs/api | xargs sha256sum > validation-evidence/api-before.sha256
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install the full frozen dependency graph
+        run: bun install --frozen-lockfile
+      - name: Record tool versions
+        run: |
+          node --version > validation-evidence/node-version.txt
+          bun --version > validation-evidence/bun-version.txt
+          node node_modules/typescript7/bin/tsc --version > validation-evidence/type-version.txt
+      - name: Full source type check
+        id: type
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bun run typecheck 2>&1 | tee validation-evidence/type.log
+      - name: Full format check
+        id: format
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bun run format:check 2>&1 | tee validation-evidence/format.log
+      - name: Full lint check
+        id: lint
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bun run lint 2>&1 | tee validation-evidence/lint.log
+      - name: Existing regressions and real two-editor policy tests
+        id: peer
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bun test --timeout 20000 ${{ matrix.test-files }} \
+            2>&1 | tee validation-evidence/peer.log
+          printf '%s\n' '${{ matrix.expected-tests }}' > validation-evidence/expected-test-count.txt
+          node --input-type=module -e '
+            import fs from "node:fs";
+            import assert from "node:assert/strict";
+            const text = fs.readFileSync("validation-evidence/peer.log", "utf8").replace(/\x1b\[[0-9;]*m/g, "");
+            const pass = /(?:^|\n)\s*(\d+)\s+pass\b/.exec(text);
+            const fail = /(?:^|\n)\s*(\d+)\s+fail\b/.exec(text);
+            assert(pass && fail, "Actual Bun totals are required");
+            assert.equal(Number(pass[1]), Number(process.argv[1]));
+            assert.equal(Number(fail[1]), 0);
+          ' '${{ matrix.expected-tests }}'
+      - name: Build the public package declarations
+        id: build
+        continue-on-error: true
+        env:
+          NODE_OPTIONS: --max-old-space-size=2048
+        run: |
+          set -o pipefail
+          bun run build:packages 2>&1 | tee validation-evidence/build.log
+      - name: Check the committed API reports
+        id: api_check
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bun run api:check 2>&1 | tee validation-evidence/api-check.log
+      - name: Extract the actual API reports
+        id: api_extract
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bun run api:extract 2>&1 | tee validation-evidence/api-extract.log
+      - name: Record generated API changes
+        if: always()
+        run: |
+          git diff -- docs/api > validation-evidence/api.patch
+          git diff --name-only -- docs/api > validation-evidence/api-changed-paths.txt
+          git ls-files docs/api | xargs sha256sum > validation-evidence/api-after.sha256
+          git diff --exit-code -- packages bun.lock package.json
+      - name: Check that verification kept the original source
+        id: source_guard
+        if: always()
+        continue-on-error: true
+        run: git diff --exit-code -- packages bun.lock package.json
+      - name: Run the official formatter after the source check
+        id: format_write
+        if: always() && steps.source_guard.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bun run format 2>&1 | tee validation-evidence/format-write.log
+      - name: Record the actual formatter patch
+        if: always()
+        run: |
+          git diff -- . ':!docs/api' ':!.github/workflows' > validation-evidence/format.patch
+          git diff --name-only -- . ':!docs/api' ':!.github/workflows' > validation-evidence/format-changed-paths.txt
+      - name: Upload public verification reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.id }}-draft-validation-${{ matrix.commit }}
+          path: |
+            validation-evidence/
+            docs/api/
+            packages/*/temp/*.api.md
+          if-no-files-found: error
+          retention-days: 7
+      - name: Keep incomplete checks failing
+        if: always()
+        env:
+          TYPE: ${{ steps.type.outcome }}
+          FORMAT: ${{ steps.format.outcome }}
+          LINT: ${{ steps.lint.outcome }}
+          PEER: ${{ steps.peer.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          API_CHECK: ${{ steps.api_check.outcome }}
+          API_EXTRACT: ${{ steps.api_extract.outcome }}
+          SOURCE_GUARD: ${{ steps.source_guard.outcome }}
+          FORMAT_WRITE: ${{ steps.format_write.outcome }}
+        run: |
+          test "$TYPE" = success
+          test "$FORMAT" = success
+          test "$LINT" = success
+          test "$PEER" = success
+          test "$BUILD" = success
+          test "$API_CHECK" = success
+          test "$API_EXTRACT" = success
+          test "$SOURCE_GUARD" = success
+          test "$FORMAT_WRITE" = success
