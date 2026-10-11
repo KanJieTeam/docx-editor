@@ -1304,6 +1304,7 @@ export interface DocxEditorConfig {
     container?: HTMLElement;
     document?: DocumentSource;
     fieldResults?: FieldResultsMode;
+    fontExecution?: FontExecutionOptions;
     fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
     imageDecodePort?: ImageDecodePort;
     locale?: string;

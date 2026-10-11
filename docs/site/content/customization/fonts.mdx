@@ -84,6 +84,12 @@ Embedded document fonts enter the font pipeline automatically when usable. Openi
 
 Keep the font configuration's identity stable after editing starts. Changing `Root.fonts` creates another editor instance and resets selection and undo history. Use a stable on-demand resolver when users must choose fonts during editing.
 
+Font admission and shaping execution have separate ceilings. `fonts.maxFontBytes` controls which resources may enter a configuration. Shaping defaults to 16 MiB per face, even if admission accepts larger bytes. A host can explicitly select an execution ceiling with `fontExecution: { maxFontBytes }`, up to the existing 64 MiB hard limit. This does not change aggregate byte, face-count, text-work or native cache bounds.
+
+Pass the same stable `fontExecution` object to `createDocxEditor`, React or Vue `DocxEditor.Root`, or the packaged `DocxEditor`. Its identity changes remount the adapter, just like a font configuration change. The DOM-free `createLayoutShaping` accepts it as its third argument, after instrumentation. Font-backed Core, Markdown and PDF export options also accept `fontExecution`. It has no effect on a caller-supplied measurer; Markdown refuses that combination rather than ignoring it.
+
+The engine samples the execution ceiling before asynchronous shaping initialization. The selected refusal policy enters producer identity. Shared exporters keep one native engine with bounded caches, and every host view checks its own ceiling before consulting that engine. A cache warmed by a larger explicit ceiling cannot make a default view accept an oversized face. Use identical font and execution configurations for peers that need identical geometry; document font names and room data remain unchanged.
+
 ## React and Vue reference
 
 Pass your DOCX bytes and loaded fonts to this component. The preview uses a fictional contract.

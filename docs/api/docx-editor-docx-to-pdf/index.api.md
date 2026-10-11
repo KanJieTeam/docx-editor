@@ -88,6 +88,11 @@ export class ExportResourceError extends Error {
 }
 
 // @public
+export interface FontExecutionOptions {
+    readonly maxFontBytes?: number;
+}
+
+// @public
 export interface FontOriginFailure {
     // (undocumented)
     readonly cause: unknown;

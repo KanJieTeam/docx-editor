@@ -3,6 +3,7 @@ import type {
   ResolvedRevisionMarkup,
   ReviewDisplayMode,
   FieldResultsMode,
+  FontExecutionOptions,
 } from '@docx-editor.dev/core/editor';
 import type { DocxEditorPopups } from './editor/popup-config';
 import type { DocxEditorChildren } from './docx-editor-children';
@@ -66,6 +67,8 @@ export interface DocxEditorProps {
    * measured. Omit it to mount in one line; supply it when break positions matter.
    */
   fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
+  /** Explicit shaping byte ceiling, sampled at mount. Identity change remounts. */
+  fontExecution?: FontExecutionOptions;
   /**
    * Title-bar slots. The host owns what goes here — brand lockup, switchers, theme
    * toggle, Open/New/Save controls — and passes them in; the editor renders them

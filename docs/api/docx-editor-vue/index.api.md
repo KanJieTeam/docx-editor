@@ -51,6 +51,7 @@ import { DocumentSearchNavigateOptions } from '@docx-editor.dev/core/editor';
 import { DocumentSearchOptions } from '@docx-editor.dev/core/editor';
 import { DocumentSource } from '@docx-editor.dev/core/contracts/editor';
 import * as _docx_editor_dev_core from '@docx-editor.dev/core';
+import * as _docx_editor_dev_core_editor from '@docx-editor.dev/core/editor';
 import * as _docx_editor_dev_i18n from '@docx-editor.dev/i18n';
 import { DocxDocument } from '@docx-editor.dev/core/contracts/types';
 import { DocxEditorInstance } from '@docx-editor.dev/core/editor';
@@ -70,6 +71,7 @@ import { FieldResultsMode } from '@docx-editor.dev/core/editor';
 import { FontConfiguration } from '@docx-editor.dev/core/contracts/editor';
 import { FontConfigurationBase } from '@docx-editor.dev/core/editor';
 import { FontConfigurationFragment } from '@docx-editor.dev/core/editor';
+import { FontExecutionOptions } from '@docx-editor.dev/core/editor';
 import { FontFaceRequest } from '@docx-editor.dev/core/contracts/editor';
 import { FontLoadFailure } from '@docx-editor.dev/core/editor';
 import { FontLoadFailureReason } from '@docx-editor.dev/core/editor';
@@ -3747,6 +3749,7 @@ export interface DocxEditorProps {
     // (undocumented)
     document?: DocumentSource;
     fieldResults?: FieldResultsMode;
+    fontExecution?: FontExecutionOptions;
     // (undocumented)
     fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
     // (undocumented)
@@ -3926,6 +3929,10 @@ export const DocxEditorRoot: vue.DefineComponent<vue.ExtractPropTypes<{
         default: undefined;
         type: PropType<FieldResultsMode>;
     };
+    fontExecution: {
+        default: undefined;
+        type: PropType<DocxEditorRootProps['fontExecution']>;
+    };
     fonts: {
         default: undefined;
         type: PropType<DocxEditorRootProps['fonts']>;
@@ -3985,6 +3992,10 @@ export const DocxEditorRoot: vue.DefineComponent<vue.ExtractPropTypes<{
         default: undefined;
         type: PropType<FieldResultsMode>;
     };
+    fontExecution: {
+        default: undefined;
+        type: PropType<DocxEditorRootProps['fontExecution']>;
+    };
     fonts: {
         default: undefined;
         type: PropType<DocxEditorRootProps['fonts']>;
@@ -4033,6 +4044,7 @@ export const DocxEditorRoot: vue.DefineComponent<vue.ExtractPropTypes<{
     author: string;
     document: DocumentSource;
     fieldResults: FieldResultsMode;
+    fontExecution: _docx_editor_dev_core_editor.FontExecutionOptions | undefined;
     fonts: _docx_editor_dev_core.FontConfiguration | _docx_editor_dev_core.FontConfigurationFragment | _docx_editor_dev_core.FontResolver | undefined;
     imageDecodePort: ImageDecodePort;
     locale: string;
@@ -4064,6 +4076,7 @@ export interface DocxEditorRootProps {
     // (undocumented)
     document?: DocumentSource;
     fieldResults?: FieldResultsMode;
+    fontExecution?: FontExecutionOptions;
     // (undocumented)
     fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
     // (undocumented)

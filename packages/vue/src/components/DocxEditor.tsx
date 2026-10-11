@@ -219,6 +219,10 @@ const docxEditorFrameProps = {
     type: [Object, Function] as PropType<DocxEditorProps['fonts']>,
     default: undefined,
   },
+  fontExecution: {
+    type: Object as PropType<DocxEditorProps['fontExecution']>,
+    default: undefined,
+  },
   class: { type: String, default: undefined },
   t: { type: Function as PropType<DocxEditorProps['t']>, default: undefined },
   colorMode: { type: String as PropType<'light' | 'dark' | 'system'>, default: 'light' },
@@ -461,6 +465,7 @@ const DocxEditorFrame = defineComponent({
         {
           ...(props.document !== undefined ? { document: props.document } : {}),
           ...(props.fonts ? { fonts: props.fonts } : {}),
+          ...(props.fontExecution ? { fontExecution: props.fontExecution } : {}),
           ...(props.author !== undefined ? { author: props.author } : {}),
           ...(props.locale !== undefined ? { locale: props.locale } : {}),
           popups: createPackagedPopups(props.popups, hyperlinkPopup.value, contextMenu.value, t),

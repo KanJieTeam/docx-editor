@@ -1,5 +1,6 @@
 import type {
   FieldResultsMode,
+  FontExecutionOptions,
   RevisionMarkupOptions,
   ReviewDisplayMode,
 } from '@docx-editor.dev/core/editor';
@@ -40,6 +41,8 @@ export type EditorMode = 'edit' | 'view' | 'suggesting';
 export interface DocxEditorProps {
   popups?: import('./editor/popup-config').DocxEditorPopups;
   fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
+  /** Explicit shaping byte ceiling, sampled at mount. Identity change remounts. */
+  fontExecution?: FontExecutionOptions;
   colorMode?: 'light' | 'dark' | 'system';
   /** Live resolver for chrome and drawing labels. */
   t?: (key: string, params?: Record<string, string | number>) => string;

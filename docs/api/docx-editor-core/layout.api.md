@@ -645,7 +645,7 @@ export function createLayoutSession(): LayoutSession;
 export function createLayoutShapedMeasurer(shaping: LayoutShapingOptions, options: Pick<ShapedMeasurerOptions, 'resolveFont' | 'fallback'>): TextMeasurer;
 
 // @public
-export function createLayoutShaping(configuration: LayoutFontConfiguration | PreparedLayoutFontConfiguration, instrumentation?: LayoutShapingInstrumentation): Promise<LayoutShapingOptions>;
+export function createLayoutShaping(configuration: LayoutFontConfiguration | PreparedLayoutFontConfiguration, instrumentation?: LayoutShapingInstrumentation, execution?: FontExecutionOptions): Promise<LayoutShapingOptions>;
 
 // @public
 export function createListCounterState(index: NumberingIndex): ListCounterState;
@@ -1068,6 +1068,11 @@ export type FixedPointRoundingMode = 'halfAwayFromZero' | 'halfToEven' | 'toward
 
 // @public
 export type FontByteValidator = (bytes: Uint8Array, faceIndex: number) => FontValidationResult;
+
+// @public
+export interface FontExecutionOptions {
+    readonly maxFontBytes?: number;
+}
 
 // @public
 export interface FontFingerprintInputs {

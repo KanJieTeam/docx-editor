@@ -253,6 +253,11 @@ export interface ExportSession {
 }
 
 // @public
+export interface FontExecutionOptions {
+    readonly maxFontBytes?: number;
+}
+
+// @public
 export interface FontOriginFailure {
     // (undocumented)
     readonly cause: unknown;
@@ -691,6 +696,7 @@ export type OpenDocumentForExportResult = {
 // @public
 export interface OpenMarkdownDocumentForExportOptions extends OpenDocumentForExportOptions {
     readonly fallbackFonts?: MarkdownFontsSource;
+    readonly fontExecution?: FontExecutionOptions;
     readonly fontPolicy?: 'best-effort' | 'strict';
     readonly fonts?: MarkdownFontsSource;
     readonly onFontResolution?: (report: ExportFontResolutionReport) => void;
