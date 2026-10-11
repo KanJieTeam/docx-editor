@@ -1,3 +1,4 @@
+import { resolveCjkPieces } from './source-punctuation-kerning.ts';
 import { revisionMarkupHidesDrawing } from './revision-markup-projection.ts';
 import {
   cellTabReplayScope,
@@ -53,7 +54,6 @@ import {
   canFitCjkOptically,
 } from './cjk-optical-fit.ts';
 import {
-  compressCjkPieces,
   canHangCjkPunctuation,
   colonLostOpeningBearing,
   cjkColonNaturalWidths,
@@ -267,7 +267,7 @@ export function breakParagraph(
           : undefined
       )
     );
-  const pieces = compressCjkPieces(visiblePieces, typography, measurer, preserveColonAdvances);
+  const pieces = resolveCjkPieces(visiblePieces, typography, measurer, preserveColonAdvances);
   const colonNaturalWidths = cjkColonNaturalWidths(pieces, visiblePieces, measurer);
   const opticalParagraph =
     typography.settings?.compression !== undefined &&

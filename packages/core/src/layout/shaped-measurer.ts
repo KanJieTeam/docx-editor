@@ -1,3 +1,6 @@
+import { withResolvedPunctuationFace } from './resolved-punctuation-face.ts';
+import { hasSourcePunctuationFace } from './sfnt-source-punctuation-face.ts';
+import { assertValidatedResolvedFont } from './font-resource.ts';
 import { isRunKerningEnabled } from './run-kerning.ts';
 import { runLigatureFeatureKey } from './run-ligatures.ts';
 import { createShapedLineMetrics } from './shaped-line-metrics.ts';
@@ -277,156 +280,190 @@ export function createShapedMeasurer(
   // Static face numbers, so one read per face serves every size: the em fractions scale.
   const strikeoutByFont = new WeakMap<ResolvedFont, StrikeoutStrokeEm | null>();
 
-  return {
-    hasResolvedFont(style) {
-      return resolveFontCached(style) !== null;
-    },
-    strikeoutMetrics(style) {
-      const font = resolveFontCached(style);
-      if (!font) return undefined;
-      let stroke = strikeoutByFont.get(font);
-      if (stroke === undefined) {
-        stroke = sfntStrikeoutStrokeEm(font.bytes, font.faceIndex);
-        strikeoutByFont.set(font, stroke);
-      }
-      if (!stroke) return undefined;
-      const sizePt = (layoutRunHalfPointsOf(style) / 2) * glyphSizeFactorOf(style);
-      return {
-        offsetPt: stroke.offsetEm * sizePt,
-        thicknessPt: stroke.thicknessEm * sizePt,
-      };
-    },
-    measure(text, style) {
-      if (text.length === 0) return 0;
-      const font = resolveFontCached(style);
-      if (!font) return fallbackWidth(text, style);
+  return withResolvedPunctuationFace(
+    {
+      hasResolvedFont(style) {
+        return resolveFontCached(style) !== null;
+      },
+      strikeoutMetrics(style) {
+        const font = resolveFontCached(style);
+        if (!font) return undefined;
+        let stroke = strikeoutByFont.get(font);
+        if (stroke === undefined) {
+          stroke = sfntStrikeoutStrokeEm(font.bytes, font.faceIndex);
+          strikeoutByFont.set(font, stroke);
+        }
+        if (!stroke) return undefined;
+        const sizePt = (layoutRunHalfPointsOf(style) / 2) * glyphSizeFactorOf(style);
+        return {
+          offsetPt: stroke.offsetEm * sizePt,
+          thicknessPt: stroke.thicknessEm * sizePt,
+        };
+      },
+      measure(text, style) {
+        if (text.length === 0) return 0;
+        const font = resolveFontCached(style);
+        if (!font) return fallbackWidth(text, style);
 
-      const byText = widthsFor(font, layoutRunHalfPointsOf(style), style.smallCaps);
-      const context = style.shaping?.context;
-      const shapingKey = style.shaping
-        ? `1:${JSON.stringify(
-            context
-              ? [style.shaping.script, style.shaping.direction, text, context.before, context.after]
-              : [style.shaping.script, style.shaping.direction, text]
-          )}`
-        : `0:${text}`;
-      const widthKey = `${isRunKerningEnabled(style) ? 1 : 0}:${runLigatureFeatureKey(style)}:${shapingKey}`;
-      let advance = byText.get(widthKey);
-      if (advance === undefined) {
-        let total = 0;
+        const byText = widthsFor(font, layoutRunHalfPointsOf(style), style.smallCaps);
+        const context = style.shaping?.context;
+        const shapingKey = style.shaping
+          ? `1:${JSON.stringify(
+              context
+                ? [
+                    style.shaping.script,
+                    style.shaping.direction,
+                    text,
+                    context.before,
+                    context.after,
+                  ]
+                : [style.shaping.script, style.shaping.direction, text]
+            )}`
+          : `0:${text}`;
+        const widthKey = `${isRunKerningEnabled(style) ? 1 : 0}:${runLigatureFeatureKey(style)}:${shapingKey}`;
+        let advance = byText.get(widthKey);
+        if (advance === undefined) {
+          let total = 0;
+          try {
+            // Per FACE, so this span and every prefix of it answer the same way.
+            if (
+              style.smallCaps &&
+              !layoutFaceHasSmallCaps(shaper, baseEnvironment, font, style, smallCapsSupportByFont)
+            ) {
+              return fallbackWidth(text, style);
+            }
+            const shaped = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
+            // Missing-glyph advances do not describe the browser's fallback ink.
+            if (shaped.glyphs.some((glyph) => glyph.id === 0)) return fallbackWidth(text, style);
+            for (const glyph of shaped.glyphs) total += glyph.advanceX;
+          } catch {
+            // Shaping refuses malformed or oversized input by design. Falling back keeps a
+            // hostile font from taking the document down with it.
+            return fallbackWidth(text, style);
+          }
+          advance = total / baseEnvironment.fixedPointScale;
+          cacheWidth(byText, widthKey, advance);
+        }
+        // Base-size advance scaled to the drawn size; the cache stays keyed on the base size,
+        // so baseline and super/subscript runs of one face share entries.
+        return (
+          advance * glyphSizeFactorOf(style) * (style.horizontalScalePercent / 100) +
+          text.length * style.characterSpacingPt +
+          wordSpacingAdvance(text, style)
+        );
+      },
+
+      inkBounds(text, style) {
+        if (
+          !text ||
+          text.length > 2 ||
+          style.shaping?.direction === 'rtl' ||
+          segmentGraphemes(text).length !== 1
+        )
+          return undefined;
+        const font = resolveFontCached(style);
+        if (!font) return fallback.inkBounds?.(text, style);
         try {
-          // Per FACE, so this span and every prefix of it answer the same way.
           if (
             style.smallCaps &&
             !layoutFaceHasSmallCaps(shaper, baseEnvironment, font, style, smallCapsSupportByFont)
-          ) {
-            return fallbackWidth(text, style);
-          }
-          const shaped = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
-          // Missing-glyph advances do not describe the browser's fallback ink.
-          if (shaped.glyphs.some((glyph) => glyph.id === 0)) return fallbackWidth(text, style);
-          for (const glyph of shaped.glyphs) total += glyph.advanceX;
-        } catch {
-          // Shaping refuses malformed or oversized input by design. Falling back keeps a
-          // hostile font from taking the document down with it.
-          return fallbackWidth(text, style);
-        }
-        advance = total / baseEnvironment.fixedPointScale;
-        cacheWidth(byText, widthKey, advance);
-      }
-      // Base-size advance scaled to the drawn size; the cache stays keyed on the base size,
-      // so baseline and super/subscript runs of one face share entries.
-      return (
-        advance * glyphSizeFactorOf(style) * (style.horizontalScalePercent / 100) +
-        text.length * style.characterSpacingPt +
-        wordSpacingAdvance(text, style)
-      );
-    },
-
-    inkBounds(text, style) {
-      if (
-        !text ||
-        text.length > 2 ||
-        style.shaping?.direction === 'rtl' ||
-        segmentGraphemes(text).length !== 1
-      )
-        return undefined;
-      const font = resolveFontCached(style);
-      if (!font) return fallback.inkBounds?.(text, style);
-      try {
-        if (
-          style.smallCaps &&
-          !layoutFaceHasSmallCaps(shaper, baseEnvironment, font, style, smallCapsSupportByFont)
-        )
-          return fallback.inkBounds?.(text, style);
-        const run = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
-        return shapedClusterInkBounds(
-          run,
-          layoutRunHalfPointsOf(style) / 2,
-          baseEnvironment.fixedPointScale,
-          (glyphSizeFactorOf(style) * style.horizontalScalePercent) / 100
-        );
-      } catch {
-        return undefined;
-      }
-    },
-    caretAdvances(text, style) {
-      const font = resolveFontCached(style);
-      if (!font) return fallbackAdvances(text, style);
-      try {
-        if (
-          style.smallCaps &&
-          !layoutFaceHasSmallCaps(shaper, baseEnvironment, font, style, smallCapsSupportByFont)
-        )
-          return fallbackAdvances(text, style);
-        const run = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
-        if (run.glyphs.some((glyph) => glyph.id === 0)) return fallbackAdvances(text, style);
-        return (
-          shapedCaretAdvances(
-            text,
-            run,
-            (glyphSizeFactorOf(style) * (style.horizontalScalePercent / 100)) /
-              baseEnvironment.fixedPointScale,
-            style.characterSpacingPt,
-            style.shaping?.wordSpacingPt ?? 0
-          ) ??
-          fallbackCaretAdvances(
-            text,
-            (run.glyphs.reduce((sum, glyph) => sum + glyph.advanceX, 0) *
-              glyphSizeFactorOf(style) *
-              (style.horizontalScalePercent / 100)) /
-              baseEnvironment.fixedPointScale +
-              text.length * style.characterSpacingPt +
-              wordSpacingAdvance(text, style)
           )
-        );
-      } catch {
-        return fallbackAdvances(text, style);
-      }
-    },
-
-    lineMetrics(style, text) {
-      const font = resolveFontCached(style);
-      if (!font) return fallback.lineMetrics(style, text);
-      if (!text || /^[\t\n\r\f ]*$/.test(text)) return faceLineMetrics(font, style);
-      try {
-        // Width and paint can select a fallback face. The same face must set the
-        // line's ascent/descent, otherwise tall fallback glyphs overlap later lines.
-        const run = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
-        let baseline = 0;
-        let descent = 0;
-        for (const span of run.fontSpans) {
-          const metrics = faceLineMetrics(span.font, style);
-          baseline = Math.max(baseline, metrics.baseline);
-          descent = Math.max(descent, metrics.height - metrics.baseline);
+            return fallback.inkBounds?.(text, style);
+          const run = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
+          return shapedClusterInkBounds(
+            run,
+            layoutRunHalfPointsOf(style) / 2,
+            baseEnvironment.fixedPointScale,
+            (glyphSizeFactorOf(style) * style.horizontalScalePercent) / 100
+          );
+        } catch {
+          return undefined;
         }
-        if (baseline + descent > 0) return { height: baseline + descent, baseline };
-      } catch {
-        // Font/shaping failures retain the bounded primary-face fallback.
-      }
-      return faceLineMetrics(font, style);
+      },
+      caretAdvances(text, style) {
+        const font = resolveFontCached(style);
+        if (!font) return fallbackAdvances(text, style);
+        try {
+          if (
+            style.smallCaps &&
+            !layoutFaceHasSmallCaps(shaper, baseEnvironment, font, style, smallCapsSupportByFont)
+          )
+            return fallbackAdvances(text, style);
+          const run = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
+          if (run.glyphs.some((glyph) => glyph.id === 0)) return fallbackAdvances(text, style);
+          return (
+            shapedCaretAdvances(
+              text,
+              run,
+              (glyphSizeFactorOf(style) * (style.horizontalScalePercent / 100)) /
+                baseEnvironment.fixedPointScale,
+              style.characterSpacingPt,
+              style.shaping?.wordSpacingPt ?? 0
+            ) ??
+            fallbackCaretAdvances(
+              text,
+              (run.glyphs.reduce((sum, glyph) => sum + glyph.advanceX, 0) *
+                glyphSizeFactorOf(style) *
+                (style.horizontalScalePercent / 100)) /
+                baseEnvironment.fixedPointScale +
+                text.length * style.characterSpacingPt +
+                wordSpacingAdvance(text, style)
+            )
+          );
+        } catch {
+          return fallbackAdvances(text, style);
+        }
+      },
+
+      lineMetrics(style, text) {
+        const font = resolveFontCached(style);
+        if (!font) return fallback.lineMetrics(style, text);
+        if (!text || /^[\t\n\r\f ]*$/.test(text)) return faceLineMetrics(font, style);
+        try {
+          // Width and paint can select a fallback face. The same face must set the
+          // line's ascent/descent, otherwise tall fallback glyphs overlap later lines.
+          const run = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
+          let baseline = 0;
+          let descent = 0;
+          for (const span of run.fontSpans) {
+            const metrics = faceLineMetrics(span.font, style);
+            baseline = Math.max(baseline, metrics.baseline);
+            descent = Math.max(descent, metrics.height - metrics.baseline);
+          }
+          if (baseline + descent > 0) return { height: baseline + descent, baseline };
+        } catch {
+          // Font/shaping failures retain the bounded primary-face fallback.
+        }
+        return faceLineMetrics(font, style);
+      },
     },
-  };
+    (style, text) => {
+      const font = resolveFontCached(style);
+      if (!font) return undefined;
+      try {
+        assertValidatedResolvedFont(font);
+        if (!hasSourcePunctuationFace(font)) return undefined;
+        // Metadata alone cannot bypass the shaper execution limit. The real
+        // current glyph must shape with this face and have a nonzero glyph ID.
+        const run = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
+        if (
+          !run.glyphs.length ||
+          run.glyphs.some((g) => g.id === 0) ||
+          run.fontSpans.some((s) => s.font.identity !== font.identity)
+        )
+          return undefined;
+        return {
+          hash: font.hash,
+          faceIndex: font.faceIndex,
+          family: font.family,
+          weight: font.request.weight,
+          style: font.request.style,
+        };
+      } catch {
+        return undefined;
+      }
+    }
+  );
 }
 
 /**

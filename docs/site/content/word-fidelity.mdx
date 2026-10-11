@@ -288,6 +288,10 @@ Document settings control kinsoku, Japanese strict rules, and language-specific 
 
 Run language uses Word `w:lang` elements and Word-qualified attributes across styles and direct formatting. Foreign language extensions remain saved but do not select the layout language.
 
+Authored positive `w:kern` thresholds can reduce the spacing in the SimSun `》（` and `）（` pairs. The threshold must permit the effective run size. Both glyphs must use the same resolved regular SimSun face and have full-em natural advances. The selected font binary must identify the face as SimSun or 宋体. A document font name alone does not qualify another font.
+
+Direct `w:noPunctuationKerning` settings disable this pair rule. Invalid or misplaced flags disable this subset. Authored character spacing, scaling, bold, italic, small caps, decorations, fields, revisions, and projected text retain conservative spacing. Existing character compression runs first, so shortened seams do not receive another reduction. Layout changes preserve source text, offsets, and authored formatting.
+
 Colons can compress before opening brackets, bounded by the following bracket's available bearing. With measured glyph bounds, colons also compress before closing punctuation. This pair rule halves the colon's advance, including authored character spacing. Other centered punctuation, authored spaces, outlined text, decorated text, and tracked changes retain their advances. Colons with highlight or shading retain their advances.
 
 If wrapping separates a compressed colon from its opening bracket, the paragraph uses natural colon advances. Narrow plain left-to-right (LTR) East Asian paragraphs can use measured punctuation bearings to fit the next glyph and protected punctuation. Fitting uses measured glyph bounds and preserves source positions. Mixed Latin text, fields, decorations, revisions, and right-to-left (RTL) text retain conservative fitting. So do gaps beside floating objects and measurers without ink bounds.

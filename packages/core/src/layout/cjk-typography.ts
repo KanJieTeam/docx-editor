@@ -1,10 +1,13 @@
 // OOXML East Asian typography policy. Settings travel with the style cascade so its
 // producer fingerprint invalidates all stories when document typography changes.
 // References: ECMA-376 §17.3.1.16, §17.3.1.21, §17.15.1.18, §17.15.1.58–59, §17.15.1.82.
+import { sourcePunctuationKerningPermission } from './punctuation-kerning-policy.ts';
 import type { OoxmlElement, OoxmlProperty } from '@docx-editor.dev/core/store';
 
 /** Document-wide East Asian line-break and whitespace policy. @public */
 export interface CjkTypographySettings {
+  /** False disables the supported source-kern punctuation subset. */
+  readonly punctuationKerning?: boolean;
   /** Apply the strict Japanese small-kana and prolonged-sound-mark restrictions. */
   readonly strict: boolean;
   /** Whitespace compression selected by `w:characterSpacingControl`. */
@@ -66,7 +69,9 @@ export function cjkTypographyFromSettings(root: OoxmlElement | null): CjkTypogra
     if (Object.keys(target).length < 64 || Object.hasOwn(target, language))
       target[language] = (value ?? '').slice(0, 4096);
   }
+  const punctuationKerning = sourcePunctuationKerningPermission(root);
   return Object.freeze({
+    ...(punctuationKerning === undefined ? {} : { punctuationKerning }),
     strict,
     compression,
     before: Object.freeze(before),

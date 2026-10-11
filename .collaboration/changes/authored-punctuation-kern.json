@@ -1,0 +1,10 @@
+{
+  "impact": "no-impact",
+  "fields": [],
+  "before": "Closing punctuation followed by an opening parenthesis retained its full advance unless character compression shortened it.",
+  "after": "The two supported SimSun pairs can use authored positive kerning thresholds independently of character compression. Direct noPunctuationKerning settings disable this subset. Derived spacing retains original text, offsets, and authored formatting.",
+  "reason": "The change affects derived layout geometry only. Canonical document nodes, collaboration operations, shared formats, and font execution limits stay unchanged.",
+  "tests": ["packages/core/src/layout/__tests__/source-punctuation-kerning.test.ts"],
+  "changeset": "authored-punctuation-kern",
+  "migration": null
+}

@@ -366,6 +366,7 @@ export interface CjkTypographySettings {
     readonly after: Readonly<Record<string, string>>;
     readonly before: Readonly<Record<string, string>>;
     readonly compression: 'doNotCompress' | 'compressPunctuation' | 'compressPunctuationAndJapaneseKana';
+    readonly punctuationKerning?: boolean;
     readonly strict: boolean;
 }
 

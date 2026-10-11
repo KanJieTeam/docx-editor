@@ -1,0 +1,113 @@
+{
+  "publicSyntheticOnly": true,
+  "cases": [
+    {
+      "id": "angle-open-kern2-default",
+      "file": "packages/core/src/layout/__tests__/fixtures/source-punctuation-kerning/angle-open-kern2-default.docx",
+      "sha256": "b28b3d737b317527aebde8a700991655c9c5b876495ebed003ac5002c9fd6742",
+      "text": "甲乙》（1）丙丁",
+      "sourceKernVal": "2",
+      "noPunctuationKerning": null,
+      "compression": null
+    },
+    {
+      "id": "angle-open-kern-absent",
+      "file": "packages/core/src/layout/__tests__/fixtures/source-punctuation-kerning/angle-open-kern-absent.docx",
+      "sha256": "f87540a45ac6d4c5dd55d916bce1526fe89ea1bd00abbba97ac7912890c7f323",
+      "text": "甲乙》（1）丙丁",
+      "sourceKernVal": null,
+      "noPunctuationKerning": null,
+      "compression": null
+    },
+    {
+      "id": "angle-open-kern30-above-size",
+      "file": "packages/core/src/layout/__tests__/fixtures/source-punctuation-kerning/angle-open-kern30-above-size.docx",
+      "sha256": "c4bef5f64757307a052191ed5878b88d47287104c611ea07302dfbb301e4d80b",
+      "text": "甲乙》（1）丙丁",
+      "sourceKernVal": "60",
+      "noPunctuationKerning": null,
+      "compression": null
+    },
+    {
+      "id": "angle-open-kern2-disabled",
+      "file": "packages/core/src/layout/__tests__/fixtures/source-punctuation-kerning/angle-open-kern2-disabled.docx",
+      "sha256": "811d4452dfc3bbe2f5a0261dcf7822d5330ffc9bbedd99e70a598756a5879957",
+      "text": "甲乙》（1）丙丁",
+      "sourceKernVal": "2",
+      "noPunctuationKerning": true,
+      "compression": null
+    },
+    {
+      "id": "angle-open-kern2-compress",
+      "file": "packages/core/src/layout/__tests__/fixtures/source-punctuation-kerning/angle-open-kern2-compress.docx",
+      "sha256": "8855d9b0068e88bf4b1cb8347f25f7e9cbe341b0c6e969489491e6f98edb0d91",
+      "text": "甲乙》（1）丙丁",
+      "sourceKernVal": "2",
+      "noPunctuationKerning": null,
+      "compression": "compressPunctuation"
+    },
+    {
+      "id": "angle-open-kern2-no-compress",
+      "file": "packages/core/src/layout/__tests__/fixtures/source-punctuation-kerning/angle-open-kern2-no-compress.docx",
+      "sha256": "062cea26404e01e007ae52894cb57558d57493a5475609ceeff2836a1327ff4a",
+      "text": "甲乙》（1）丙丁",
+      "sourceKernVal": "2",
+      "noPunctuationKerning": null,
+      "compression": "doNotCompress"
+    },
+    {
+      "id": "paren-open-kern2-default",
+      "file": "packages/core/src/layout/__tests__/fixtures/source-punctuation-kerning/paren-open-kern2-default.docx",
+      "sha256": "ddf56037110d0c916e7cff6563cd4e82e43a2ea2f0595ee123c3c8341b668022",
+      "text": "甲乙）（1）丙丁",
+      "sourceKernVal": "2",
+      "noPunctuationKerning": null,
+      "compression": null
+    },
+    {
+      "id": "paren-open-kern-absent",
+      "file": "packages/core/src/layout/__tests__/fixtures/source-punctuation-kerning/paren-open-kern-absent.docx",
+      "sha256": "54fb1967190f33d5d42ecf46280b053cf2b4faf64040bb513e8d62fef463739d",
+      "text": "甲乙）（1）丙丁",
+      "sourceKernVal": null,
+      "noPunctuationKerning": null,
+      "compression": null
+    },
+    {
+      "id": "paren-open-kern30-above-size",
+      "file": "packages/core/src/layout/__tests__/fixtures/source-punctuation-kerning/paren-open-kern30-above-size.docx",
+      "sha256": "5f7c9d273fa21a92f6e9726a4cba2d877d23e1e86ab7fa0a8af078875d06ff7d",
+      "text": "甲乙）（1）丙丁",
+      "sourceKernVal": "60",
+      "noPunctuationKerning": null,
+      "compression": null
+    },
+    {
+      "id": "paren-open-kern2-disabled",
+      "file": "packages/core/src/layout/__tests__/fixtures/source-punctuation-kerning/paren-open-kern2-disabled.docx",
+      "sha256": "e846a5331ba0f598fcd54e1cc64a0c12f922b685e847edae874d49e065947afc",
+      "text": "甲乙）（1）丙丁",
+      "sourceKernVal": "2",
+      "noPunctuationKerning": true,
+      "compression": null
+    },
+    {
+      "id": "paren-open-kern2-compress",
+      "file": "packages/core/src/layout/__tests__/fixtures/source-punctuation-kerning/paren-open-kern2-compress.docx",
+      "sha256": "695a4856db31b81f01e390de2261199f98ae7399968a1fdd07274d2668783217",
+      "text": "甲乙）（1）丙丁",
+      "sourceKernVal": "2",
+      "noPunctuationKerning": null,
+      "compression": "compressPunctuation"
+    },
+    {
+      "id": "paren-open-kern2-no-compress",
+      "file": "packages/core/src/layout/__tests__/fixtures/source-punctuation-kerning/paren-open-kern2-no-compress.docx",
+      "sha256": "9f3b40c2798a080bbf5241b14a20f8cfde03aaf9c9e22ad49361ad7e074d223e",
+      "text": "甲乙）（1）丙丁",
+      "sourceKernVal": "2",
+      "noPunctuationKerning": null,
+      "compression": "doNotCompress"
+    }
+  ]
+}
