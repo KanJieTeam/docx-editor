@@ -51,15 +51,8 @@ export function materializeCollectionFace(bytes: Uint8Array, faceIndex = 0): Uin
   const count = input.getUint32(8);
   requireValue(count > 0 && faceIndex < count, 'Collection face absent');
   range(12, count * 4 + (version === 0x00020000 ? 12 : 0));
-  if (version === 0x00020000) {
-    const signature = 12 + count * 4;
-    requireValue(
-      input.getUint32(signature) === 0 &&
-        input.getUint32(signature + 4) === 0 &&
-        input.getUint32(signature + 8) === 0,
-      'Signed collections require a signature-aware path'
-    );
-  }
+  // The TTC header's signature describes the collection, not the selected SFNT.
+  // Selected face tables, including DSIG, are preserved without verifying signatures.
   const headerEnd = 12 + count * 4 + (version === 0x00020000 ? 12 : 0);
   const base = input.getUint32(12 + faceIndex * 4);
   range(base, 12);
@@ -95,7 +88,6 @@ export function materializeCollectionFace(bytes: Uint8Array, faceIndex = 0): Uin
         'Table overlaps collection directory'
       );
     }
-    requireValue(name !== 'DSIG' || length === 0, 'Signed faces require a signature-aware path');
     tables.push({ name, offset, length, destination: 0 });
   }
   // The existing validator bounds uint16 table counts through the actual byte directory.
