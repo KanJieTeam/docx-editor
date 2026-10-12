@@ -51,7 +51,6 @@ import { DocumentSearchNavigateOptions } from '@docx-editor.dev/core/editor';
 import { DocumentSearchOptions } from '@docx-editor.dev/core/editor';
 import { DocumentSource } from '@docx-editor.dev/core/contracts/editor';
 import * as _docx_editor_dev_core from '@docx-editor.dev/core';
-import * as _docx_editor_dev_core_editor from '@docx-editor.dev/core/editor';
 import * as _docx_editor_dev_i18n from '@docx-editor.dev/i18n';
 import { DocxDocument } from '@docx-editor.dev/core/contracts/types';
 import { DocxEditorInstance } from '@docx-editor.dev/core/editor';
@@ -4044,7 +4043,7 @@ export const DocxEditorRoot: vue.DefineComponent<vue.ExtractPropTypes<{
     author: string;
     document: DocumentSource;
     fieldResults: FieldResultsMode;
-    fontExecution: _docx_editor_dev_core_editor.FontExecutionOptions | undefined;
+    fontExecution: _docx_editor_dev_core.FontExecutionOptions | undefined;
     fonts: _docx_editor_dev_core.FontConfiguration | _docx_editor_dev_core.FontConfigurationFragment | _docx_editor_dev_core.FontResolver | undefined;
     imageDecodePort: ImageDecodePort;
     locale: string;

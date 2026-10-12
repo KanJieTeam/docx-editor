@@ -2193,6 +2193,11 @@ export interface FontDefinition {
 }
 
 // @public
+export interface FontExecutionOptions {
+    readonly maxFontBytes?: number;
+}
+
+// @public
 export interface FontFaceRequest {
     // (undocumented)
     readonly family: string;
