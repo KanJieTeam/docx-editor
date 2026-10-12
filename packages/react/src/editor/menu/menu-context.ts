@@ -56,6 +56,11 @@ export interface MenuContextValue {
   readonly onReportIssue: (() => void) | undefined;
   /** `false` drops the packaged Help row, and Help with it. */
   readonly reportIssue: boolean | undefined;
+  /**
+   * A document is opening. The bar is disabled, like the toolbar: the previous document is
+   * still mounted, and a menu command would act on the document about to be replaced.
+   */
+  readonly opening?: boolean;
 }
 
 export const MenuContext = createContext<MenuContextValue>({
@@ -104,3 +109,6 @@ export function useMenuLabel(): (key: string) => string {
   const { t: catalogT } = useTranslation();
   return (key: string) => t?.(key) ?? catalogT(key as TranslationKey);
 }
+
+/** Direct menubar rows participate in Tab navigation; popup rows use arrow keys. */
+export const MenuRowTabIndexContext = createContext(-1);

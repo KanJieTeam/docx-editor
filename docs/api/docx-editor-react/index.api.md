@@ -840,6 +840,7 @@ export interface DocxEditorLoadingComponent {
 export interface DocxEditorLoadingProps {
     children?: DocxEditorChildren;
     className?: string;
+    indicator?: DocxEditorChildren;
     overlay?: boolean;
     style?: CSSProperties;
     when?: boolean;
@@ -1235,6 +1236,7 @@ export interface DocxEditorProps {
     fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
     hyperlinkPopup?: boolean;
     i18n?: Translations;
+    readonly loadingIndicator?: DocxEditorChildren;
     locale?: string;
     menu?: boolean | DocxEditorMenuProps;
     mode?: EditorMode;
