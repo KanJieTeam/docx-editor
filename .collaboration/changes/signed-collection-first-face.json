@@ -2,7 +2,7 @@
   "impact": "no-impact",
   "fields": [],
   "before": "Browser registration materialized every collection face and refused signed collections, including their first face.",
-  "after": "Browser registration uses the complete admitted collection for its first face. Other faces retain the signature-aware refusal.",
+  "after": "Browser registration uses the complete admitted collection for its first face. Other faces preserve all selected tables, including DSIG, without verifying signatures.",
   "reason": "The change affects local FontFace registration. Canonical data, shared operations, source font hashes, and face indexes stay unchanged.",
   "tests": [
     "packages/core/src/editor/__tests__/signed-collection-registration.test.ts",

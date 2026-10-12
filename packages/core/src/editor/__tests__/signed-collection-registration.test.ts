@@ -3,12 +3,32 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { registerEmbeddedFontFaces, type FontFaceLike } from '../embedded-font-faces.ts';
-import { materializeCollectionFace } from '../font-collection-face.ts';
+import { materializeCollectionFace, sfntChecksum } from '../font-collection-face.ts';
 import { boundedStructuralFontValidator } from '../../layout/font-resource.ts';
 
 const fixtures = new URL('../../layout/__tests__/fixtures/fonts/', import.meta.url);
-const fonts = ['DejaVuSans.ttf', 'DejaVuSans-Bold.ttf'].map(
-  (file) => new Uint8Array(fs.readFileSync(new URL(file, fixtures)))
+const signatureTable = new Uint8Array([0, 0, 0, 1, 0, 0, 0, 0]);
+function withFaceSignature(font: Uint8Array) {
+  const input = new DataView(font.buffer, font.byteOffset, font.length),
+    count = input.getUint16(4),
+    end = 12 + count * 16;
+  const result = new Uint8Array(font.length + 16 + signatureTable.length),
+    output = new DataView(result.buffer);
+  result.set(font.subarray(0, end));
+  result.set(font.subarray(end), end + 16);
+  output.setUint16(4, count + 1);
+  for (let index = 0; index < count; index++) {
+    const entry = 12 + index * 16;
+    output.setUint32(entry + 8, input.getUint32(entry + 8) + 16);
+  }
+  result.set(new TextEncoder().encode('DSIG'), end);
+  output.setUint32(end + 8, font.length + 16);
+  output.setUint32(end + 12, signatureTable.length);
+  result.set(signatureTable, font.length + 16);
+  return result;
+}
+const fonts = ['DejaVuSans.ttf', 'DejaVuSans-Bold.ttf'].map((file) =>
+  withFaceSignature(new Uint8Array(fs.readFileSync(new URL(file, fixtures))))
 );
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 function collection(signature: boolean): Uint8Array {
@@ -75,7 +95,7 @@ async function register(bytes: Uint8Array, faceIndex: number, failsLoading = fal
 
 test('first signed collection face preserves the complete admitted bytes and private alias', async () => {
   const bytes = collection(true);
-  assert.throws(() => materializeCollectionFace(bytes), /signature-aware/);
+  assert.equal(sfntChecksum(materializeCollectionFace(bytes)), 0xb1b0afba);
   const result = await register(bytes, 0);
   assert.equal(result.registration.installed, 1);
   assert.equal(result.created[0]!.bytes, bytes);
@@ -86,11 +106,37 @@ test('first signed collection face preserves the complete admitted bytes and pri
   assert.deepEqual(result.deleted, result.added);
 });
 
-test('nonzero signed face retains the materialization refusal and never earns an alias', async () => {
-  const result = await register(collection(true), 1);
-  assert.equal(result.registration.installed, 0);
-  assert.equal(result.registration.alias('Public Collection'), undefined);
-  assert.deepEqual(result.created, []);
+test('nonzero signed face registers by default with all selected tables and its own alias', async () => {
+  const bytes = collection(true),
+    first = await register(bytes, 0),
+    result = await register(bytes, 1);
+  assert.equal(result.registration.installed, 1);
+  assert.equal(result.created.length, 1);
+  const selected = result.created[0]!.bytes;
+  assert.notEqual(selected, bytes);
+  assert.deepEqual(selected, materializeCollectionFace(bytes, 1));
+  assert.equal(sfntChecksum(selected), 0xb1b0afba);
+  assert.notEqual(
+    first.registration.alias('Public Collection'),
+    result.registration.alias('Public Collection')
+  );
+  const view = new DataView(selected.buffer);
+  const entries = Array.from({ length: view.getUint16(4) }, (_, index) => 12 + index * 16);
+  const dsig = entries.find(
+    (entry) => new TextDecoder().decode(selected.subarray(entry, entry + 4)) === 'DSIG'
+  )!;
+  assert.deepEqual(
+    selected.subarray(
+      view.getUint32(dsig + 8),
+      view.getUint32(dsig + 8) + view.getUint32(dsig + 12)
+    ),
+    signatureTable
+  );
+  first.registration.dispose();
+  result.registration.dispose();
+  result.registration.dispose();
+  assert.deepEqual(first.deleted, first.added);
+  assert.deepEqual(result.deleted, result.added);
 });
 
 test('unsigned first face keeps all bytes while its next face uses the selected SFNT', async () => {

@@ -268,7 +268,10 @@ test('default registration admits both signed faces under distinct private alias
   assert.notEqual(registration.alias('Signed Face 0'), registration.alias('Signed Face 1'));
   for (const [faceIndex, face] of created.entries()) {
     assert.equal(face.family, registration.alias(`Signed Face ${faceIndex}`));
-    assert.deepEqual(face.bytes, materializeCollectionFace(signedCollection, faceIndex));
+    assert.deepEqual(
+      face.bytes,
+      faceIndex === 0 ? signedCollection : materializeCollectionFace(signedCollection, faceIndex)
+    );
   }
   assert.equal(hash(signedCollection), untouched);
   registration.dispose();
