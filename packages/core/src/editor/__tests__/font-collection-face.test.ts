@@ -164,28 +164,116 @@ test('absent faces, bad directories and table ranges fail closed', () => {
   assert.throws(() => materializeCollectionFace(overlaps), /directory/);
 });
 
-test('signed selected faces are refused without silently dropping their signature', () => {
-  const signed = ttc.slice(),
-    base = new DataView(signed.buffer).getUint32(12);
-  signed.set(new TextEncoder().encode('DSIG'), base + 12);
-  assert.throws(() => materializeCollectionFace(signed), /signature-aware/);
-  const version2 = new Uint8Array(ttc.length + 12),
-    original = new DataView(ttc.buffer);
-  version2.set(ttc.subarray(0, 20));
-  version2.set(ttc.subarray(20), 32);
-  const view = new DataView(version2.buffer);
+// Public DSIG envelopes exercise table transport, not cryptographic validity.
+const signatureTable = new Uint8Array([0, 0, 0, 1, 0, 0, 0, 0]);
+function withFaceSignature(font: Uint8Array) {
+  const tables = directory(font),
+    directoryEnd = 12 + tables.length * 16;
+  const result = new Uint8Array(font.length + 16 + signatureTable.length),
+    view = new DataView(result.buffer);
+  result.set(font.subarray(0, directoryEnd));
+  result.set(font.subarray(directoryEnd), directoryEnd + 16);
+  view.setUint16(4, tables.length + 1);
+  for (const table of tables) view.setUint32(table.entry + 8, table.offset + 16);
+  result.set(new TextEncoder().encode('DSIG'), directoryEnd);
+  view.setUint32(directoryEnd + 8, font.length + 16);
+  view.setUint32(directoryEnd + 12, signatureTable.length);
+  result.set(signatureTable, font.length + 16);
+  return result;
+}
+function withCollectionSignature(source: Uint8Array) {
+  const original = new DataView(source.buffer),
+    count = original.getUint32(8),
+    oldHeaderEnd = 12 + count * 4;
+  const result = new Uint8Array(source.length + 12 + signatureTable.length),
+    view = new DataView(result.buffer);
+  result.set(source.subarray(0, oldHeaderEnd));
+  result.set(source.subarray(oldHeaderEnd), oldHeaderEnd + 12);
   view.setUint32(4, 0x00020000);
-  for (const index of [0, 1]) {
+  for (let index = 0; index < count; index++) {
     const base = original.getUint32(12 + index * 4);
     view.setUint32(12 + index * 4, base + 12);
-    for (const table of directory(ttc, base))
+    for (const table of directory(source, base))
       view.setUint32(table.entry + 12 + 8, table.offset + 12);
   }
-  assert.equal(sfntChecksum(materializeCollectionFace(version2, 1)), 0xb1b0afba);
-  view.setUint32(20, 0x44534947);
-  view.setUint32(24, 4);
-  view.setUint32(28, ttc.length);
-  assert.throws(() => materializeCollectionFace(version2), /signature-aware/);
+  view.setUint32(oldHeaderEnd, 0x44534947);
+  view.setUint32(oldHeaderEnd + 4, signatureTable.length);
+  view.setUint32(oldHeaderEnd + 8, source.length + 12);
+  result.set(signatureTable, source.length + 12);
+  return result;
+}
+const signedFaces = collection([withFaceSignature(regular), withFaceSignature(bold)]);
+const signedCollection = withCollectionSignature(signedFaces);
+
+test('collection signatures do not block either face and face DSIG tables stay intact', () => {
+  const untouched = hash(signedCollection);
+  for (const faceIndex of [0, 1]) {
+    assert.deepEqual(boundedStructuralFontValidator(signedCollection, faceIndex), { valid: true });
+    const selected = materializeCollectionFace(signedCollection, faceIndex),
+      unsignedHeader = materializeCollectionFace(signedFaces, faceIndex),
+      dsig = directory(selected).find((table) => table.tag === 'DSIG')!;
+    assert.deepEqual(selected, unsignedHeader);
+    assert.deepEqual(selected.subarray(dsig.offset, dsig.offset + dsig.length), signatureTable);
+    assert.equal(directory(selected).length, directory([regular, bold][faceIndex]!).length + 1);
+    const original = withFaceSignature([regular, bold][faceIndex]!);
+    for (const table of directory(original)) {
+      const output = directory(selected).find((candidate) => candidate.tag === table.tag)!;
+      const before = original.slice(table.offset, table.offset + table.length),
+        after = selected.slice(output.offset, output.offset + output.length);
+      if (table.tag === 'head') {
+        before.fill(0, 8, 12);
+        after.fill(0, 8, 12);
+      }
+      assert.deepEqual(after, before, table.tag);
+    }
+    assert.deepEqual(boundedStructuralFontValidator(selected, 0), { valid: true });
+    assert.equal(sfntChecksum(selected), 0xb1b0afba);
+  }
+  assert.equal(hash(signedCollection), untouched);
+});
+
+test('a face DSIG table still obeys the selected table range and overlap guards', () => {
+  const source = signedCollection.slice(),
+    view = new DataView(source.buffer),
+    base = view.getUint32(16),
+    dsig = directory(source, base).find((table) => table.tag === 'DSIG')!;
+  view.setUint32(dsig.entry + 8, source.length);
+  assert.throws(() => materializeCollectionFace(source, 1), /range/);
+  view.setUint32(dsig.entry + 8, base);
+  assert.throws(() => materializeCollectionFace(source, 1), /directory/);
+});
+
+test('default registration admits both signed faces under distinct private aliases', async () => {
+  const untouched = hash(signedCollection),
+    created: { family: string; bytes: Uint8Array }[] = [],
+    deleted: unknown[] = [];
+  const registration = await registerEmbeddedFontFaces(
+    [0, 1].map((faceIndex) => ({
+      request: { family: `Signed Face ${faceIndex}`, weight: 400, style: 'normal' as const },
+      id: `signed-${faceIndex}`,
+      bytes: signedCollection,
+      hash: `sha256:${untouched}`,
+      faceIndex,
+    })),
+    {
+      fontSet: { add: () => {}, delete: (face) => deleted.push(face) },
+      createFontFace: (family, bytes) => {
+        const face = { family, bytes, load: async () => {} };
+        created.push(face);
+        return face;
+      },
+    }
+  );
+  assert.equal(registration.installed, 2);
+  assert.notEqual(registration.alias('Signed Face 0'), registration.alias('Signed Face 1'));
+  for (const [faceIndex, face] of created.entries()) {
+    assert.equal(face.family, registration.alias(`Signed Face ${faceIndex}`));
+    assert.deepEqual(face.bytes, materializeCollectionFace(signedCollection, faceIndex));
+  }
+  assert.equal(hash(signedCollection), untouched);
+  registration.dispose();
+  registration.dispose();
+  assert.deepEqual(deleted, created);
 });
 
 test('registration gives different collection faces different aliases and browser bytes', async () => {
