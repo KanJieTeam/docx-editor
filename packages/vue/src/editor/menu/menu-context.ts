@@ -32,6 +32,8 @@ export interface MenuContextValue {
   readonly onParagraphDialog: (() => void) | undefined;
   readonly onReportIssue: (() => void) | undefined;
   readonly reportIssue: boolean | undefined;
+  /** A document is opening: the bar is disabled, like the toolbar. */
+  readonly opening?: boolean;
 }
 
 export const MenuContext: InjectionKey<MaybeRef<MenuContextValue>> = Symbol('MenuContext');
@@ -99,3 +101,6 @@ export const MenuOverflowScope = defineComponent({
     return () => slots.default?.();
   },
 });
+
+/** Direct menubar rows participate in Tab navigation; popup rows use arrow keys. */
+export const MenuRowTabIndexContext: InjectionKey<number> = Symbol('MenuRowTabIndex');

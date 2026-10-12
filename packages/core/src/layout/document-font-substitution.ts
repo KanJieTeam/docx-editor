@@ -4,6 +4,7 @@ import { fontTableAlternates } from '../store/package/font-table-alternates.ts';
 import { fontFamilyName } from '../store/package/font-family-name.ts';
 import type { OoxmlElement, OoxmlNode } from '../store/package/ooxml-tree.ts';
 import { WML_NAMESPACE_URI } from '../store/package/ooxml-shared.ts';
+import { SYMBOL_ENCODED_FAMILIES } from '../store/package/symbol-encoding.ts';
 import { applicationRunDefaults } from './application-run-defaults.ts';
 import { readDocDefaults } from './style-definition-reader.ts';
 import { resolveRunStyle } from './run-style.ts';
@@ -58,6 +59,25 @@ function wordAttribute(node: OoxmlElement, name: string): string | undefined {
   )?.value;
 }
 
+/** Root elements of the WordprocessingML parts that can carry `w:rFonts`. */
+const RUN_FONT_PART_ROOTS = new Set([
+  'document',
+  'hdr',
+  'ftr',
+  'footnotes',
+  'endnotes',
+  'comments',
+  'styles',
+  'numbering',
+  'glossaryDocument',
+]);
+
+/** Elements that hold only character data, so the scan never descends into them. */
+const TEXT_ONLY_ELEMENTS = new Set(['t', 'delText', 'instrText', 'delInstrText']);
+
+/** Bounds the script-default scan. The scanned prefix still yields its defaults. */
+const MAX_SCRIPT_DEFAULT_SCAN_NODES = 2_000_000;
+
 /** Avoid assigning one global substitute when a whole name needs different script defaults. */
 function scriptDefaults(
   view: Pick<HeadlessDocumentView, 'currentPackage' | 'stylesRoot' | 'documentThemeFonts'>,
@@ -84,31 +104,42 @@ function scriptDefaults(
   const needs = new Map<string, Set<string>>();
   let inspected = 0;
   for (const part of view.currentPackage().parts.values()) {
+    // Only story, style, and numbering parts carry run fonts. Charts, themes, and
+    // custom XML never spend the scan budget.
+    if (part.root.namespaceUri !== WML_NAMESPACE_URI) continue;
+    if (!RUN_FONT_PART_ROOTS.has(part.root.localName)) continue;
     const stack: OoxmlNode[] = [part.root];
-    while (stack.length > 0 && inspected++ < 100_000) {
+    // Past the budget, keep what the scanned prefix found instead of dropping every
+    // script default. A family seen in one slot keeps that slot's default.
+    while (stack.length > 0 && inspected < MAX_SCRIPT_DEFAULT_SCAN_NODES) {
+      inspected++;
       const node = stack.pop()!;
       if (node.kind === 'textValue') continue;
-      if (node.namespaceUri === WML_NAMESPACE_URI && node.localName === 'rFonts') {
-        for (const [slot, target] of [
-          ['ascii', latin],
-          ['hAnsi', highAnsi],
-          ['eastAsia', eastAsia],
-          ['cs', complex],
-        ] as const) {
-          const family = fontFamilyName(wordAttribute(node, slot));
-          if (!family || !target) continue;
-          const key = family.trim().toLowerCase();
-          const targets = needs.get(key) ?? new Set<string>();
-          targets.add(target);
-          needs.set(key, targets);
+      if (node.namespaceUri === WML_NAMESPACE_URI) {
+        if (TEXT_ONLY_ELEMENTS.has(node.localName)) continue;
+        if (node.localName === 'rFonts') {
+          for (const [slot, target] of [
+            ['ascii', latin],
+            ['hAnsi', highAnsi],
+            ['eastAsia', eastAsia],
+            ['cs', complex],
+          ] as const) {
+            const family = fontFamilyName(wordAttribute(node, slot));
+            if (!family || !target) continue;
+            const key = family.trim().toLowerCase();
+            const targets = needs.get(key) ?? new Set<string>();
+            targets.add(target);
+            needs.set(key, targets);
+          }
+          continue;
         }
       }
       for (const next of node.children) stack.push(next);
     }
-    // An incomplete scan cannot prove that a family has only one script target.
-    if (stack.length > 0)
-      return { fallbacks: new Map(), ambiguousFamilies: [], defaults: new Map() };
   }
+  // A symbol-encoded face draws private-use codes that no text face carries. A text default
+  // would paint missing glyphs and size the line by the wrong face, so these stay unresolved.
+  for (const family of SYMBOL_ENCODED_FAMILIES) needs.delete(family);
   const fallbacks = new Map<string, string>();
   const ambiguousFamilies: string[] = [];
   for (const [family, targets] of needs) {
