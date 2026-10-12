@@ -61,7 +61,7 @@ export interface DocxEditorRootProps {
   popups?: import('./popup-config').DocxEditorPopups;
   document?: DocumentSource;
   fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
-  /** Explicit shaping byte ceiling; identity change remounts. */
+  /** Explicit shaping byte ceiling; a changed maxFontBytes value remounts. */
   fontExecution?: FontExecutionOptions;
   /** Author for later comments, replies, and tracked changes. Changes apply without a remount. */
   author?: string;
@@ -304,13 +304,12 @@ export function useDocxEditorRootOwner(
 
   if (typeof window !== 'undefined') {
     watch(
-      () =>
-        [
-          toValue(props).document,
-          toValue(props).fonts,
-          toValue(props).fontExecution,
-          toValue(props).imageDecodePort,
-        ] as const,
+      [
+        () => toValue(props).document,
+        () => toValue(props).fonts,
+        () => toValue(props).fontExecution?.maxFontBytes,
+        () => toValue(props).imageDecodePort,
+      ],
       createEditor,
       { immediate: true, flush: 'post' }
     );

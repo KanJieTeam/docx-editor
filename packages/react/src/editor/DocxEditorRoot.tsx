@@ -64,8 +64,8 @@ import {
 } from './revision-style-registry';
 
 /**
- * Props for `DocxEditor.Root`. `document`, `fonts`, `fontExecution` and `imageDecodePort` identity remounts
- * the editor. Later `author`, `locale`, `mode`, `translate`, `zoom`, and `zoomMode` changes use
+ * Props for `DocxEditor.Root`. `document`, `fonts` and `imageDecodePort` identity changes remount
+ * the editor. Changing `fontExecution.maxFontBytes` also remounts. Later `author`, `locale`, `mode`, `translate`, `zoom`, and `zoomMode` changes use
  * instance setters. `modules` is sampled at mount only.
  *
  * @public
@@ -86,7 +86,7 @@ export interface DocxEditorRootProps {
    * failures degrade to the fixed measurer and report through `onFontError`.
    */
   fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
-  /** Explicit shaping byte ceiling; identity change remounts. */
+  /** Explicit shaping byte ceiling; a changed maxFontBytes value remounts. */
   fontExecution?: FontExecutionOptions;
   /** Author for later comments, replies, and tracked changes. Changes apply without a remount. */
   author?: string;
@@ -268,6 +268,7 @@ export function DocxEditorRoot(props: DocxEditorRootProps) {
   const [markupRevision, setMarkupRevision] = useState(0);
   const propsRef = useRef(props);
   propsRef.current = props;
+  const fontExecutionMaxFontBytes = fontExecution?.maxFontBytes;
 
   const [editor, setEditor] = useState<DocxEditorInstance | null>(null);
   /** The `fieldResults` the current instance was created with. */
@@ -328,7 +329,7 @@ export function DocxEditorRoot(props: DocxEditorRootProps) {
       // Functional update: a StrictMode re-run's second instance must not be clobbered.
       setEditor((current) => (current === instance ? null : current));
     };
-  }, [doc, fonts, fontExecution, imageDecodePort, revisionStyleRegistry]);
+  }, [doc, fonts, fontExecutionMaxFontBytes, imageDecodePort, revisionStyleRegistry]);
 
   // Fired AFTER the instance is published: this effect runs in the commit that rendered
   // the new editor, after child layout effects — so a `DocxEditor.Content` in the tree
