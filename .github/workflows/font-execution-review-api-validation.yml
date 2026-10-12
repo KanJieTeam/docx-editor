@@ -1,0 +1,92 @@
+name: Font execution review API extraction
+
+on:
+  push:
+    branches: [test/font-execution-review-api-20261012]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: font-execution-review-api-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  api:
+    if: github.repository == 'KanJieTeam/docx-editor'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout the exact reviewed source
+        uses: actions/checkout@v7
+        with:
+          repository: KanJieTeam/docx-editor
+          ref: 3a46e605434227d382cc87310633e317fc791b0d
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Guard the immutable feature source
+        run: |
+          test "$(git rev-parse HEAD)" = 3a46e605434227d382cc87310633e317fc791b0d
+          git diff --exit-code
+          mkdir -p validation-evidence
+          git rev-parse HEAD > validation-evidence/source-head.txt
+          git ls-files docs/api | xargs sha256sum > validation-evidence/api-before.sha256
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install the complete frozen dependency graph
+        run: bun install --frozen-lockfile
+      - name: Build the official package declarations
+        id: build
+        env:
+          NODE_OPTIONS: --max-old-space-size=2048
+        run: |
+          set -o pipefail
+          bun run build:packages 2>&1 | tee validation-evidence/build.log
+      - name: Preserve the actual committed API check result
+        id: check
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bun run api:check 2>&1 | tee validation-evidence/api-check.log
+      - name: Extract all actual official API reports
+        id: extract
+        run: |
+          set -o pipefail
+          bun run api:extract 2>&1 | tee validation-evidence/api-extract.log
+      - name: Record generated differences and source identity
+        id: guard
+        if: always()
+        run: |
+          git diff -- docs/api > validation-evidence/api.patch
+          git diff --name-only -- docs/api > validation-evidence/api-changed-paths.txt
+          git ls-files docs/api | xargs sha256sum > validation-evidence/api-after.sha256
+          git diff --exit-code -- . ':!docs/api'
+      - name: Upload only public API reports and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: font-execution-review-api-3a46e605434227d382cc87310633e317fc791b0d
+          path: |
+            validation-evidence/
+            docs/api/
+            packages/*/temp/*.api.md
+          if-no-files-found: error
+          retention-days: 7
+      - name: Keep the original API check failure visible
+        if: always()
+        env:
+          BUILD: ${{ steps.build.outcome }}
+          CHECK: ${{ steps.check.outcome }}
+          EXTRACT: ${{ steps.extract.outcome }}
+          GUARD: ${{ steps.guard.outcome }}
+        run: |
+          test "$BUILD" = success
+          test "$EXTRACT" = success
+          test "$GUARD" = success
+          test "$CHECK" = success
