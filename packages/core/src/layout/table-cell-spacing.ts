@@ -75,3 +75,9 @@ interface SpacedTable {
   readonly columnWidthsPt: readonly number[];
   readonly cellSpacingPt: number;
 }
+
+export function sumCols(cols: readonly number[], from: number, to: number): number {
+  let sum = 0;
+  for (let index = from; index < to && index < cols.length; index += 1) sum += cols[index]!;
+  return sum;
+}
