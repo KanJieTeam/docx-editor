@@ -105,9 +105,27 @@ for (const [name, source] of [
       const original = equationXml(await left.save());
       expect(original).toHaveLength(1);
       if (name === 'math styles') {
-        expect(original[0]).toContain('<m:t>Q</m:t>');
-        expect(original[0]).toContain('<m:t>N</m:t>');
-        expect(original[0]).toContain('<m:sty m:val="bi"/>');
+        const saved = readOoxmlPackage(new Uint8Array(await left.save()));
+        if (!saved.ok) throw new Error(saved.reason);
+        const part = saved.package.parts.get(saved.package.mainDocumentPart)!;
+        const texts: string[] = [];
+        const styles: string[] = [];
+        walk(part.root, (node) => {
+          if (node.kind === 'textValue' || node.namespaceUri !== M) return;
+          if (node.localName === 't') {
+            texts.push(
+              node.children.map((child) => (child.kind === 'textValue' ? child.value : '')).join('')
+            );
+          }
+          if (node.localName === 'sty') {
+            const value = node.attributes.find(
+              (attribute) => attribute.namespaceUri === M && attribute.localName === 'val'
+            );
+            if (value) styles.push(value.value);
+          }
+        });
+        expect(texts).toEqual(['Q', 'N', 'al']);
+        expect(styles).toEqual(['bi']);
         expect(original[0]).not.toMatch(/[\u{1D400}-\u{1D7FF}]/u);
       }
       const select = (editor: typeof left, offset: number) => {
