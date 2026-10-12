@@ -70,6 +70,8 @@ Raised and lowered text contributes to automatic and minimum line heights. This 
 
 #### Equation source formatting
 
+With the default Cambria Math face, Latin and Greek letters use mathematical italic glyphs unless `m:sty` specifies plain, bold, or bold italic. Normal-text runs keep their original characters. Explicit non-math faces keep their Word formatting. Measurement and paint use the same display string; saved OMML retains the original text.
+
 Equations retain their canonical Office Math source when you save the document. Supported run fonts, bold, italic, literal text, and normal text project within fractions, radicals, scripts, and other supported structures. Upper and lower bars also project as math.
 
 Compact equation replacement is disabled when it cannot preserve run formatting or bars. You can remove the equation and edit ordinary text beside it. This restriction applies to the equation, not the document. Unsupported source properties retain the text fallback and remain unchanged on save.
