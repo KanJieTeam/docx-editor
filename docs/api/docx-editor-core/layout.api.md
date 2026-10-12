@@ -366,7 +366,8 @@ export interface CjkTypographySettings {
     readonly after: Readonly<Record<string, string>>;
     readonly before: Readonly<Record<string, string>>;
     readonly compression: 'doNotCompress' | 'compressPunctuation' | 'compressPunctuationAndJapaneseKana';
-    readonly noPunctuationKerning?: true;
+    readonly punctuationKerning?: boolean;
+    readonly sourceEastAsianFont?: boolean;
     readonly strict: boolean;
 }
 
@@ -3034,7 +3035,6 @@ export interface ResolvedRunStyle {
         readonly context?: ShapingContext;
         readonly direction: 'ltr' | 'rtl';
         readonly level: number;
-        readonly noPunctuationKerning?: true;
         readonly runDirection?: 'ltr' | 'rtl';
         readonly script: string;
         readonly wordSpacingPt?: number;
@@ -3608,6 +3608,8 @@ export interface SemanticLayout {
 
 // @public
 export interface SemanticLayoutOptions {
+    // @internal
+    readonly bodyBlockLimit?: number;
     readonly cache?: ParagraphLayoutCache<readonly PendingLine[]>;
     readonly compatibilityMode?: number;
     readonly defaultTabStopPt?: number;
@@ -3832,6 +3834,7 @@ export interface SemanticTableCell {
     readonly revisionShading?: 'inserted' | 'deleted' | 'merged' | 'split';
     // (undocumented)
     readonly revisionShadingAuthor?: string;
+    readonly rowTableBorders?: TableBorderBox;
     readonly shading?: string;
     readonly styleFormatting: TableCellStyleFormatting;
     readonly suppressesTopBand?: true;
@@ -4058,7 +4061,6 @@ export interface ShapeInput {
     readonly environment: ShapingEnvironment;
     // (undocumented)
     readonly fontSizeHalfPoints: number;
-    readonly noPunctuationKerning?: true;
     // (undocumented)
     readonly text: string;
 }

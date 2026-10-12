@@ -59,7 +59,6 @@ import {
   cjkColonNaturalWidths,
 } from './cjk-spacing.ts';
 import { resolveCjkTypography } from './cjk-typography.ts';
-import { withPunctuationKerningPolicy } from './punctuation-kerning.ts';
 import {
   EMPTY_TAB_STOPS,
   tabAdvanceWidth,
@@ -268,8 +267,8 @@ export function breakParagraph(
           : undefined
       )
     );
-  const policyPieces = withPunctuationKerningPolicy(visiblePieces, typography.settings);
-  const pieces = compressCjkPieces(policyPieces, typography, measurer, preserveColonAdvances);
+  const keepColon = preserveColonAdvances;
+  const pieces = compressCjkPieces(visiblePieces, typography, measurer, keepColon, available);
   const colonNaturalWidths = cjkColonNaturalWidths(pieces, visiblePieces, measurer);
   const opticalParagraph =
     typography.settings?.compression !== undefined &&

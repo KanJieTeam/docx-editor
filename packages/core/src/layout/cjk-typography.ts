@@ -7,8 +7,10 @@ import type { OoxmlElement, OoxmlProperty } from '@docx-editor.dev/core/store';
 export interface CjkTypographySettings {
   /** Apply the strict Japanese small-kana and prolonged-sound-mark restrictions. */
   readonly strict: boolean;
-  /** Direct document setting; it leaves Latin letter kerning enabled. */
-  readonly noPunctuationKerning?: true;
+  /** Disable adjacent full-width punctuation compression when false. */
+  readonly punctuationKerning?: boolean;
+  /** The document defaults explicitly select an East Asian font. */
+  readonly sourceEastAsianFont?: boolean;
   /** Whitespace compression selected by `w:characterSpacingControl`. */
   readonly compression:
     | 'doNotCompress'
@@ -36,7 +38,7 @@ export const DEFAULT_CJK_TYPOGRAPHY: CjkParagraphTypography = Object.freeze({
 const on = (value: string | undefined): boolean => !['0', 'false', 'off'].includes(value ?? '');
 export function cjkTypographyFromSettings(root: OoxmlElement | null): CjkTypographySettings {
   let strict = false;
-  let noPunctuationKerning = false;
+  let punctuationKerning = true;
   let compression: CjkTypographySettings['compression'] = 'doNotCompress';
   const before: Record<string, string> = Object.create(null);
   const after: Record<string, string> = Object.create(null);
@@ -48,12 +50,7 @@ export function cjkTypographyFromSettings(root: OoxmlElement | null): CjkTypogra
       (attribute) => attribute.localName === 'val' && attribute.namespaceUri === child.namespaceUri
     )?.value;
     if (child.localName === 'strictFirstAndLastChars') strict = on(value);
-    if (
-      child.localName === 'noPunctuationKerning' &&
-      root?.localName === 'settings' &&
-      root.namespaceUri === child.namespaceUri
-    )
-      noPunctuationKerning = ['', '1', 'true', 'on'].includes(value ?? '');
+    if (child.localName === 'noPunctuationKerning') punctuationKerning = !on(value);
     if (
       child.localName === 'characterSpacingControl' &&
       (value === 'doNotCompress' ||
@@ -77,7 +74,7 @@ export function cjkTypographyFromSettings(root: OoxmlElement | null): CjkTypogra
   }
   return Object.freeze({
     strict,
-    ...(noPunctuationKerning ? { noPunctuationKerning: true as const } : {}),
+    punctuationKerning,
     compression,
     before: Object.freeze(before),
     after: Object.freeze(after),

@@ -68,7 +68,6 @@ export function shapeLayoutStyleRun(
     bidiLevel: style.shaping?.direction === 'rtl' ? 1 : 0,
     environment: runShapingEnvironment(environment, font, style),
     ...(context ? { context } : {}),
-    ...(style.shaping?.noPunctuationKerning ? { noPunctuationKerning: true as const } : {}),
   });
 }
 

@@ -45,6 +45,8 @@ import {
   type ChromeMenuId,
 } from '@docx-editor.dev/core/editor';
 import { useDocxEditor } from '../context';
+import { useEditorState } from '../useEditorState';
+import type { EditorSnapshot } from '@docx-editor.dev/core/contracts/editor';
 import { useTranslation } from '../../i18n';
 import type { TranslationKey } from '../../i18n';
 import { DocxEditorPageSetupDialog } from '../DocxEditorPageSetup';
@@ -53,6 +55,7 @@ import type { ToolbarTranslate } from '../toolbar/toolbar-context';
 import { chromeIcon, guardToolbarMousedown } from '../toolbar/ToolbarButton';
 import {
   MENU_OVERFLOW_ID,
+  MenuRowTabIndexContext,
   MenuContext,
   MenuOverflowContext,
   type MenuContextValue,
@@ -222,6 +225,8 @@ function menuOfChild(child: ReactNode): ChromeMenuId | null {
   return null;
 }
 
+const selectOpening = (snapshot: EditorSnapshot): boolean => snapshot.isOpening === true;
+
 function DocxEditorMenuRoot(props: DocxEditorMenuProps) {
   const dialogs = useDialogHost();
   const popups = usePopupConfig();
@@ -245,6 +250,10 @@ function DocxEditorMenuRoot(props: DocxEditorMenuProps) {
   const editor = useDocxEditor();
   const { t: catalogT } = useTranslation();
   const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
+  const opening = useEditorState(selectOpening);
+  useEffect(() => {
+    if (opening) setOpenMenu(null);
+  }, [opening]);
   // The last file the packaged Open read. The default Save names its download after it
   // when the host pinned no `fileName` — opening "contract-v2.docx" and saving must not
   // produce "document.docx".
@@ -415,8 +424,10 @@ function DocxEditorMenuRoot(props: DocxEditorMenuProps) {
           : setParagraphDialogOpen(true),
       onReportIssue,
       reportIssue,
+      opening,
     }),
     [
+      opening,
       editor,
       exportPending,
       executeExport,
@@ -564,7 +575,7 @@ function DocxEditorMenuRoot(props: DocxEditorMenuProps) {
         }}
       >
         <MenuOverflowContext.Provider value={overflowValue}>
-          {content}
+          <MenuRowTabIndexContext.Provider value={0}>{content}</MenuRowTabIndexContext.Provider>
           {overflow.size > 0 ? (
             <Menu
               id={MENU_OVERFLOW_ID}

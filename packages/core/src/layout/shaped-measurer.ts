@@ -1,6 +1,7 @@
 import { isRunKerningEnabled } from './run-kerning.ts';
 import { runLigatureFeatureKey } from './run-ligatures.ts';
 import { createShapedLineMetrics } from './shaped-line-metrics.ts';
+import { withSymbolFaceMetrics } from './symbol-face-metrics.ts';
 import {
   countAsciiSpaces,
   fallbackCaretAdvances,
@@ -153,7 +154,9 @@ export function createShapedMeasurer(
 ): TextMeasurer {
   const environment = 'environment' in options ? options.environment : undefined;
   const explicit = 'environment' in options ? undefined : options;
-  const { shaper, resolveFont, fallback } = options;
+  const { shaper, resolveFont } = options;
+  // An unavailable symbol-encoded face keeps its own line box and advances.
+  const fallback = withSymbolFaceMetrics(options.fallback);
   const baseEnvironment: LayoutShapingEnvironment =
     environment ??
     ({
@@ -310,7 +313,7 @@ export function createShapedMeasurer(
               : [style.shaping.script, style.shaping.direction, text]
           )}`
         : `0:${text}`;
-      const widthKey = `${isRunKerningEnabled(style) ? 1 : 0}:${runLigatureFeatureKey(style)}:${style.shaping?.noPunctuationKerning === true ? 1 : 0}:${shapingKey}`;
+      const widthKey = `${isRunKerningEnabled(style) ? 1 : 0}:${runLigatureFeatureKey(style)}:${shapingKey}`;
       let advance = byText.get(widthKey);
       if (advance === undefined) {
         let total = 0;

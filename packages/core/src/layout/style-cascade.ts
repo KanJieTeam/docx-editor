@@ -53,7 +53,7 @@ import {
 import { paragraphShading } from './ooxml-shading.ts';
 import { cascadedTabStops, tabStopsFingerprint, type ResolvedTabStops } from './paragraph-tabs.ts';
 import { withNumberingTabRule } from './numbering-tab-rule.ts';
-import { NO_THEME_FONTS, type ThemeFonts } from './run-style.ts';
+import { NO_THEME_FONTS, resolveRunStyle, type ThemeFonts } from './run-style.ts';
 import { combineStyleToggles } from './style-toggles.ts';
 import { styleChain, styleIdFromProps } from './style-chain.ts';
 import { paragraphMarkRunProperties } from './paragraph-mark-run.ts';
@@ -463,7 +463,7 @@ export function buildStyleCascadeTable(
   themeFonts: ThemeFonts = NO_THEME_FONTS,
   settingsRoot: OoxmlElement | null = null
 ): StyleCascadeTable {
-  const typography = cjkTypographyFromSettings(settingsRoot);
+  let typography = cjkTypographyFromSettings(settingsRoot);
   // One read of the compatibility profile; the cache token folds every rule it turns on.
   const compatibility = compatibilityProfileFromSettings(settingsRoot);
   const ligaturesEnabled = compatibility.has('optionalLigatures');
@@ -504,6 +504,14 @@ export function buildStyleCascadeTable(
   }
 
   const authoredDefaults = readDocDefaults(stylesRoot);
+  // Application/theme fallback alone does not opt the source into punctuation squeezing.
+  const sourceEastAsianFont =
+    authoredDefaults.run.some(
+      (prop) =>
+        prop.localName === 'rFonts' &&
+        Boolean(prop.attributes?.eastAsia || prop.attributes?.eastAsiaTheme)
+    ) && Boolean(resolveRunStyle(authoredDefaults.run, themeFonts).fontFamilyEastAsia);
+  typography = Object.freeze({ ...typography, sourceEastAsianFont });
   const defaults = {
     ...authoredDefaults,
     run: [...applicationRunDefaults(stylesRoot, ligaturesEnabled), ...authoredDefaults.run],
