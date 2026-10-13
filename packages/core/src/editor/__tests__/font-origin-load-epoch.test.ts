@@ -180,3 +180,28 @@ test('an error listener that replaces the document cannot forward an old font di
   expect(editor.surface!.session.bodyText()).toContain('Error listener replacement');
   await expectSavedText(editor, 'Error listener replacement');
 });
+
+test.each(['load', 'destroy'] as const)(
+  'an error listener that calls %s prevents stale delivery to later listeners',
+  async (action) => {
+    const state = deferredOrigin();
+    const later: unknown[] = [];
+    state.editor.on('error', () => {
+      if (action === 'load') state.editor.load(replacement('Listener replacement'));
+      else state.editor.destroy();
+    });
+    state.editor.on('error', (error) => later.push(error));
+    await state.start();
+    await state.refuse();
+    expect(state.reports).toHaveLength(1);
+    expect(state.events).toEqual([state.reports[0]]);
+    expect(later).toEqual([]);
+    expect(state.fontDiagnostics).toEqual([]);
+    if (action === 'load') {
+      expect(state.editor.surface!.session.bodyText()).toContain('Listener replacement');
+      await expectSavedText(state.editor, 'Listener replacement');
+    } else {
+      expect(state.editor.surface).toBeNull();
+    }
+  }
+);

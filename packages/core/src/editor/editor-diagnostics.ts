@@ -607,7 +607,7 @@ export interface FontErrorReporting {
   readonly config: { readonly onFontError?: (error: EditorFontError) => void };
   readonly events: {
     readonly hasErrorHandlers: () => boolean;
-    readonly emitError: (error: EditorError) => void;
+    readonly emitError: (error: EditorError, isCurrent?: () => boolean) => void;
   };
   readonly diagnostics: EditorDiagnostics;
 }
@@ -640,6 +640,6 @@ export function reportEditorFontError(
     /* the host's reporting problem, not the document's */
   }
   if (!isCurrent()) return;
-  host.events.emitError(error);
+  host.events.emitError(error, isCurrent);
   if (isCurrent()) host.diagnostics.fontFailed(shaperNeverLoaded ? 'wasmUnavailable' : error.code);
 }
