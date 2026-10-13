@@ -112,6 +112,7 @@ test('throwing actual host callback still emits the current refusal once and kee
   document.body.append(container);
   let count = 0;
   const errors: unknown[] = [];
+  const fontDiagnostics: unknown[] = [];
   const editor = createDocxEditor({
     container,
     document: documentBytes('Throw public text'),
@@ -124,10 +125,14 @@ test('throwing actual host callback still emits the current refusal once and kee
     },
   });
   editor.on('error', (error) => errors.push(error));
+  editor.on('diagnostic', (diagnostic) => {
+    if (diagnostic.kind === 'font.failed') fontDiagnostics.push(diagnostic);
+  });
   try {
     await waitFor(() => count > 0 && !editor.fontMeasurement().resolving);
     expect(count).toBe(1);
     expect(errors).toHaveLength(1);
+    expect(fontDiagnostics).toHaveLength(1);
     expect(executionRefusal(errors[0] as EditorFontError)).toBe(true);
     expect(container.textContent).toContain('Throw public text');
     editor.relayout({ sync: true });
@@ -145,6 +150,7 @@ test('destroy inside the actual font-error callback cannot revive a surface or e
   document.body.append(container);
   let refusal: EditorFontError | undefined;
   const errors: unknown[] = [];
+  const fontDiagnostics: unknown[] = [];
   const editor: DocxEditorInstance = createDocxEditor({
     container,
     document: documentBytes('Destroy public text'),
@@ -157,12 +163,16 @@ test('destroy inside the actual font-error callback cannot revive a surface or e
     },
   });
   const unsubscribe = editor.on('error', (error) => errors.push(error));
+  editor.on('diagnostic', (diagnostic) => {
+    if (diagnostic.kind === 'font.failed') fontDiagnostics.push(diagnostic);
+  });
   try {
     await waitFor(() => refusal !== undefined);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(editor.surface).toBeNull();
     expect(container.querySelector('.docx-line')).toBeNull();
     expect(errors).not.toContain(refusal);
+    expect(fontDiagnostics).toEqual([]);
   } finally {
     unsubscribe();
     editor.destroy();
@@ -176,11 +186,17 @@ test('load inside the actual font-error callback does not publish the old error 
   const replacement = documentBytes('Replacement public text', 'Unresolved Public Replacement');
   let refusal: EditorFontError | undefined;
   const errors: unknown[] = [];
+  const fontReports: { error: EditorFontError; bodyText: string }[] = [];
+  let reportedError: EditorFontError | undefined;
+  const fontDiagnostics: { owner: EditorFontError | undefined; bodyText: string; code: string }[] =
+    [];
   const editor: DocxEditorInstance = createDocxEditor({
     container,
     document: documentBytes('Old public text'),
     fonts: fonts(),
     onFontError: (error) => {
+      reportedError = error;
+      fontReports.push({ error, bodyText: editor.surface?.session.bodyText() ?? '' });
       if (executionRefusal(error) && !refusal) {
         refusal = error;
         editor.load(replacement);
@@ -188,6 +204,15 @@ test('load inside the actual font-error callback does not publish the old error 
     },
   });
   const unsubscribe = editor.on('error', (error) => errors.push(error));
+  editor.on('diagnostic', (diagnostic) => {
+    if (diagnostic.kind === 'font.failed') {
+      fontDiagnostics.push({
+        owner: reportedError,
+        bodyText: editor.surface?.session.bodyText() ?? '',
+        code: diagnostic.code,
+      });
+    }
+  });
   try {
     await waitFor(
       () =>
@@ -197,6 +222,32 @@ test('load inside the actual font-error callback does not publish the old error 
     );
     expect(container.textContent).not.toContain('Old public text');
     expect(errors).not.toContain(refusal);
+    const replacementReports = fontReports.filter((row) => row.error !== refusal);
+    expect(fontReports[0]!.error).toBe(refusal);
+    expect(fontReports[0]!.bodyText).toBe('Old public text');
+    expect(replacementReports).toHaveLength(1);
+    const replacementReport = replacementReports[0]!;
+    expect(replacementReport.bodyText).toBe('Replacement public text');
+    // The new measurement owner also measures the configured padded default face.
+    // Its current refusal must stay distinct from the superseded owner's error.
+    expect(executionRefusal(replacementReport.error)).toBe(true);
+    expect(replacementReport.error.code).toBe('initializationFailed');
+    expect(replacementReport.error.request).toEqual({
+      family: 'DejaVu Sans',
+      weight: 400,
+      style: 'normal',
+    });
+    expect(replacementReport.error).not.toBe(refusal);
+    expect(replacementReport.error.cause).not.toBe(refusal!.cause);
+    expect(errors).toEqual([replacementReport.error]);
+    expect(fontDiagnostics.filter((row) => row.owner === refusal)).toEqual([]);
+    expect(fontDiagnostics).toEqual([
+      {
+        owner: replacementReport.error,
+        bodyText: 'Replacement public text',
+        code: 'font.shaper-unavailable',
+      },
+    ]);
     const saved = unzipSync(new Uint8Array(await editor.save()));
     expect(strFromU8(saved['word/document.xml']!)).toContain('Replacement public text');
     expect(strFromU8(saved['word/document.xml']!)).not.toContain('Old public text');
