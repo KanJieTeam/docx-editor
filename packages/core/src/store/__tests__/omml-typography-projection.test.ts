@@ -72,6 +72,8 @@ test.each(['top', 'bot'])(
 test.each([
   '<w:rPr><w:rFonts w:ascii="Font A" w:hAnsi="Font B"/></w:rPr>',
   '<m:rPr><m:unknown/></m:rPr>',
+  '<w:rPr><w:constructor/></w:rPr>',
+  '<m:rPr><m:__proto__/></m:rPr>',
   '<w:rPr><w:sz w:val="28"/></w:rPr>',
 ])('keeps unsupported source typography in the bounded fallback', (properties) => {
   const projection = project(
