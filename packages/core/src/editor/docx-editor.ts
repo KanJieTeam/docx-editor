@@ -818,13 +818,12 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     } else mountBytes(bytes);
   }
 
-  function reportFontError(error: EditorFontError): void {
-    // A shaper that never loaded is not a per-face degradation: NOTHING measures correctly,
-    // and the fault is the host's build rather than the document's content. Said out loud
-    // exactly once, and only when nobody is listening — a host that reports it in its own
-    // UI does not need library noise it cannot switch off. Before this was fixed the same
-    // misconfiguration failed the BUILD, so a green build with a silent console would be a
-    // strictly worse trade (#282).
+  function reportFontError(error: EditorFontError, sequence = loadSeq): void {
+    if (destroyed || sequence !== loadSeq) return;
+    // A shaper that never loaded is a host build fault, not a per-face degradation.
+    // Warn once only when neither the host nor error events observe it. Before #282,
+    // this misconfiguration failed the build; silent degradation after that fix
+    // would leave a green build hiding unusable measurement.
     const shaperNeverLoaded =
       error.code === 'wasmUnavailable' ||
       (error.cause instanceof HarfBuzzShapingError && error.cause.code === 'unsupportedRuntime');
@@ -839,7 +838,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     } catch {
       /* the host's reporting problem, not the document's */
     }
-    emitError(error);
+    if (!destroyed && sequence === loadSeq) emitError(error);
   }
 
   // Fonts resolve asynchronously (HarfBuzz init + validation) PER LOAD, composing the
@@ -856,6 +855,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     mounted: { readonly session: preparedOpen.FontSession },
     families: readonly string[]
   ): Promise<void> {
+    const reportForLoad = (error: EditorFontError) => reportFontError(error, seq);
     const configured = config.fonts;
     const embedded = mounted.session.embeddedFonts();
     // The zero-config, nothing-embedded common case does NO font work at all: no
@@ -880,7 +880,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
             ? await composeFontOrigins(
                 [resolvedFontConfiguration, defineFontResolver((next) => configured(next))],
                 request,
-                { onOriginFailure: ({ cause }) => reportFontError(toEditorFontError(cause)) }
+                { onOriginFailure: ({ cause }) => reportForLoad(toEditorFontError(cause)) }
               )
             : await configured(request);
       const explicit: FontConfigurationBase | undefined =
@@ -907,7 +907,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       const boundedExplicit = boundedExplicitFontSources(explicit?.sources ?? [], maxFontBytes);
       const initialExplicitSources = boundedExplicit.sources;
       for (const source of boundedExplicit.dropped) {
-        reportFontError(explicitFontBudgetError(source));
+        reportForLoad(explicitFontBudgetError(source));
       }
       let fromDocument = embeddedFontSourcesAfterExplicit(
         embedded,
@@ -924,7 +924,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         if (documentDropsReported) return;
         documentDropsReported = true;
         for (const drop of fromDocument.dropped) {
-          reportFontError(embeddedFontDropError(drop));
+          reportForLoad(embeddedFontDropError(drop));
         }
       };
       let fonts = applyDocumentFontSubstitutions(
@@ -943,7 +943,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         fontsResolving = false;
         bump();
         if (explicit) {
-          reportFontError(
+          reportForLoad(
             new EditorFontError(
               'missing',
               'the supplied font configuration contains no usable sources; the fixed measurer stays in effect'
@@ -980,7 +980,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         for (const source of composed.sources ?? []) {
           const resolved = snapshot.fonts.resolve(source.request);
           if (resolved instanceof FontResolutionError) {
-            reportFontError(toEditorFontError(resolved));
+            reportForLoad(toEditorFontError(resolved));
             refused.add(fontRequestKey(source.request));
           }
         }
@@ -1149,7 +1149,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       if (destroyed || seq !== loadSeq) return;
       fontsResolving = false;
       bump();
-      reportFontError(toEditorFontError(error));
+      reportForLoad(toEditorFontError(error));
     }
   }
 
