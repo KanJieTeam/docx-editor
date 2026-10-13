@@ -818,7 +818,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     } else mountBytes(bytes);
   }
 
-  function reportFontError(error: EditorFontError): void {
+  function reportFontError(error: EditorFontError, sequence = loadSeq): void {
     // A shaper that never loaded is not a per-face degradation: NOTHING measures correctly,
     // and the fault is the host's build rather than the document's content. Said out loud
     // exactly once, and only when nobody is listening — a host that reports it in its own
@@ -839,7 +839,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     } catch {
       /* the host's reporting problem, not the document's */
     }
-    emitError(error);
+    if (!destroyed && sequence === loadSeq) emitError(error);
   }
 
   // Fonts resolve asynchronously (HarfBuzz init + validation) PER LOAD, composing the
@@ -1095,9 +1095,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         // HarfBuzz can only shape faces whose bytes reached its resource snapshot. A run may
         // still name a locally installed browser face (Helvetica is the common macOS case):
         // paint resolves that face through CSS, so falling back to the deterministic monospace
-        // grid here makes every later caret drift farther from the glyphs. Resolve the fallback
-        // through the same browser canvas + alias stack the unshaped surface uses. Headless
-        // environments still receive the fixed measurer from this resolver.
+        // grid here makes caret geometry drift. Use the same browser canvas and alias stack;
+        // headless environments still receive the fixed measurer from this resolver.
         const fallbackResolution = resolveDefaultSurfaceMeasurer(scaleOf(), {
           context: container ? tryCreateBrowserCanvasContext(container.ownerDocument) : null,
           ...(embeddedFaces ? { fontAlias: embeddedFaces.alias } : {}),
@@ -1107,7 +1106,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
           fonts,
           fallbackResolution,
           scaleOf(),
-          ++fontMeasurementEpoch
+          ++fontMeasurementEpoch,
+          (error) => !destroyed && seq === loadSeq && reportFontError(error)
         );
         shapedMeasurer = measurement.measurer;
         shapedProducer = measurement.producer;
