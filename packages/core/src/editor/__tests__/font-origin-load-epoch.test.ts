@@ -25,6 +25,7 @@ function deferredOrigin(onFontError?: (error: EditorFontError) => void) {
   const refusal = Error('Public deferred origin refused');
   const reports: EditorFontError[] = [];
   const events: unknown[] = [];
+  const fontDiagnostics: unknown[] = [];
   const editor = createDocxEditor({
     document: 'blank',
     container: document.createElement('div'),
@@ -46,10 +47,14 @@ function deferredOrigin(onFontError?: (error: EditorFontError) => void) {
   });
   editors.push(editor);
   editor.on('error', (error) => events.push(error));
+  editor.on('diagnostic', (diagnostic) => {
+    if (diagnostic.kind === 'font.failed') fontDiagnostics.push(diagnostic);
+  });
   return {
     editor,
     reports,
     events,
+    fontDiagnostics,
     async start() {
       await waitFor(() => !editor.fontMeasurement().resolving);
       expect(editor.getAvailableFonts()).toContain(catalog[0]!);
@@ -88,6 +93,7 @@ test('a deferred origin failure cannot report into a replacement document', asyn
   await state.refuse();
   expect(state.reports).toEqual([]);
   expect(state.events).toEqual([]);
+  expect(state.fontDiagnostics).toEqual([]);
   expect(state.editor.fontMeasurement().measurer).toBe('fixed');
   expect(state.editor.surface!.session.bodyText()).toContain('Replacement source text');
   await expectSavedText(state.editor, 'Replacement source text');
@@ -100,6 +106,7 @@ test('a deferred origin failure stays silent after editor destruction', async ()
   await state.refuse();
   expect(state.reports).toEqual([]);
   expect(state.events).toEqual([]);
+  expect(state.fontDiagnostics).toEqual([]);
   expect(state.editor.surface).toBeNull();
 });
 
@@ -111,6 +118,7 @@ test('a current origin failure reports once without disabling editing or save', 
   expect(state.reports).toHaveLength(1);
   expect(state.reports[0]!.message).toContain('Public deferred origin refused');
   expect(state.events).toEqual([state.reports[0]]);
+  expect(state.fontDiagnostics).toHaveLength(1);
   expect(state.editor.exec({ type: 'insertText', text: 'Current source text' }).ok).toBe(true);
   await expectSavedText(state.editor, 'Current source text');
   expect(state.reports).toHaveLength(1);
@@ -126,6 +134,7 @@ test('a callback that replaces the document cannot forward its old error event',
   await waitFor(() => !editor.fontMeasurement().resolving);
   expect(state.reports).toHaveLength(1);
   expect(state.events).toEqual([]);
+  expect(state.fontDiagnostics).toEqual([]);
   expect(editor.surface!.session.bodyText()).toContain('Callback replacement');
   await expectSavedText(editor, 'Callback replacement');
 });
@@ -139,6 +148,7 @@ test('a callback that destroys the editor cannot forward an error or revive its 
   await state.refuse();
   expect(state.reports).toHaveLength(1);
   expect(state.events).toEqual([]);
+  expect(state.fontDiagnostics).toEqual([]);
   expect(editor.surface).toBeNull();
 });
 
@@ -151,7 +161,22 @@ test('a throwing current callback preserves the original diagnostic event', asyn
   await waitFor(() => !state.editor.fontMeasurement().resolving);
   expect(state.reports).toHaveLength(1);
   expect(state.events).toEqual([state.reports[0]]);
+  expect(state.fontDiagnostics).toHaveLength(1);
   expect(state.reports[0]!.message).toContain('Public deferred origin refused');
   expect(state.editor.exec({ type: 'insertText', text: 'Usable current document' }).ok).toBe(true);
   await expectSavedText(state.editor, 'Usable current document');
+});
+
+test('an error listener that replaces the document cannot forward an old font diagnostic', async () => {
+  const state = deferredOrigin();
+  const editor = state.editor;
+  editor.on('error', () => editor.load(replacement('Error listener replacement')));
+  await state.start();
+  await state.refuse();
+  await waitFor(() => !editor.fontMeasurement().resolving);
+  expect(state.reports).toHaveLength(1);
+  expect(state.events).toEqual([state.reports[0]]);
+  expect(state.fontDiagnostics).toEqual([]);
+  expect(editor.surface!.session.bodyText()).toContain('Error listener replacement');
+  await expectSavedText(editor, 'Error listener replacement');
 });
