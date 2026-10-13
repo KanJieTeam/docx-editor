@@ -8,7 +8,8 @@
     "packages/core/src/layout/__tests__/font-execution-policy.test.ts",
     "packages/core/src/export/__tests__/font-execution-api.test.ts",
     "packages/core/src/export/__tests__/font-execution-cache.test.ts",
-    "packages/core/src/editor/__tests__/font-execution-host.test.ts"
+    "packages/core/src/editor/__tests__/font-execution-host.test.ts",
+    "packages/pro/src/collaboration/__tests__/font-execution.test.ts"
   ],
   "changeset": "font-execution-budget",
   "migration": null
