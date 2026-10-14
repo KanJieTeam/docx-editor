@@ -283,9 +283,9 @@ describe('merged text across protected physical rows', () => {
         expect(content).toHaveLength(count);
         expect(new Set(content.map(({ block }) => block.paragraphId)).size).toBe(count);
         expect(rowsByPage(layout).reduce((sum, value) => sum + value, 0)).toBe(30);
-        // Only the derived merged tail grows; the 30 authored minimum-height rows
-        // still open on the first page and finish on the second page.
-        expect(rowsByPage(layout)).toEqual([21, 9, ...Array(layout.pages.length - 2).fill(0)]);
+        // The last row holds the remaining merged text and is taller than a
+        // page, so it starts on a fresh page and splits from there.
+        expect(rowsByPage(layout)).toEqual([21, 8, 1, ...Array(layout.pages.length - 3).fill(0)]);
         expect(new Set(content.map(({ cellId }) => cellId)).size).toBe(1);
         expect(new Set(content.map(({ rowId }) => rowId)).size).toBe(1);
         for (const { page, block } of content) {
@@ -306,6 +306,53 @@ describe('merged text across protected physical rows', () => {
         if (!reopened.ok) throw new Error(reopened.reason);
         expect(layoutSemanticDocument(reopened.part, 0, { geometry, measurer })).toEqual(layout);
       });
+
+  test('a nonbreaking grown final row that fits a fresh page moves whole', () => {
+    // Rows 22-29 hold 12 lines on page 2. The 44 remaining lines (528pt) need
+    // more than the 492pt left below them but fit on an empty page.
+    const part = fixture({ exact: false, rowTwips: 370, count: 88, fixed: true });
+    const layout = layoutSemanticDocument(part, 0, { geometry, measurer });
+    const content = merged(layout);
+    expect(content).toHaveLength(88);
+    expect(rowsByPage(layout)).toEqual([21, 8, 1]);
+    const last = tables(layout).map((fragments) =>
+      fragments
+        .flatMap((table) => table.rows)
+        .filter((row) =>
+          row.cells.some((cell) =>
+            cell.blocks.some(
+              (block) =>
+                block.kind === 'paragraph' &&
+                block.lines.some(
+                  (line) => line.spans.map((span) => span.text).join('') === 'ROW-30'
+                )
+            )
+          )
+        )
+    );
+    expect(last.map((rows) => rows.length)).toEqual([0, 0, 1]);
+    expect(last[2]![0]!.hasContinuation ?? false).toBe(false);
+    const final = content.filter(({ page }) => page === 3);
+    expect(final).toHaveLength(44);
+    expect(final[0]!.block.lines[0]!.spans.map((span) => span.text).join('')).toStartWith(
+      'MERGED-LINE-45'
+    );
+  });
+
+  test('exact spans that lose a partial line at the page cut still lay out', () => {
+    // 46 lines (552pt) fit the unbroken 555pt span. The page cut after row 21
+    // leaves 4.5pt unused, so one line no longer fits the fixed-height rows.
+    const part = fixture({ exact: true, rowTwips: 370, count: 46, fixed: true });
+    const before = serializeOoxmlPart(part);
+    const layout = layoutSemanticDocument(part, 0, { geometry, measurer });
+    expect(rowsByPage(layout)).toEqual([21, 9]);
+    const content = merged(layout);
+    expect(content.filter(({ page }) => page === 1)).toHaveLength(32);
+    expect(content.length).toBeGreaterThanOrEqual(45);
+    for (const { block } of content)
+      expect(block.box.y + block.box.height).toBeLessThanOrEqual(640.001);
+    expect(serializeOoxmlPart(part)).toBe(before);
+  });
 
   test('exact spans keep their authored clipping when the head cannot fit', () => {
     const part = fixture({ exact: true, rowTwips: 370, count: 50, fixed: true });
@@ -484,4 +531,24 @@ describe('merged text across protected physical rows', () => {
     expect(plan.ok).toBe(true);
     if (plan.ok) expect(plan.ops[0]).toMatchObject({ op: 'insertTableRow', rowId: head.rowId });
   });
+});
+
+test.each([40, 160])('carried tails retain cell-spacing inset (%s)', (spacing) => {
+  const raw = serializeOoxmlPart(fixture({ exact: false, count: 100, fixed: true })).replace(
+    '<w:tblPr>',
+    `<w:tblPr><w:tblCellSpacing w:w="${spacing}" w:type="dxa"/>`
+  );
+  const parsed = readOoxmlPart(raw, { name: '/word/document.xml', contentType: 'application/xml' });
+  if (!parsed.ok) throw Error(parsed.reason);
+  const result = layoutSemanticDocument(parsed.part, 0, { geometry, measurer });
+  for (const pages of tables(result))
+    for (const table of pages)
+      for (const row of table.rows) {
+        for (const cell of row.cells) {
+          if (cell.rowSpan > 1 || row.box.height === 0) continue;
+          expect(cell.box.y + cell.box.height).toBeLessThanOrEqual(
+            row.box.y + row.box.height + 0.001
+          );
+        }
+      }
 });

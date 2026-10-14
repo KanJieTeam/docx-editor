@@ -469,7 +469,10 @@ export function createVMergeFragmentCarry(
     const record: TableRowFragmentRecord = {
       ...placed.record,
       box: { ...placed.record.box, height },
-      cells: placed.record.cells.map((cell) => ({ ...cell, box: { ...cell.box, height } })),
+      cells: placed.record.cells.map((cell) => ({
+        ...cell,
+        box: { ...cell.box, height: height - (cell.box.y - placed.record.box.y) },
+      })),
     };
     // Completed neighbours must not restart when only the merged head needs another page.
     const completed = initialCellCursors(rows[group.last]!).map((cursor, index) => ({
@@ -501,14 +504,10 @@ export function createVMergeFragmentCarry(
       const group = atRow.get(index);
       if (!group?.active) return undefined;
       growForRemainingText(group, index, top);
-      // The protected authored row keeps its physical minimum. A derived merged
-      // tail can be taller than a page and is placed by adjustPlacement instead
-      // of turning that tail into an atomic whole-row move or declining the carry.
-      const heights =
-        index === group.last && rows[index]!.height.rule !== 'exact'
-          ? group.physicalHeights
-          : group.heights;
-      return { heightFloorPt: heights[index - group.first] };
+      // The last row's floor includes the remaining merged text, so a
+      // nonbreaking tail moves whole to the next page. A tail taller than a
+      // page starts on a fresh page and adjustPlacement splits it there.
+      return { heightFloorPt: group.heights[index - group.first] };
     },
     adjustPlacement(index, placed, bottom) {
       const group = atRow.get(index);
@@ -593,6 +592,7 @@ export function createVMergeFragmentCarry(
         if (
           rowIndex.get(last.id) === group.last &&
           !last.hasContinuation &&
+          rows[group.last]!.height.rule !== 'exact' &&
           group.heads.some((head) => !head.complete)
         ) {
           throw new TablePaginationError(
