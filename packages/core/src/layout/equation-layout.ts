@@ -254,10 +254,12 @@ function layoutExpression(
 ): EquationGeometry {
   switch (expression.kind) {
     case 'text': {
-      const familyStyle = expression.format?.fontFamily
-        ? withFontFamily(style, expression.format.fontFamily)
-        : style;
-      const display = equationDisplayText(expression, familyStyle.fontFamily);
+      const authoredFamily = expression.format?.fontFamily;
+      const display = equationDisplayText(expression, authoredFamily ?? style.fontFamily);
+      const familyStyle =
+        authoredFamily && !display.mathematicalGlyphs
+          ? withFontFamily(style, authoredFamily)
+          : style;
       const formatKey = expression.format ?? expression;
       let formatted = cache.formats.get(formatKey);
       if (!formatted) {

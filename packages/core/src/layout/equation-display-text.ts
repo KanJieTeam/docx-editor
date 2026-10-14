@@ -45,19 +45,22 @@ export function equationDisplayText(
   readonly mathematicalGlyphs: boolean;
 } {
   const format = expression.format;
-  if (format?.normalText || fontFamily !== 'Cambria Math')
+  if (format?.normalText)
     return { text: expression.value, mathStyle: null, mathematicalGlyphs: false };
-  // m:sty defaults to i. Word b/i properties remain separate and apply to
-  // normal-text runs; they do not replace this mathematical style default.
+  // m:sty defaults to i. Run bold and italic select faces of the run font; they
+  // do not replace this mathematical style.
   const mathStyle = format?.mathStyle ?? 'i';
-  // Explicit non-math faces keep their existing Word formatting. This bounded
-  // variant mapping applies only to the engine's default math face.
+  if (mathStyle === 'p') {
+    // Plain math keeps the authored face. The math face has no bold or italic
+    // face, so only another family takes run bold and italic.
+    const mathFace = fontFamily?.trim().toLowerCase() === 'cambria math';
+    return { text: expression.value, mathStyle: mathFace ? 'p' : null, mathematicalGlyphs: false };
+  }
+  // Styled letters become mathematical alphanumerics for every run face. The
+  // caller draws them in the math face, because text faces lack these glyphs.
   const mathematicalGlyphs = true;
-  const text =
-    mathStyle === 'p' || !mathematicalGlyphs
-      ? expression.value
-      : Array.from(expression.value, (character) =>
-          String.fromCodePoint(styledCodePoint(character.codePointAt(0)!, mathStyle))
-        ).join('');
+  const text = Array.from(expression.value, (character) =>
+    String.fromCodePoint(styledCodePoint(character.codePointAt(0)!, mathStyle))
+  ).join('');
   return { text, mathStyle, mathematicalGlyphs };
 }

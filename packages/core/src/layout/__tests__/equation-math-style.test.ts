@@ -112,16 +112,45 @@ test('keeps the default math style separate from inherited and Word-run bold or 
   expect(inherited.bold).toBe(true);
 });
 
-test('keeps an explicit non-math face on its original characters instead of requiring missing Unicode variants', () => {
-  const { projection } = project(
-    run('QN', '<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/></w:rPr>')
-  );
-  const result = layoutEquation(projection, createFixedMeasurer(), resolveRunStyle([]));
-  if (result.geometry.kind !== 'text') throw new Error('Missing author face');
-  expect(result.geometry.text).toBe('QN');
-  expect(result.geometry.runStyle?.fontFamily).toBe('Arial');
-  expect(result.geometry.runStyle?.italic).toBe(false);
-});
+test.each([
+  ['', '', '𝑄𝑁', 'Cambria Math', false, false],
+  ['', '<w:b/>', '𝑄𝑁', 'Cambria Math', false, false],
+  ['<m:sty m:val="b"/>', '', '𝐐𝐍', 'Cambria Math', false, false],
+  ['<m:sty m:val="bi"/>', '', '𝑸𝑵', 'Cambria Math', false, false],
+  ['<m:sty m:val="p"/>', '', 'QN', 'Arial', false, false],
+  ['<m:sty m:val="p"/>', '<w:b/>', 'QN', 'Arial', true, false],
+  ['<m:sty m:val="p"/>', '<w:i/>', 'QN', 'Arial', false, true],
+  ['<m:nor/>', '<w:b/>', 'QN', 'Arial', true, false],
+] as const)(
+  'draws styled letters of an authored text face in the math face (%s %s)',
+  (mathProperties, runProperties, text, family, bold, italic) => {
+    const { projection } = project(
+      run(
+        'QN',
+        (mathProperties ? `<m:rPr>${mathProperties}</m:rPr>` : '') +
+          `<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/>${runProperties}</w:rPr>`
+      )
+    );
+    const result = layoutEquation(projection, createFixedMeasurer(), resolveRunStyle([]));
+    if (result.geometry.kind !== 'text') throw new Error('Missing text geometry');
+    expect(result.geometry.text).toBe(text);
+    expect(result.geometry.runStyle?.fontFamily).toBe(family);
+    expect(result.geometry.runStyle?.bold).toBe(bold);
+    expect(result.geometry.runStyle?.italic).toBe(italic);
+  }
+);
+
+test.each(['cambria math', 'CAMBRIA MATH'])(
+  'keeps math styles when the authored math face is spelled %s',
+  (family) => {
+    const { projection } = project(
+      run('QN', `<w:rPr><w:rFonts w:ascii="${family}" w:hAnsi="${family}"/></w:rPr>`)
+    );
+    expect(
+      texts(layoutEquation(projection, createFixedMeasurer(), resolveRunStyle([])).geometry)
+    ).toEqual(['𝑄𝑁']);
+  }
+);
 
 test('keeps punctuation, combining marks, source supplementary letters, and other scripts unchanged', () => {
   const { projection } = project(run('h\u0301 + 𝑄甲😀'));
