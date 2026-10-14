@@ -2,6 +2,8 @@
 // producer fingerprint invalidates all stories when document typography changes.
 // References: ECMA-376 §17.3.1.16, §17.3.1.21, §17.15.1.18, §17.15.1.58–59, §17.15.1.82.
 import type { OoxmlElement, OoxmlProperty } from '@docx-editor.dev/core/store';
+import { isEastAsianFace } from '../store/package/default-font-faces.ts';
+import { resolveRunStyle, type ThemeFonts } from './run-style.ts';
 
 /** Document-wide East Asian line-break and whitespace policy. @public */
 export interface CjkTypographySettings {
@@ -9,7 +11,7 @@ export interface CjkTypographySettings {
   readonly strict: boolean;
   /** Disable adjacent full-width punctuation compression when false. */
   readonly punctuationKerning?: boolean;
-  /** The document defaults explicitly select an East Asian font. */
+  /** The document defaults explicitly select an East Asian face as the East Asian font. */
   readonly sourceEastAsianFont?: boolean;
   /** Whitespace compression selected by `w:characterSpacingControl`. */
   readonly compression:
@@ -146,4 +148,25 @@ export function kinsokuCharacters(
   before = settings?.before[language] ?? before;
   after = settings?.after[language] ?? after;
   return { before, after };
+}
+
+/**
+ * Whether the authored document defaults select an East Asian face as the East Asian font.
+ * Adjacent full-width punctuation compression needs one. Only `w:rPrDefault` counts: an
+ * application or theme fallback alone does not. The resolved face must be a Chinese,
+ * Japanese, or Korean font (`isEastAsianFace`). An empty theme slot resolves to a built-in
+ * East Asian face.
+ */
+export function defaultsSelectEastAsianFace(
+  defaultRun: readonly OoxmlProperty[],
+  themeFonts: ThemeFonts
+): boolean {
+  const authored = defaultRun.some(
+    (prop) =>
+      prop.localName === 'rFonts' &&
+      Boolean(prop.attributes?.eastAsia || prop.attributes?.eastAsiaTheme)
+  );
+  if (!authored) return false;
+  const face = resolveRunStyle(defaultRun, themeFonts).fontFamilyEastAsia;
+  return isEastAsianFace(face, themeFonts.eastAsianFontTableFaces);
 }

@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { readOoxmlPart } from '../../store/index.ts';
 import { layoutSemanticDocument } from '../semantic-layout.ts';
 import { buildStyleCascadeTable } from '../style-cascade.ts';
+import { NO_THEME_FONTS } from '../run-style.ts';
 import { createLayoutSession } from '../layout-session.ts';
 import { linesOf, type TextMeasurer } from '../semantic-records.ts';
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -62,7 +63,8 @@ function layout(
               `<w:styles xmlns:w="${W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:eastAsia="Test CJK"/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>`
             ).root
           : null,
-        undefined,
+        // The font table gives the probe face an East Asian charset.
+        { ...NO_THEME_FONTS, eastAsianFontTableFaces: ['test cjk'] },
         settings.root
       ),
       geometry: {

@@ -31,7 +31,11 @@ import {
 } from '@docx-editor.dev/core/store';
 import type { OoxmlProperty } from '../store/store/tree-op-types.ts';
 import { stableHash } from '../store/comparators/canonical.ts';
-import { cjkTypographyFromSettings, type CjkTypographySettings } from './cjk-typography.ts';
+import {
+  cjkTypographyFromSettings,
+  defaultsSelectEastAsianFace,
+  type CjkTypographySettings,
+} from './cjk-typography.ts';
 import {
   indentTwips,
   paragraphAlignment,
@@ -53,7 +57,7 @@ import {
 import { paragraphShading } from './ooxml-shading.ts';
 import { cascadedTabStops, tabStopsFingerprint, type ResolvedTabStops } from './paragraph-tabs.ts';
 import { withNumberingTabRule } from './numbering-tab-rule.ts';
-import { NO_THEME_FONTS, resolveRunStyle, type ThemeFonts } from './run-style.ts';
+import { NO_THEME_FONTS, type ThemeFonts } from './run-style.ts';
 import { combineStyleToggles } from './style-toggles.ts';
 import { styleChain, styleIdFromProps } from './style-chain.ts';
 import { paragraphMarkRunProperties } from './paragraph-mark-run.ts';
@@ -504,13 +508,7 @@ export function buildStyleCascadeTable(
   }
 
   const authoredDefaults = readDocDefaults(stylesRoot);
-  // Application/theme fallback alone does not opt the source into punctuation squeezing.
-  const sourceEastAsianFont =
-    authoredDefaults.run.some(
-      (prop) =>
-        prop.localName === 'rFonts' &&
-        Boolean(prop.attributes?.eastAsia || prop.attributes?.eastAsiaTheme)
-    ) && Boolean(resolveRunStyle(authoredDefaults.run, themeFonts).fontFamilyEastAsia);
+  const sourceEastAsianFont = defaultsSelectEastAsianFace(authoredDefaults.run, themeFonts);
   typography = Object.freeze({ ...typography, sourceEastAsianFont });
   const defaults = {
     ...authoredDefaults,

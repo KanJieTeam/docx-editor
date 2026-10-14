@@ -23,6 +23,8 @@ export interface FixtureOptions {
   italic?: boolean;
   underlineElsewhere?: boolean;
   language?: string;
+  /** One `word/fontTable.xml` entry: the face and its `w:charset` value. */
+  fontTableEntry?: { name: string; charset: string };
 }
 const fixturePath = new URL('./fixtures/yu-mincho-punctuation.docx', import.meta.url);
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -82,6 +84,27 @@ export function loadFixture(options: FixtureOptions = {}) {
       `<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="${options.compatibility ?? 15}"/></w:compat>` +
       '</w:settings>'
   );
+  if (options.fontTableEntry) {
+    const { name, charset } = options.fontTableEntry;
+    entries['word/fontTable.xml'] = strToU8(
+      `<w:fonts xmlns:w="${W}"><w:font w:name="${escape(name)}">` +
+        `<w:charset w:val="${escape(charset)}"/></w:font></w:fonts>`
+    );
+    const add = (part: string, marker: string, xml: string) =>
+      (entries[part] = strToU8(strFromU8(entries[part]!).replace(marker, xml + marker)));
+    add(
+      '[Content_Types].xml',
+      '</Types>',
+      '<Override PartName="/word/fontTable.xml" ContentType="application/' +
+        'vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>'
+    );
+    add(
+      'word/_rels/document.xml.rels',
+      '</Relationships>',
+      '<Relationship Id="fonts" Type="http://schemas.openxmlformats.org/officeDocument/2006/' +
+        'relationships/fontTable" Target="fontTable.xml"/>'
+    );
+  }
   const bytes = zipSync(entries);
   const opened = openHeadlessDocument(bytes);
   if (!opened.ok) throw new Error(opened.reason);

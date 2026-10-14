@@ -7,7 +7,7 @@ import { buildStyleCascadeTable, resolveParagraphLayoutInputs } from '../style-c
 import { anchorLineStartsByModelOffset } from '../anchor-line-probe.ts';
 import { cjkParagraphBreaks } from '../cjk-paragraph-breaks.ts';
 import { compressCjkPieces } from '../cjk-spacing.ts';
-import { DEFAULT_RUN_STYLE } from '../run-style.ts';
+import { DEFAULT_RUN_STYLE, NO_THEME_FONTS } from '../run-style.ts';
 import type { FieldAwarePiece } from '../field-projection.ts';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -39,7 +39,8 @@ function layout(
         root(
           `<w:styles xmlns:w="${W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:eastAsia="Test CJK"/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>`
         ),
-        undefined,
+        // The font table gives the probe face an East Asian charset.
+        { ...NO_THEME_FONTS, eastAsianFontTableFaces: ['test cjk'] },
         settingsRoot
       )
     : undefined;

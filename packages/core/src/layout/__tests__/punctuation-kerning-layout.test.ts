@@ -47,14 +47,38 @@ describe('real DOCX fixture punctuation layout', () => {
   test.each([
     'SimSun',
     'MS Mincho',
+    'MS Gothic',
     'SimHei',
     'Yu Mincho',
     'PMingLiU',
     'Meiryo',
     'Batang',
-    'A Source Face',
-  ])('source face %s needs no font allowlist', (face) => {
+    'Malgun Gothic',
+  ])('East Asian default face %s turns on pair compression', (face) => {
     expect(loadFixture({ text: '国」「国国', kern: 2, face, defaultFace: face }).width).toBe(108);
+    // The run's own face does not matter; the document default decides.
+    expect(loadFixture({ text: '国」「国国', kern: 2, defaultFace: face }).width).toBe(108);
+  });
+
+  test.each(['Arial', 'Times New Roman', 'A Source Face'])(
+    'default face %s without an East Asian font table charset keeps natural advances',
+    (face) => {
+      expect(loadFixture({ text: '国」「国国', kern: 2, defaultFace: face }).width).toBe(120);
+    }
+  );
+
+  test('an unknown default face counts as East Asian through its font table charset', () => {
+    const entry = (name: string, charset: string) => ({
+      text: '国」「国国',
+      kern: 2,
+      defaultFace: name,
+      fontTableEntry: { name, charset },
+    });
+    for (const charset of ['80', '81', '86', '88'])
+      expect(loadFixture(entry('A Source Face', charset)).width).toBe(108);
+    expect(loadFixture(entry('A Source Face', '00')).width).toBe(120);
+    // A known Latin face keeps its own character set.
+    expect(loadFixture(entry('Arial', '80')).width).toBe(120);
   });
 
   test('open+close, Korean, absent source defaults and inactive runs keep natural advances', () => {
