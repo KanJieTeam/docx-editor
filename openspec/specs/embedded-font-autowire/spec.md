@@ -88,6 +88,12 @@ The editor SHALL report a deferred font-origin failure only while its originatin
 - **WHEN** that callback replaces the document or destroys the editor
 - **THEN** the editor does not forward the older failure as an error event
 
+#### Scenario: An error listener changes the current load
+
+- **GIVEN** a current origin failure reaches the first `error` event listener
+- **WHEN** that listener replaces the document or destroys the editor
+- **THEN** later listeners do not receive the failure
+
 #### Scenario: Local diagnostics do not change shared edits
 
 - **GIVEN** two editors share a document and one editor has a pending font origin
