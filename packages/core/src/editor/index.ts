@@ -16,6 +16,7 @@
 // and the paginated surface into the PM-free Editor contract.
 
 export type { TreeApplyResult, TreeDocxSessionView } from '@docx-editor.dev/core/binding';
+export type { FontShapingOptions } from '../layout/font-shaping-policy.ts';
 export type { TrackedChangeFilterMode, TrackedChangePredicate } from '../contracts/editor.ts';
 export {
   createLayoutShaping,
@@ -218,6 +219,7 @@ export type { FieldResultsMode } from '../store/package/field-result-mode.ts';
 // automation subpath — only the adapter that needs a live editor ships from here, and only as
 // a factory: there is no composition hook a consumer could point at a second document model.
 export { BROWSER_AUTOMATION_CAPABILITIES, createBrowserAutomationHost } from './automation-host.ts';
+export { reportAutomationException, reportAutomationRefusal } from './editor-diagnostics.ts';
 // The capability seam: what `createDocxEditor({ modules })` accepts and what a
 // capability package (the pro review module) implements.
 export {
