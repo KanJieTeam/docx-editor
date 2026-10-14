@@ -91,8 +91,16 @@ export function equationRunFormat(run: OoxmlElement): EquationRunFormat | null {
         format.mathStyle = value;
       } else {
         const key = word
-          ? ({ b: 'bold', i: 'italic' } as const)[property.localName as 'b' | 'i']
-          : ({ lit: 'literal', nor: 'normalText' } as const)[property.localName as 'lit' | 'nor'];
+          ? property.localName === 'b'
+            ? 'bold'
+            : property.localName === 'i'
+              ? 'italic'
+              : undefined
+          : property.localName === 'lit'
+            ? 'literal'
+            : property.localName === 'nor'
+              ? 'normalText'
+              : undefined;
         if (key === undefined) return null;
         const value = toggle(property, namespace);
         if (value === null) return null;

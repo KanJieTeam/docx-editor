@@ -1,6 +1,6 @@
-import { isSettledPreviousRow } from './table-row-placement-reuse.ts';
+import { isSettledPreviousRow, takePreviousRows } from './table-row-placement-reuse.ts';
 import { createRowProbeReuse } from './table-row-probe-reuse.ts';
-import { takePreviousRows } from './table-row-placement-reuse.ts';
+import { clippedExactRow, overheightRowError } from './table-exact-row-clip.ts';
 // Placing ONE top-level table into the body flow, row by row, across page breaks.
 //
 // Lifted out of the story loop because it is the one block kind whose placement is a loop of
@@ -24,10 +24,11 @@ import {
   layoutRowFragmentBounded,
   MAX_TABLE_ROW_FRAGMENTS,
   TablePaginationError,
-  vMergePlanFor,
   type CellPlaceCursor,
   type TableFlowDeps,
 } from './semantic-table-layout.ts';
+import { closingCellSpacingPt } from './table-cell-spacing.ts';
+import { vMergePlanFor } from './table-vmerge-plan.ts';
 import { prepareTerminalBorderPlan, sameTerminalContent } from './table-terminal-border-plan.ts';
 import { firstRowContentDeps } from './table-fragment-content-insets.ts';
 import { probeRowFragmentProgress } from './table-row-progress-probe.ts';
@@ -48,7 +49,7 @@ import { annotateTableFragmentGeometry } from './semantic-table-interaction.ts';
 import { readTableStructure, tableOriginX, type SemanticTableRow } from './semantic-table.ts';
 import { pinnedBreakAtCursor, withSplittableRows } from './table-pinned-break.ts';
 import { tableFloatOriginY } from './table-float-position.ts';
-import { shiftTableFragment } from './table-fragment-finalize.ts';
+import { shiftTableFragment, splitHead } from './table-fragment-finalize.ts';
 import { budgetsHaveHeadroom, withBudgetProof } from './table-budget-proof.ts';
 import { planOutOfCellFloats } from './table-out-of-cell-floats.ts';
 import { tableFloatClearance } from './table-float-collision.ts';
@@ -275,7 +276,7 @@ export function* paginateTableInFlowSteps(
           box: { ...record.box, height: terminal.height },
           cells: record.cells.map((cell) => ({
             ...cell,
-            box: { ...cell.box, height: terminal.height },
+            box: { ...cell.box, height: terminal.height - (cell.box.y - record.box.y) },
           })),
         };
         rows[index] = corrected;
@@ -872,13 +873,15 @@ export function* paginateTableInFlowSteps(
         // body actually placed, so this only pushes the page's footnotes forward), while
         // the throw below rejects the entire document for one row+reserve collision.
         const fullBand = flow.unreservedContentHeight?.() ?? contentHeight();
-        if (
-          fullBand > contentHeight() + 0.001 &&
-          naturalHeight <= fullBand - flow.cursorY + 0.001
-        ) {
+        // An exact row no band holds fills the rest of this one (`table-exact-row-clip.ts`).
+        const offer =
+          fullBand > contentHeight() + 0.001 && naturalHeight <= fullBand - flow.cursorY + 0.001
+            ? { row, band: fullBand }
+            : clippedExactRow(row, contentHeight(), flow.cursorY);
+        if (offer) {
           const placementDeps = rowDeps();
           const placed = layoutRowFragment(
-            row,
+            offer.row,
             structure.columnWidthsPt,
             tableLeft,
             flow.cursorY,
@@ -887,9 +890,9 @@ export function* paginateTableInFlowSteps(
             placementDeps,
             structure.cellSpacingPt,
             vMerge,
-            fullBand
+            offer.band
           );
-          if (placed.bottom <= fullBand + 0.001 && placed.remainder === null) {
+          if (placed.bottom <= offer.band + 0.001 && placed.remainder === null) {
             rows.push(placed.record);
             rememberInsets(placed.record, placementDeps);
             sourceRows.push(row);
@@ -900,14 +903,7 @@ export function* paginateTableInFlowSteps(
         // `w:cantSplit` cannot keep a row whole when no page can hold it. The row is now
         // on a fresh page or below header rows only, so it splits from here like an
         // ordinary row instead of discarding the document. An exact height cannot split.
-        if (!splitsAnyway) {
-          throw new TablePaginationError(
-            'table-row-overheight',
-            row.height.rule === 'exact'
-              ? `Table row ${row.id} has w:trHeight hRule=exact taller than the available page content`
-              : `Table row ${row.id} has w:cantSplit and is taller than the available page content`
-          );
-        }
+        if (!splitsAnyway) throw overheightRowError(row);
       }
 
       const placementDeps = rowDeps();
@@ -984,6 +980,7 @@ export function* paginateTableInFlowSteps(
       breakForContinuation(admitsRepeatedHeaders);
     }
   }
+  flow.cursorY = Math.min(flow.cursorY + closingCellSpacingPt(structure), flow.contentHeight());
   closeTableFragment();
   if (outOfFlow) flow.cursorY = bodyCursorY;
   else if (pinnedBreak)
@@ -992,9 +989,4 @@ export function* paginateTableInFlowSteps(
       flow.contentHeight()
     );
   return { outOfFlow };
-}
-
-/** A row fragment whose rest continues on the next page: the head of a split row. */
-function splitHead(record: TableRowFragmentRecord): TableRowFragmentRecord {
-  return { ...record, hasContinuation: true };
 }

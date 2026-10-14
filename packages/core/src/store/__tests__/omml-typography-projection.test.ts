@@ -69,9 +69,29 @@ test.each(['top', 'bot'])(
   }
 );
 
+test.each(['', '<m:barPr/>'])('places a bar without a position below its body: %s', (pr) => {
+  const projection = project(`<m:bar>${pr}<m:e>${run('N', font)}</m:e></m:bar>`);
+  expect(projection.expression).toEqual({
+    kind: 'bar',
+    body: { kind: 'text', value: 'N', format: { fontFamily: 'Cambria Math' } },
+    position: 'bottom',
+  });
+});
+
+test.each([
+  `<m:bar><m:barPr><m:pos m:val="top"/><m:constructor/></m:barPr><m:e>${run('N')}</m:e></m:bar>`,
+  `<m:bar><m:toString>${run('H')}</m:toString><m:e>${run('N')}</m:e></m:bar>`,
+  `<m:f><m:__proto__>${run('H')}</m:__proto__><m:num>${run('a')}</m:num><m:den>${run('b')}</m:den></m:f>`,
+  `<m:sSup><m:valueOf/><m:e>${run('x')}</m:e><m:sup>${run('2')}</m:sup></m:sSup>`,
+])('keeps structures with unknown child names in the bounded fallback %s', (body) => {
+  expect(project(body).expression.kind).toBe('fallback');
+});
+
 test.each([
   '<w:rPr><w:rFonts w:ascii="Font A" w:hAnsi="Font B"/></w:rPr>',
   '<m:rPr><m:unknown/></m:rPr>',
+  '<w:rPr><w:constructor/></w:rPr>',
+  '<m:rPr><m:__proto__/></m:rPr>',
   '<w:rPr><w:sz w:val="28"/></w:rPr>',
 ])('keeps unsupported source typography in the bounded fallback', (properties) => {
   const projection = project(

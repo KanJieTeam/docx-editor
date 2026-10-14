@@ -72,6 +72,9 @@ test.each([
   '<m:rPr><m:nor/><m:nor m:val="0"/></m:rPr>',
   '<m:rPr/><m:rPr/>',
   '<w:rPr><m:b/></w:rPr>',
+  '<w:rPr><w:constructor/></w:rPr>',
+  '<w:rPr><w:toString/></w:rPr>',
+  '<m:rPr><m:__proto__/></m:rPr>',
 ])('rejects unrepresented or ambiguous typography %s', (properties) => {
   const node = run(properties);
   const before = JSON.stringify(node);
