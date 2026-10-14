@@ -191,6 +191,7 @@ export {
   type ParagraphFragmentRecord,
   type ParagraphIndent,
   type ParagraphSpacing,
+  type SectionBreakMarkRecord,
   type SemanticLayout,
   type SourceRange,
   type SpanLinkRecord,

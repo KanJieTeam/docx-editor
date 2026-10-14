@@ -1440,7 +1440,9 @@ export interface EditorModule {
     readonly customNodes?: readonly unknown[];
     readonly id: string;
     readonly onCustomNodeDiagnostic?: (diagnostic: unknown) => void;
+    readonly onDiagnostic?: (event: EditorDiagnostic) => void;
     readonly review?: ReviewModuleContribution;
+    readonly wantsDiagnostic?: (kind: EditorDiagnosticKind) => boolean;
 }
 
 // @public
@@ -1451,8 +1453,10 @@ export interface EditorModuleRegistry {
     readonly customNodePayloadNamespaces: readonly string[];
     // (undocumented)
     readonly customNodes: readonly unknown[];
+    readonly diagnosticListeners: readonly ((event: EditorDiagnostic) => void)[];
     // (undocumented)
     readonly review: ReviewModuleContribution | null;
+    readonly wantsDiagnostic: (kind: EditorDiagnosticKind) => boolean;
 }
 
 // @public
@@ -2009,6 +2013,7 @@ export type OpenPaginatedResult = {
     readonly surface: PaginatedSurface;
 } | {
     readonly detail?: string;
+    readonly limit?: string;
     readonly ok: false;
     readonly reason: string;
 };
@@ -2317,15 +2322,18 @@ export interface PaginatedSurfaceOptions {
     readonly measurer?: TextMeasurer;
     // (undocumented)
     readonly onChange?: (state: PaginatedSurfaceState) => void;
+    readonly onEdit?: (typing: boolean) => void;
     // (undocumented)
     readonly onEquationPopover?: (activation: EquationActivation) => void;
     readonly onHyperlinkPopover?: (activation: HyperlinkActivation) => void;
+    readonly onRejection?: (reason: string) => void;
     // (undocumented)
     readonly onRequestContentControlWidget?: (session: ContentControlWidgetSession) => boolean;
     readonly onRequestHyperlink?: () => void;
     // (undocumented)
     readonly onRequestInvalidTextFormField?: (session: InvalidTextFormFieldSession) => boolean;
     readonly onRequestTextFormField?: (session: TextFormFieldDialogSession) => boolean;
+    readonly onTiming?: (phase: 'layout' | 'paint' | 'input', value: number) => void;
     // (undocumented)
     readonly onToggleParagraphMarks?: () => void;
     readonly pointer?: 'engine' | 'native';
@@ -2725,6 +2733,12 @@ export interface RemoteCaretLabelHost {
 
 // @public
 export type RenderableImageMime = SupportedImageMime | VectorImageMime;
+
+// @public
+export function reportAutomationException(editor: object, error: unknown, tracked: boolean): void;
+
+// @public
+export function reportAutomationRefusal(editor: object, code: EditDiagnosticCode, tracked: boolean, cause?: string): void;
 
 // @public
 export function resizePreservesAspect(handle: ImageResizeHandle, aspectLocked: boolean, shiftKey: boolean, textbox?: boolean): boolean;

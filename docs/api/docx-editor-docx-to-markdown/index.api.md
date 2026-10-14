@@ -861,6 +861,7 @@ export interface SemanticLayout {
     readonly pages: readonly PageRecord[];
     readonly reviewArtifacts?: readonly SemanticReviewArtifactRecord[];
     readonly revision: number;
+    readonly sectionBreaks?: readonly SectionBreakMarkRecord[];
 }
 
 // @public

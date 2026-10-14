@@ -1853,6 +1853,7 @@ export interface LineRecord {
     readonly baseline: number;
     // (undocumented)
     readonly box: LayoutBox;
+    readonly breakAfter?: 'page' | 'column';
     readonly changeSites?: readonly RevisionAttribution[];
     readonly contentX: number;
     readonly deletedRanges?: readonly ModelRange[];
@@ -3406,6 +3407,14 @@ export interface ScriptItem {
 }
 
 // @public
+export interface SectionBreakMarkRecord {
+    // (undocumented)
+    readonly kind: SectionBreakType;
+    // (undocumented)
+    readonly paragraphId: string;
+}
+
+// @public
 export type SectionBreakType = 'nextPage' | 'continuous' | 'evenPage' | 'oddPage' | 'nextColumn';
 
 // @public
@@ -3607,6 +3616,7 @@ export interface SemanticLayout {
     readonly pages: readonly PageRecord[];
     readonly reviewArtifacts?: readonly SemanticReviewArtifactRecord[];
     readonly revision: number;
+    readonly sectionBreaks?: readonly SectionBreakMarkRecord[];
 }
 
 // @public
