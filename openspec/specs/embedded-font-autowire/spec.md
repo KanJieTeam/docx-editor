@@ -78,3 +78,34 @@ The editor SHALL continue on the fixed measurer, remain fully editable, and repo
 
 - **WHEN** a document's embedded font parts are all corrupt
 - **THEN** the document opens and edits normally on the fixed measurer and each failure is reported as a typed error
+
+
+### Requirement: Font diagnostics belong to the originating document load
+
+The editor SHALL report a deferred font-origin failure only while its originating document load remains current and the editor remains alive. The editor SHALL preserve the original failure and current diagnostic behavior when an observer throws.
+
+#### Scenario: A document replacement invalidates deferred diagnostics
+
+- **GIVEN** a font origin is pending for the current document
+- **WHEN** another document replaces it before the origin fails
+- **THEN** the editor emits neither `onFontError` nor an error event for that older failure
+- **AND** the replacement document remains editable and saves normally
+
+#### Scenario: A callback changes the current load
+
+- **GIVEN** a current origin failure reaches `onFontError`
+- **WHEN** that callback replaces the document or destroys the editor
+- **THEN** the editor does not forward the older failure as an error event
+
+#### Scenario: An error listener changes the current load
+
+- **GIVEN** a current origin failure reaches the first `error` event listener
+- **WHEN** that listener replaces the document or destroys the editor
+- **THEN** later listeners do not receive the failure
+
+#### Scenario: Local diagnostics do not change shared edits
+
+- **GIVEN** two editors share a document and one editor has a pending font origin
+- **WHEN** they make concurrent edits, undo, redo, and delete while the other editor inserts text
+- **THEN** their edits converge and survive save and reopen
+- **AND** destroying the first editor suppresses its later font diagnostic

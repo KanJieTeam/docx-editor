@@ -1145,6 +1145,11 @@ export interface ContentControlWidgetSession {
     readonly value: string;
 }
 
+// @public
+export interface ContentLockPolicy {
+    readonly allowFormattingInLockedContent?: boolean;
+}
+
 // @internal
 export function controlsOverflow(bar: HTMLElement, style: CSSStyleDeclaration): boolean | null;
 
@@ -1181,7 +1186,7 @@ export function createImageOverlayScrollPort(scroller: HTMLElement, paintScale: 
 };
 
 // @public (undocumented)
-export function createLayoutShaping(configuration: FontConfiguration, instrumentation?: LayoutShapingInstrumentation): Promise<LayoutShapingOptions>;
+export function createLayoutShaping(configuration: FontConfiguration, instrumentation?: LayoutShapingInstrumentation, execution?: FontShapingOptions): Promise<LayoutShapingOptions>;
 
 // @public
 export function cropPercentFromCropPermille(crop: ImageCropPermille): ImageCropPercent;
@@ -1332,11 +1337,14 @@ export interface DocxEditorConfig {
     // (undocumented)
     author?: string;
     container?: HTMLElement;
+    contentLockPolicy?: ContentLockPolicy;
     document?: DocumentSource;
     fieldResults?: FieldResultsMode;
     fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
+    fontShaping?: FontShapingOptions;
     imageDecodePort?: ImageDecodePort;
     locale?: string;
+    lockedControlNavigation?: LockedControlNavigation;
     mode?: 'edit' | 'view' | 'suggesting';
     modules?: readonly EditorModule[];
     // (undocumented)
@@ -1615,6 +1623,11 @@ export type FontResolver = (request: FontResolutionRequest) => FontConfiguration
 // @public
 export interface FontResolverMark {
     readonly 'docx-editor.dev/font-resolver': true;
+}
+
+// @public
+export interface FontShapingOptions {
+    readonly maxFontBytes?: number;
 }
 
 // @public
@@ -1964,6 +1977,9 @@ export interface LoadFontsResult extends FontConfigurationFragment {
 export const LOADING_SNAPSHOT: EditorSnapshot;
 
 // @public
+export type LockedControlNavigation = 'characters' | 'atomic';
+
+// @public
 export function lowerColorValueForBorder(color: ColorValue, themeColors: readonly DocumentThemeColorEntry[]): ColorLowerResult;
 
 // @public
@@ -2303,6 +2319,7 @@ export interface PaginatedSurface {
 export interface PaginatedSurfaceOptions {
     readonly author?: string;
     readonly collaborationModel?: CollaborationModuleContribution;
+    readonly contentLockPolicy?: ContentLockPolicy;
     readonly defaultFontFamily?: string;
     readonly drawingStrings?: DrawingPaintStrings;
     readonly editingMode?: SurfaceEditingMode;
@@ -2312,10 +2329,12 @@ export interface PaginatedSurfaceOptions {
     readonly hiddenRevisionAuthors?: readonly string[];
     readonly imageDecodePort?: ImageDecodePort;
     readonly locale?: string;
+    readonly lockedControlNavigation?: LockedControlNavigation;
     // (undocumented)
     readonly measurer?: TextMeasurer;
     // (undocumented)
     readonly onChange?: (state: PaginatedSurfaceState) => void;
+    readonly onEdit?: (typing: boolean) => void;
     // (undocumented)
     readonly onEquationPopover?: (activation: EquationActivation) => void;
     readonly onHyperlinkPopover?: (activation: HyperlinkActivation) => void;

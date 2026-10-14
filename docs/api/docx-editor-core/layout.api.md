@@ -366,6 +366,8 @@ export interface CjkTypographySettings {
     readonly after: Readonly<Record<string, string>>;
     readonly before: Readonly<Record<string, string>>;
     readonly compression: 'doNotCompress' | 'compressPunctuation' | 'compressPunctuationAndJapaneseKana';
+    readonly punctuationKerning?: boolean;
+    readonly sourceEastAsianFont?: boolean;
     readonly strict: boolean;
 }
 
@@ -489,6 +491,7 @@ export interface ContentControlBoundaryRecord {
     readonly lock: ContentControlLock;
     readonly nestingDepth: number;
     readonly placeholder: boolean;
+    readonly range?: ContentControlModelRange;
     // (undocumented)
     readonly tag?: string;
 }
@@ -521,6 +524,13 @@ export type ContentControlLock = 'unlocked' | 'sdtLocked' | 'contentLocked' | 's
 
 // @public
 export type ContentControlMappedType = 'richText' | 'plainText' | 'checkbox' | 'dropdown' | 'comboBox' | 'date' | 'picture' | 'buildingBlockGallery' | 'repeatingSection';
+
+// @public
+export interface ContentControlModelRange {
+    readonly end: number;
+    readonly paragraphId: string;
+    readonly start: number;
+}
 
 // @public
 export function contentControlRecordsInPart(part: OoxmlPart,
@@ -645,7 +655,7 @@ export function createLayoutSession(): LayoutSession;
 export function createLayoutShapedMeasurer(shaping: LayoutShapingOptions, options: Pick<ShapedMeasurerOptions, 'resolveFont' | 'fallback'>): TextMeasurer;
 
 // @public
-export function createLayoutShaping(configuration: LayoutFontConfiguration | PreparedLayoutFontConfiguration, instrumentation?: LayoutShapingInstrumentation): Promise<LayoutShapingOptions>;
+export function createLayoutShaping(configuration: LayoutFontConfiguration | PreparedLayoutFontConfiguration, instrumentation?: LayoutShapingInstrumentation, execution?: FontShapingOptions): Promise<LayoutShapingOptions>;
 
 // @public
 export function createListCounterState(index: NumberingIndex): ListCounterState;
@@ -914,6 +924,16 @@ export function enumerateDocumentSections(part: OoxmlPart, displayMode?: Revisio
 export function enumerateDocumentSectionsBounded(part: OoxmlPart, displayMode?: RevisionDisplayMode, authorFilter?: RevisionAuthorFilter): DocumentSectionsEnumeration;
 
 // @public (undocumented)
+export interface EquationBarGeometry extends EquationGeometryBase {
+    // (undocumented)
+    readonly bar: LayoutBox;
+    // (undocumented)
+    readonly body: EquationGeometry;
+    // (undocumented)
+    readonly kind: 'bar';
+}
+
+// @public (undocumented)
 export interface EquationFractionGeometry extends EquationGeometryBase {
     // (undocumented)
     readonly bar: LayoutBox;
@@ -926,7 +946,7 @@ export interface EquationFractionGeometry extends EquationGeometryBase {
 }
 
 // @public (undocumented)
-export type EquationGeometry = EquationTextGeometry | EquationRowGeometry | EquationFractionGeometry | EquationRadicalGeometry | EquationScriptGeometry | EquationNaryGeometry;
+export type EquationGeometry = EquationTextGeometry | EquationRowGeometry | EquationFractionGeometry | EquationRadicalGeometry | EquationBarGeometry | EquationScriptGeometry | EquationNaryGeometry;
 
 // @public (undocumented)
 export interface EquationNaryGeometry extends EquationGeometryBase {
@@ -994,6 +1014,7 @@ export interface EquationTextGeometry extends EquationGeometryBase {
     readonly fontSizePt: number;
     // (undocumented)
     readonly kind: 'text' | 'fallback';
+    readonly runStyle?: ResolvedRunStyle;
     // (undocumented)
     readonly text: string;
 }
@@ -1181,6 +1202,11 @@ export interface FontResourceSnapshotOptions {
     readonly substitutions?: readonly DeclaredFontSubstitution[];
     // (undocumented)
     readonly validateFont: FontByteValidator;
+}
+
+// @public
+export interface FontShapingOptions {
+    readonly maxFontBytes?: number;
 }
 
 // @public
@@ -3827,6 +3853,7 @@ export interface SemanticTableCell {
     readonly gridColumn: number;
     readonly gridColumnId?: string;
     readonly gridSpan: number;
+    readonly headsVerticalMerge?: true;
     readonly hideEndMark?: boolean;
     // (undocumented)
     readonly id: string;
