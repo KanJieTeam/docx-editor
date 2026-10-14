@@ -1,5 +1,4 @@
 import { EditorFontError, type FontConfiguration } from '../contracts/editor.ts';
-import { toEditorFontError } from './font-configuration.ts';
 import {
   createLayoutShapedMeasurer,
   FontResolutionError,
@@ -37,12 +36,14 @@ export function resolvedFontMeasurement(
               !reportedFonts.has(font)
             ) {
               reportedFonts.add(font);
-              const surfaced = toEditorFontError(error);
+              // The face's own bytes exceed a limit: the same answer as an admission cap, not
+              // a shaper that failed to initialize.
+              const { family, weight, style } = font.request;
               try {
                 onFontError(
-                  new EditorFontError(surfaced.code, surfaced.message, {
-                    request: font.request,
-                    diagnostic: surfaced.diagnostic,
+                  new EditorFontError('overLimit', error.message, {
+                    request: Object.freeze({ family, weight, style }),
+                    diagnostic: error.diagnostic ?? error.message,
                     cause: error,
                   })
                 );

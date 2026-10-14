@@ -231,7 +231,7 @@ test('load inside the actual font-error callback does not publish the old error 
     // The new measurement owner also measures the configured padded default face.
     // Its current refusal must stay distinct from the superseded owner's error.
     expect(executionRefusal(replacementReport.error)).toBe(true);
-    expect(replacementReport.error.code).toBe('initializationFailed');
+    expect(replacementReport.error.code).toBe('overLimit');
     expect(replacementReport.error.request).toEqual({
       family: 'DejaVu Sans',
       weight: 400,
@@ -245,7 +245,7 @@ test('load inside the actual font-error callback does not publish the old error 
       {
         owner: replacementReport.error,
         bodyText: 'Replacement public text',
-        code: 'font.shaper-unavailable',
+        code: 'font.size-limit',
       },
     ]);
     const saved = unzipSync(new Uint8Array(await editor.save()));

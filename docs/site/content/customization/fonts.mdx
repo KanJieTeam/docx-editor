@@ -84,9 +84,9 @@ Embedded document fonts enter the font pipeline automatically when usable. Openi
 
 Font admission and shaping use separate byte limits. An admitted face can exceed the shaping limit. Existing fallback measurement continues.
 
-`onFontError` reports that refusal as `initializationFailed`. Its cause retains the original `HarfBuzzShapingError` with code `fontOverLimit`. The error also retains the admitted face request.
+`onFontError` reports that refusal as `overLimit`, the same code as a face that exceeds an admission limit. Its cause retains the original `HarfBuzzShapingError` with code `fontOverLimit`. The error also retains the admitted face request.
 
-Each resolved face object reports once per measurement owner. A new owner can report again. Throwing from this callback does not interrupt fallback.
+The editor reports each oversized face once per font resolution. Opening another document or resolving more fonts can report it again. Throwing from this callback does not interrupt fallback.
 
 Keep the font configuration's identity stable after editing starts. Changing `Root.fonts` creates another editor instance and resets selection and undo history. Use a stable on-demand resolver when users must choose fonts during editing.
 

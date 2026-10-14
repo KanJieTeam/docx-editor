@@ -121,7 +121,7 @@ test('execution refusal reports the admitted request and original cause while wi
   const { measurer } = f.measure((reported) => observed.push(reported));
   expect(measurer.measure('AB', f.style)).toBe(f.fallback.measurer.measure('AB', f.style));
   expect(observed).toHaveLength(1);
-  expect(observed[0]?.code).toBe('initializationFailed');
+  expect(observed[0]?.code).toBe('overLimit');
   expect(observed[0]?.request).toEqual(request);
   expect(observed[0]?.cause).toBe(error);
   expect(error.limit).toBe(limit);
