@@ -1414,7 +1414,14 @@ export function layoutRowFragmentBounded(
         cell.hideEndMark,
         // Fixed cell boxes clip; their bottom is not a paragraph page break.
         !vertical && (isDetached || exactHeightPt === undefined),
-        clipsExactCellRow(vertical, exactHeightPt, isDetached, rowTop, maxBottom)
+        clipsExactCellRow(
+          vertical,
+          exactHeightPt,
+          isDetached,
+          cell.headsVerticalMerge === true,
+          rowTop,
+          maxBottom
+        )
       );
 
     if (!cell.vMergeContinue && !waits(cell)) {

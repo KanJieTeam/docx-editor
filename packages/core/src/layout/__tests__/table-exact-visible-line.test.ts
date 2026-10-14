@@ -187,3 +187,36 @@ test('fixed column widths and spanning-cell placement remain unchanged by partia
       expect(block.box.width).toBe(c.box.width);
     }
 });
+
+test('a merge head too tall for its span keeps whole lines while a plain cell still clips', () => {
+  const row = '<w:trPr><w:trHeight w:val="400" w:hRule="exact"/></w:trPr>';
+  const continued = cell(p('ghost'), '<w:tcPr><w:vMerge/></w:tcPr>');
+  const part = load(
+    `<w:tbl>${noMargins}<w:tblGrid><w:gridCol w:w="2000"/>` +
+      `<w:gridCol w:w="2000"/></w:tblGrid><w:tr>${row}` +
+      cell(
+        ['H0', 'H1', 'H2', 'H3', 'H4'].map((text) => p(text, 280)).join(''),
+        '<w:tcPr><w:vMerge w:val="restart"/></w:tcPr>'
+      ) +
+      cell(p('S0', 280) + p('S1', 280)) +
+      `</w:tr><w:tr>${row}${continued}${cell(p('a', 280))}</w:tr>` +
+      `<w:tr>${row}${continued}${cell(p('b', 280))}</w:tr></w:tbl>`
+  );
+  const rows = table(layout(part)).rows;
+  expect(rows.map((r) => r.box.height)).toEqual([20, 20, 20]);
+  const text = (blocks: TableFragmentRecord['rows'][number]['cells'][number]['blocks']) =>
+    blocks.map((block) =>
+      block.kind === 'paragraph'
+        ? block.lines.map((line) => line.spans.map((s) => s.text).join(''))
+        : []
+    );
+  const head = rows[0]!.cells[0]!;
+  expect(text(head.blocks)).toEqual([['H0']]);
+  for (const block of head.blocks)
+    if (block.kind === 'paragraph') expect(block.clipToBox).not.toBe(true);
+  const side = rows[0]!.cells[1]!;
+  expect(text(side.blocks)).toEqual([['S0'], ['S1']]);
+  const clipped = side.blocks[1]!;
+  if (clipped.kind !== 'paragraph') throw new Error('Expected cell paragraph');
+  expect(clipped.clipToBox).toBe(true);
+});

@@ -83,11 +83,15 @@ export function cellLineFits(
   return true;
 }
 
-/** Page and merged-cell admission happen before fixed horizontal cell clipping. */
+/**
+ * Page and merged-cell admission happen before fixed horizontal cell clipping. A cell that
+ * heads a vertical merge never clips to its own row, whether or not its span was admitted.
+ */
 export function clipsExactCellRow(
   vertical: boolean,
   exactHeightPt: number | undefined,
   isDetached: boolean,
+  headsVerticalMerge: boolean,
   rowTop: number,
   maxBottom: number
 ): boolean {
@@ -95,6 +99,7 @@ export function clipsExactCellRow(
     !vertical &&
     exactHeightPt !== undefined &&
     !isDetached &&
+    !headsVerticalMerge &&
     rowTop + exactHeightPt <= maxBottom + 0.001
   );
 }
