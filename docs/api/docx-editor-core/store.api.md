@@ -764,6 +764,11 @@ export interface ContentItem {
 }
 
 // @public
+export interface ContentLockPolicy {
+    readonly allowFormattingInLockedContent?: boolean;
+}
+
+// @public
 export type ContentTypeError = {
     readonly code: 'invalid-mime';
     readonly value: string;
@@ -1263,6 +1268,7 @@ export type DrawingTreeDocOp = Extract<TreeDocOp, {
 
 // @public
 export interface EditOptions {
+    readonly contentLockPolicy?: ContentLockPolicy;
     // (undocumented)
     readonly deferValidation?: boolean;
     readonly fieldResults?: FieldResultsMode;
@@ -1325,8 +1331,20 @@ export type EquationExpression = {
     readonly items: readonly EquationExpression[];
     readonly kind: 'row';
 } | {
+    readonly format?: {
+        readonly bold?: boolean;
+        readonly fontFamily?: string;
+        readonly italic?: boolean;
+        readonly literal?: boolean;
+        readonly mathStyle?: 'p' | 'b' | 'i' | 'bi';
+        readonly normalText?: boolean;
+    };
     readonly kind: 'text';
     readonly value: string;
+} | {
+    readonly body: EquationExpression;
+    readonly kind: 'bar';
+    readonly position: 'top' | 'bottom';
 } | {
     readonly denominator: EquationExpression;
     readonly kind: 'fraction';
@@ -3964,6 +3982,7 @@ export type RevisionAuthorSkipReason = 'unknown-revision' | 'unsupported-revisio
 export interface RevisionBatchEntry {
     // (undocumented)
     readonly author: string;
+    readonly formattingKind?: string;
     // (undocumented)
     readonly key: string;
     // (undocumented)
@@ -3979,6 +3998,7 @@ export interface RevisionBatchResult {
     readonly resolved: readonly RevisionBatchEntry[];
     // (undocumented)
     readonly skipped: readonly {
+        readonly detail?: RevisionBatchSkipDetail;
         readonly key: string;
         readonly reason: RevisionBatchSkipReason;
         readonly revision?: RevisionBatchEntry;
@@ -3986,10 +4006,16 @@ export interface RevisionBatchResult {
 }
 
 // @public
+export type RevisionBatchSkipDetail = RevisionSiteRefusal | 'unrecorded-properties' | 'read-only' | 'no-sites';
+
+// @public
 export type RevisionBatchSkipReason = 'unsupported-revision' | 'incomplete-group' | 'retained-structure' | 'unknown-revision';
 
 // @public
 export function revisionItemsOf(part: OoxmlPart): readonly ReviewRevisionItem[];
+
+// @public
+export type RevisionSiteRefusal = 'unaddressed' | 'misplaced-marker' | 'nested-marker' | 'unsupported-structure' | 'unsupported-move';
 
 // @public
 export function runAddressRanges(paragraph: Extract<OoxmlNode, {
@@ -4960,6 +4986,7 @@ export class TreeDocumentStore {
 
 // @public
 export interface TreeDocumentStoreOptions {
+    readonly contentLockPolicy?: ContentLockPolicy;
     readonly historyLimit?: number;
     readonly settingsPart?: () => OoxmlPart | null | undefined;
 }
@@ -5202,6 +5229,7 @@ export class TreePackageStore {
 // @public
 export interface TreePackageStoreOptions {
     readonly cascadeDeletedNoteReferences?: NoteCascadeFn;
+    readonly contentLockPolicy?: ContentLockPolicy;
     // (undocumented)
     readonly historyLimit?: number;
     readonly maxEditableStoryParts?: number;
@@ -5321,7 +5349,7 @@ export function validatePngHeader(bytes: Uint8Array): ValidatedRasterHeader | nu
 export function validateRasterHeader(bytes: Uint8Array, mime: SupportedImageMime): ValidatedRasterHeader | null;
 
 // @public
-export function validateTreeOp(part: OoxmlPart, op: TreeDocOp): TreeOpRejection | null;
+export function validateTreeOp(part: OoxmlPart, op: TreeDocOp, options?: Pick<EditOptions, 'contentLockPolicy'>): TreeOpRejection | null;
 
 // @public
 export interface ValidationResult {

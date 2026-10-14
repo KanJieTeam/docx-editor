@@ -16,7 +16,28 @@ import type {
 import type { EquationActivation } from './surface-equations.ts';
 import type { HyperlinkActivation } from './surface-navigation.ts';
 import type { TextMeasurer } from '@docx-editor.dev/core/layout';
+import type { ContentLockPolicy } from '../store/package/ooxml-edit.ts';
 import type { PaginatedSurfaceState, SurfaceEditingMode } from './paginated-surface-contract.ts';
+
+/**
+ * How the caret moves through an inline content control whose effective lock is
+ * `contentLocked` or `sdtContentLocked`.
+ *
+ * - `'characters'` (the default) — the caret walks through the control's characters, as in Word.
+ * - `'atomic'` — the control is one caret unit, as a `w:showingPlcHdr` prompt already is. Arrows
+ *   step over it, Shift+arrows select it whole, and a press or double click inside it selects it
+ *   whole. A press on its edge still places a caret beside it.
+ *
+ * It applies in the body, headers and footers; notes and text boxes publish no control
+ * boundaries, so they keep character navigation.
+ *
+ * Navigation only: what a lock refuses does not change. The rule covers keyboard motions and
+ * the engine's own pointer gestures. A selection set in code (`setSelection`, find) is kept as
+ * given, and `pointer: 'native'` leaves caret placement to the browser.
+ *
+ * @public
+ */
+export type LockedControlNavigation = 'characters' | 'atomic';
 
 /**
  * How a paginated surface opens. Every field is optional.
@@ -101,6 +122,12 @@ export interface PaginatedSurfaceOptions {
    */
   readonly reviewModel?: ReviewModuleContribution;
   /**
+   * Opt-in relaxation of `w:lock` for run-property writes: `contentLocked` / `sdtContentLocked`
+   * controls can be restyled (toolbar, shortcuts, automation `setFont`) but not retyped.
+   * Absent, they refuse both, as ECMA-376 / Word do.
+   */
+  readonly contentLockPolicy?: ContentLockPolicy;
+  /**
    * The family a run with no authored font is reported as by `formatting()` AND painted
    * in — the face the measurer falls back to. Absent, such a run reports
    * `fontFamily: null` and paints in whatever font the page inherits, which the measurer
@@ -115,7 +142,26 @@ export interface PaginatedSurfaceOptions {
    * pointer handlers and leaves the browser's own caret placement in charge.
    */
   readonly pointer?: 'engine' | 'native';
+  /** How the caret moves through a content-locked inline control; see `LockedControlNavigation`. */
+  readonly lockedControlNavigation?: LockedControlNavigation;
   readonly onChange?: (state: PaginatedSurfaceState) => void;
+  /**
+   * Told each time an edit is refused, with the raw reason: a store code such as `'locked'`,
+   * or the surface's own refusal sentence. The raw reason can be a sentence, so a listener
+   * maps it to a public code before it reports anything.
+   */
+  readonly onRejection?: (reason: string) => void;
+  /**
+   * Told the milliseconds of each layout pass and each paint. For `'input'`, told the browser
+   * timestamp of each key press or pointer press on the pages, so a listener can time it to
+   * the next frame. Numbers only.
+   */
+  readonly onTiming?: (phase: 'layout' | 'paint' | 'input', value: number) => void;
+  /**
+   * Told once for each local edit that changed the document, with `typing` true for buffered
+   * typing, which can land inside a later command's commit. Remote edits are not local.
+   */
+  readonly onEdit?: (typing: boolean) => void;
   /**
    * A plain click on an external (or inert) hyperlink, for a host to open its popover with.
    *
