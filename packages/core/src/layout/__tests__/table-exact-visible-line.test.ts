@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test';
 import { serializeOoxmlPart } from '../../store/package/ooxml-tree.ts';
 import { createFixedMeasurer, layoutSemanticDocument } from '../semantic-layout.ts';
-import { TablePaginationError } from '../semantic-table-layout.ts';
 import { caretAt, selectionRects, documentOrder } from '../semantic-interaction.ts';
 import type { ParagraphFragmentRecord, TableFragmentRecord } from '../semantic-records.ts';
 import { cell, exactRow, fixture, load, noMargins, p } from './table-exact-visible-fixtures.ts';
@@ -76,13 +75,37 @@ test('hanging text keeps its original position inside the full cell clip frame',
   expect(block.box.x).toBe(frame.x);
   expect(block.lines[0]!.spans[0]!.box.x).toBe(frame.x + 6);
 });
-test('the partial-line rule does not let an exact row fit a smaller page', () => {
-  expect(() =>
-    layoutSemanticDocument(fixture(), 0, {
-      measurer,
-      geometry: { ...geometry, height: 36 },
-    })
-  ).toThrow(TablePaginationError);
+test('a too-tall exact row uses fresh-page recovery without rewriting its authored height', () => {
+  const part = fixture(),
+    before = serializeOoxmlPart(part);
+  const result = layoutSemanticDocument(part, 0, {
+    measurer,
+    geometry: { ...geometry, height: 36 },
+  });
+  const page = result.pages[0]!,
+    fragment = table(result),
+    row = fragment.rows[0]!,
+    frame = row.cells[0]!,
+    block = paragraph(result),
+    line = block.lines[0]!;
+  expect(result.pages).toHaveLength(1);
+  expect(page.fragments).toEqual([fragment]);
+  expect(page.contentBox.height).toBe(16);
+  expect(fragment.fragmentIndex).toBe(0);
+  expect(fragment.rows).toHaveLength(1);
+  expect(row.placesWhole).toBe(true);
+  expect(row.box.height).toBe(16);
+  expect(frame.box.height).toBe(16);
+  expect(frame.box.y + frame.box.height).toBeLessThanOrEqual(page.contentBox.height);
+  expect(block.lines).toHaveLength(1);
+  expect(line.box.height).toBe(19);
+  expect(line.box.y).toBeGreaterThanOrEqual(frame.box.y);
+  expect(line.box.y).toBeLessThan(frame.box.y + frame.box.height);
+  expect(line.spans.map((span) => span.text).join('')).toBe('甲');
+  expect(block.range).toMatchObject({ start: 0, end: 1 });
+  expect(before).toContain('w:val="340"');
+  expect(before).toContain('w:line="380"');
+  expect(serializeOoxmlPart(part)).toBe(before);
 });
 test('a merged cell flows through both exact rows instead of clipping at the head row', () => {
   const part = load(
