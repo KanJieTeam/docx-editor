@@ -204,7 +204,7 @@ function hasOnlyMathChildren(
   if (node.attributes.length > 0) return false;
   const seen = new Map<string, number>();
   for (const child of childrenOf(node)) {
-    if (!isMathElement(child) || counts[child.localName] === undefined) return false;
+    if (!isMathElement(child) || !Object.hasOwn(counts, child.localName)) return false;
     seen.set(child.localName, (seen.get(child.localName) ?? 0) + 1);
   }
   return Object.entries(counts).every(([name, range]) => {
@@ -378,7 +378,7 @@ function projectStructured(
     return Object.freeze({
       kind: 'bar',
       body: projectContainer(namedChildren(node, 'e')[0]!, state, depth + 1),
-      position: position && mathVal(position) === 'bot' ? 'bottom' : 'top',
+      position: position && mathVal(position) === 'top' ? 'top' : 'bottom',
     });
   }
   if (node.localName === 'f') {
