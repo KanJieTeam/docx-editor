@@ -6,4 +6,4 @@
 '@docx-editor.dev/docx-to-pdf': minor
 ---
 
-Allow a host to select an explicit bounded font shaping execution ceiling independently of font admission.
+Add the `fontShaping` option, which sets the largest font file that text shaping accepts, separately from font loading limits.
