@@ -3827,6 +3827,7 @@ export interface SemanticTableCell {
     readonly gridColumn: number;
     readonly gridColumnId?: string;
     readonly gridSpan: number;
+    readonly headsVerticalMerge?: true;
     readonly hideEndMark?: boolean;
     // (undocumented)
     readonly id: string;
