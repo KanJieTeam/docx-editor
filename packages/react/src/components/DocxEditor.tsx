@@ -235,7 +235,7 @@ const DocxEditorFrame = forwardRef<DocxEditorRef, DocxEditorProps>(
     const {
       document: doc,
       fonts,
-      fontExecution,
+      fontShaping,
       className,
       t,
       chrome = true,
@@ -431,7 +431,7 @@ const DocxEditorFrame = forwardRef<DocxEditorRef, DocxEditorProps>(
         popups={createPackagedPopups(props.popups, hyperlinkPopup, contextMenu, translate)}
         {...(doc !== undefined ? { document: doc } : {})}
         {...(fonts ? { fonts } : {})}
-        {...(fontExecution ? { fontExecution } : {})}
+        {...(fontShaping ? { fontShaping } : {})}
         {...(author !== undefined ? { author } : {})}
         {...(locale !== undefined ? { locale } : {})}
         translate={translate}

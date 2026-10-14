@@ -4,7 +4,7 @@ import type {
   OpenDocumentForExportOptions,
 } from '@docx-editor.dev/core/export';
 import type { FontOrigin } from '@docx-editor.dev/core/export';
-import type { RevisionDisplayMode, FontExecutionOptions } from '@docx-editor.dev/core/layout';
+import type { RevisionDisplayMode, FontShapingOptions } from '@docx-editor.dev/core/layout';
 import type {
   MarkdownComment,
   MarkdownReviewArtifact,
@@ -100,7 +100,7 @@ export type MarkdownFontsSource = MarkdownFontOrigin | readonly MarkdownFontOrig
 /** Layout controls for a reusable Markdown export session. @public */
 export interface OpenMarkdownDocumentForExportOptions extends OpenDocumentForExportOptions {
   /** Explicit per-face shaping byte ceiling; defaults to 16 MiB. */
-  readonly fontExecution?: FontExecutionOptions;
+  readonly fontShaping?: FontShapingOptions;
   /**
    * Retains incremental state for a live view or caller-measured session. Document-aware byte
    * sessions are immutable and reject `true` instead of silently ignoring it.

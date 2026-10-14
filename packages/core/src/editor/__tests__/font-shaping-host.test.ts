@@ -50,7 +50,7 @@ test('the mounted host samples an explicit execution policy before its async fon
   const editor = createDocxEditor({
     container: document.createElement('div'),
     document: source,
-    fontExecution: execution,
+    fontShaping: execution,
     fonts: async () => {
       requested = true;
       await waiting;

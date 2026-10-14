@@ -12,7 +12,7 @@ import {
   type ResolvedFont,
   type ShapeInput,
 } from '../index.ts';
-import { fontExecutionPolicy, withFontExecutionPolicy } from '../font-execution-policy.ts';
+import { fontShapingPolicy, withFontShapingPolicy } from '../font-shaping-policy.ts';
 
 await initializeHarfBuzz();
 const regularBytes = new Uint8Array(
@@ -67,21 +67,21 @@ function failure(run: () => unknown): { name: string; code: unknown } {
 }
 
 test('explicit execution samples its ceiling and retains the default and hard bounds', () => {
-  expect(fontExecutionPolicy(undefined).maxFontBytes).toBe(16 * 2 ** 20);
+  expect(fontShapingPolicy(undefined).maxFontBytes).toBe(16 * 2 ** 20);
   const options = { maxFontBytes: 20 * 2 ** 20 };
-  const sampled = fontExecutionPolicy(options);
+  const sampled = fontShapingPolicy(options);
   options.maxFontBytes = 1;
   expect(sampled.maxFontBytes).toBe(20 * 2 ** 20);
   for (const maxFontBytes of [0, -1, NaN, Infinity, 1.5, 64 * 2 ** 20 + 1]) {
-    expect(() => fontExecutionPolicy({ maxFontBytes })).toThrow(RangeError);
+    expect(() => fontShapingPolicy({ maxFontBytes })).toThrow(RangeError);
   }
 });
 
 test('default refusal order matches the original shaper without reading unused fallback bytes', () => {
   const original = createHarfBuzzTextShaper();
-  const bounded = withFontExecutionPolicy(
+  const bounded = withFontShapingPolicy(
     createHarfBuzzTextShaper(),
-    fontExecutionPolicy(undefined),
+    fontShapingPolicy(undefined),
     true
   );
   try {
@@ -106,11 +106,8 @@ test('default refusal order matches the original shaper without reading unused f
 
 test('warming a shared native cache with an explicit large face cannot bypass another owner default', () => {
   const native = createHarfBuzzTextShaper({ maxFontBytes: 20 * 2 ** 20 });
-  const explicit = withFontExecutionPolicy(
-    native,
-    fontExecutionPolicy({ maxFontBytes: 20 * 2 ** 20 })
-  );
-  const defaults = withFontExecutionPolicy(native, fontExecutionPolicy(undefined));
+  const explicit = withFontShapingPolicy(native, fontShapingPolicy({ maxFontBytes: 20 * 2 ** 20 }));
+  const defaults = withFontShapingPolicy(native, fontShapingPolicy(undefined));
   try {
     const shaped = explicit.shape(input(large));
     expect(shaped.glyphs.length).toBeGreaterThan(0);
@@ -128,7 +125,7 @@ test('warming a shared native cache with an explicit large face cannot bypass an
 
 test('an owned execution view disposes its native engine and cannot be revived', () => {
   const native = createHarfBuzzTextShaper();
-  const owner = withFontExecutionPolicy(native, fontExecutionPolicy(undefined), true);
+  const owner = withFontShapingPolicy(native, fontShapingPolicy(undefined), true);
   owner.dispose();
   expect(failure(() => owner.shape(input(large))).code).toBe('disposed');
   expect(failure(() => native.shape(input())).code).toBe('disposed');

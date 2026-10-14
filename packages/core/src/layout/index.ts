@@ -84,7 +84,7 @@ export {
   type HarfBuzzTextShaperOptions,
 } from './harfbuzz-shaper.ts';
 export { setHarfBuzzWasmUrl } from './harfbuzz-wasm-binary.ts';
-export type { FontExecutionOptions } from './font-execution-policy.ts';
+export type { FontShapingOptions } from './font-shaping-policy.ts';
 export {
   LayoutShapingConfigurationError,
   createLayoutShaping,

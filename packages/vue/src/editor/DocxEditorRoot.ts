@@ -125,8 +125,8 @@ export const DocxEditorRoot = defineComponent({
       type: [Object, Function] as PropType<DocxEditorRootProps['fonts']>,
       default: undefined,
     },
-    fontExecution: {
-      type: Object as PropType<DocxEditorRootProps['fontExecution']>,
+    fontShaping: {
+      type: Object as PropType<DocxEditorRootProps['fontShaping']>,
       default: undefined,
     },
     author: { type: String, default: undefined },

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 function scenario(name: 'count' | 'bytes') {
   const result = spawnSync(
     process.execPath,
-    [fileURLToPath(new URL('./fixtures/font-execution-cache-worker.ts', import.meta.url)), name],
+    [fileURLToPath(new URL('./fixtures/font-shaping-cache-worker.ts', import.meta.url)), name],
     { encoding: 'utf8', timeout: 15_000, maxBuffer: 1024 * 1024, windowsHide: true }
   );
   expect(result.error).toBeUndefined();

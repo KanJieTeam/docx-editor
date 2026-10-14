@@ -65,7 +65,7 @@ import { FieldResultsMode } from '@docx-editor.dev/core/editor';
 import { FontConfiguration } from '@docx-editor.dev/core/contracts/editor';
 import { FontConfigurationBase } from '@docx-editor.dev/core/editor';
 import { FontConfigurationFragment } from '@docx-editor.dev/core/editor';
-import { FontExecutionOptions } from '@docx-editor.dev/core/editor';
+import { FontShapingOptions } from '@docx-editor.dev/core/editor';
 import { FontFaceRequest } from '@docx-editor.dev/core/contracts/editor';
 import { FontLoadFailure } from '@docx-editor.dev/core/editor';
 import { FontLoadFailureReason } from '@docx-editor.dev/core/editor';
@@ -1232,7 +1232,7 @@ export interface DocxEditorProps {
     contextMenu?: boolean | DocxEditorContextMenuProps;
     document?: DocumentSource;
     fieldResults?: FieldResultsMode;
-    fontExecution?: FontExecutionOptions;
+    fontShaping?: FontShapingOptions;
     fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
     hyperlinkPopup?: boolean;
     i18n?: Translations;
@@ -1344,7 +1344,7 @@ export interface DocxEditorRootProps {
     children?: DocxEditorChildren;
     document?: DocumentSource;
     fieldResults?: FieldResultsMode;
-    fontExecution?: FontExecutionOptions;
+    fontShaping?: FontShapingOptions;
     fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
     imageDecodePort?: ImageDecodePort;
     locale?: string;

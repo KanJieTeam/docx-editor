@@ -120,7 +120,7 @@ test('document-aware export admits and shapes an explicitly permitted face but r
   const original = input.slice();
   const opened = await openFontBackedDocumentForExport(input, {
     fonts: configuration(),
-    fontExecution: { maxFontBytes: 20 * 2 ** 20 },
+    fontShaping: { maxFontBytes: 20 * 2 ** 20 },
     onFontResolution: () => {},
   });
   expect(opened.ok).toBe(true);

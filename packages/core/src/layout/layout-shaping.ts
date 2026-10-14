@@ -24,10 +24,10 @@ import {
   type LayoutHarfBuzzShaperPolicy,
 } from './layout-shaper-policy.ts';
 import {
-  fontExecutionPolicy,
-  withFontExecutionPolicy,
-  type FontExecutionOptions,
-} from './font-execution-policy.ts';
+  fontShapingPolicy,
+  withFontShapingPolicy,
+  type FontShapingOptions,
+} from './font-shaping-policy.ts';
 import type { LayoutShapingOptions } from './shaped-measurer.ts';
 
 // The shipped browser adapter called createShapedMeasurer without explicit OpenType features.
@@ -597,7 +597,7 @@ async function createLayoutShapingInternal(
   });
   return Object.freeze({
     fonts,
-    shaper: withFontExecutionPolicy(
+    shaper: withFontShapingPolicy(
       sharedShaper ?? createHarfBuzzTextShaper(shaperPolicy),
       shaperPolicy,
       sharedShaper === undefined
@@ -619,13 +619,13 @@ async function createLayoutShapingInternal(
 export async function createLayoutShaping(
   configuration: LayoutFontConfiguration | PreparedLayoutFontConfiguration,
   instrumentation?: LayoutShapingInstrumentation,
-  execution?: FontExecutionOptions
+  execution?: FontShapingOptions
 ): Promise<LayoutShapingOptions> {
   return createLayoutShapingInternal(
     configuration,
     instrumentation,
     undefined,
-    fontExecutionPolicy(execution)
+    fontShapingPolicy(execution)
   );
 }
 

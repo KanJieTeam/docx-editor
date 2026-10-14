@@ -32,7 +32,7 @@ async function settled(editor: DocxEditorInstance): Promise<void> {
 }
 
 for (const rightPolicy of [enabled, undefined]) {
-  test(`font execution remains local with ${rightPolicy ? 'equal' : 'default'} peer limits`, async () => {
+  test(`font shaping limits remain local with ${rightPolicy ? 'equal' : 'default'} peer limits`, async () => {
     const sourceBytes = new Uint8Array(16 * 1024 * 1024 + 1);
     sourceBytes.set(
       readFileSync(
@@ -54,7 +54,7 @@ for (const rightPolicy of [enabled, undefined]) {
     const bytes = zipDocument(
       '<w:p><w:r><w:rPr><w:rFonts w:ascii="DejaVu Sans" w:hAnsi="DejaVu Sans"/><w:sz w:val="28"/></w:rPr><w:t>AB</w:t></w:r></w:p>'
     );
-    const harness = createPeerHarness('font-execution', { offlineEditing: true });
+    const harness = createPeerHarness('font-shaping', { offlineEditing: true });
     const views: { editor: DocxEditorInstance; container: HTMLElement }[] = [];
     const mount = (peer: Peer, policy: typeof enabled | undefined) => {
       peer.detach();
@@ -64,7 +64,7 @@ for (const rightPolicy of [enabled, undefined]) {
         container,
         document: peer.room.document,
         fonts,
-        fontExecution: policy,
+        fontShaping: policy,
         modules: [collaborationModule({ session: peer.room.session })],
       });
       const view = { editor, container };
@@ -157,7 +157,7 @@ for (const rightPolicy of [enabled, undefined]) {
         container,
         document: new Uint8Array(await left.editor.save()),
         fonts,
-        fontExecution: enabled,
+        fontShaping: enabled,
       });
       views.push({ editor: reopened, container });
       await settled(reopened);

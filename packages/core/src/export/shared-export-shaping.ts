@@ -25,10 +25,10 @@ import {
   layoutShaperExecutionPolicyFingerprint,
 } from '../layout/layout-shaper-policy.ts';
 import {
-  fontExecutionPolicy,
-  withFontExecutionPolicy,
-  type FontExecutionOptions,
-} from '../layout/font-execution-policy.ts';
+  fontShapingPolicy,
+  withFontShapingPolicy,
+  type FontShapingOptions,
+} from '../layout/font-shaping-policy.ts';
 import {
   configurationOfPreparedLayoutFonts,
   createLayoutShapingWithTextShaper,
@@ -106,7 +106,7 @@ function acquireNativeProcessWideExportShaper(): Promise<TextShaper> {
 export function acquireProcessWideExportShaper(): Promise<TextShaper> {
   if (defaultExportShaperView) return defaultExportShaperView;
   const pending = acquireNativeProcessWideExportShaper().then((shaper) => {
-    const bounded = withFontExecutionPolicy(shaper, EXPORT_HARFBUZZ_SHAPER_POLICY);
+    const bounded = withFontShapingPolicy(shaper, EXPORT_HARFBUZZ_SHAPER_POLICY);
     return Object.freeze({ shape: bounded.shape });
   });
   defaultExportShaperView = pending;
@@ -139,12 +139,12 @@ export async function createSessionExportShaping(
   instrumentation?: LayoutShapingInstrumentation,
   glyphFallbacks: readonly FontRequest[] = [],
   documentLigatures = false,
-  execution?: FontExecutionOptions
+  execution?: FontShapingOptions
 ): Promise<SessionExportShaping> {
   if (!isPreparedLayoutFontConfiguration(prepared)) {
     throw new TypeError('Session exporter shaping requires a prepared font handle');
   }
-  const policy = fontExecutionPolicy(execution, EXPORT_HARFBUZZ_SHAPER_POLICY);
+  const policy = fontShapingPolicy(execution, EXPORT_HARFBUZZ_SHAPER_POLICY);
   const shaper = await acquireNativeProcessWideExportShaper();
   const shaping = withExportGlyphFallbacks(
     await createLayoutShapingWithTextShaper(
@@ -183,12 +183,12 @@ export async function createSessionExportShaping(
 export function acquireSharedExportShaping(
   prepared: PreparedLayoutFontConfiguration,
   instrumentation?: LayoutShapingInstrumentation,
-  execution?: FontExecutionOptions
+  execution?: FontShapingOptions
 ): Promise<SharedExportShapingCapabilities> {
   if (!isPreparedLayoutFontConfiguration(prepared)) {
     return Promise.reject(new TypeError('Shared exporter shaping requires a prepared font handle'));
   }
-  const policy = fontExecutionPolicy(execution, EXPORT_HARFBUZZ_SHAPER_POLICY);
+  const policy = fontShapingPolicy(execution, EXPORT_HARFBUZZ_SHAPER_POLICY);
   const policyKey = layoutShaperExecutionPolicyFingerprint(policy);
   let views = sharedShapingViews.get(prepared);
   const existingView = views?.get(policyKey);

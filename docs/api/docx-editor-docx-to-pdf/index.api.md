@@ -88,7 +88,7 @@ export class ExportResourceError extends Error {
 }
 
 // @public
-export interface FontExecutionOptions {
+export interface FontShapingOptions {
     readonly maxFontBytes?: number;
 }
 

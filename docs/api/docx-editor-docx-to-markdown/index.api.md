@@ -253,7 +253,7 @@ export interface ExportSession {
 }
 
 // @public
-export interface FontExecutionOptions {
+export interface FontShapingOptions {
     readonly maxFontBytes?: number;
 }
 
@@ -696,7 +696,7 @@ export type OpenDocumentForExportResult = {
 // @public
 export interface OpenMarkdownDocumentForExportOptions extends OpenDocumentForExportOptions {
     readonly fallbackFonts?: MarkdownFontsSource;
-    readonly fontExecution?: FontExecutionOptions;
+    readonly fontShaping?: FontShapingOptions;
     readonly fontPolicy?: 'best-effort' | 'strict';
     readonly fonts?: MarkdownFontsSource;
     readonly onFontResolution?: (report: ExportFontResolutionReport) => void;

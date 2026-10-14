@@ -35,7 +35,7 @@ export type {
   ExportDroppedEmbeddedFont,
 } from '@docx-editor.dev/core/export';
 export type {
-  FontExecutionOptions,
+  FontShapingOptions,
   FontRequest,
   FontSubstitution,
   RevisionDisplayMode,

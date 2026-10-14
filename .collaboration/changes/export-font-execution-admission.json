@@ -10,6 +10,6 @@
     "packages/core/src/export/__tests__/document-export-shaping.test.ts",
     "packages/docx-to-pdf/test/export.test.ts"
   ],
-  "changeset": "export-font-execution-admission",
+  "changeset": "export-font-shaping-admission",
   "migration": null
 }

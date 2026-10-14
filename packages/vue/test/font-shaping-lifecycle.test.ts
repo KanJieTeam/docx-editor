@@ -15,7 +15,7 @@ async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 150));
 }
 
-test('equal inline font execution values preserve edits and undo; changed values remount', async () => {
+test('equal inline font shaping values preserve edits and undo; changed values remount', async () => {
   const instances: DocxEditorInstance[] = [];
   const tick = ref(0);
   const maxFontBytes = ref<number | undefined>(undefined);
@@ -29,7 +29,7 @@ test('equal inline font execution values preserve edits and undo; changed values
           DocxEditorRoot,
           {
             document: 'blank',
-            fontExecution: { maxFontBytes: maxFontBytes.value },
+            fontShaping: { maxFontBytes: maxFontBytes.value },
             onReady: (editor: Editor) => instances.push(editor as DocxEditorInstance),
           },
           { default: () => h(DocxEditorViewport, null, { default: () => h(DocxEditorContent) }) }

@@ -1181,7 +1181,7 @@ export function createImageOverlayScrollPort(scroller: HTMLElement, paintScale: 
 };
 
 // @public (undocumented)
-export function createLayoutShaping(configuration: FontConfiguration, instrumentation?: LayoutShapingInstrumentation, execution?: FontExecutionOptions): Promise<LayoutShapingOptions>;
+export function createLayoutShaping(configuration: FontConfiguration, instrumentation?: LayoutShapingInstrumentation, execution?: FontShapingOptions): Promise<LayoutShapingOptions>;
 
 // @public
 export function cropPercentFromCropPermille(crop: ImageCropPermille): ImageCropPercent;
@@ -1334,7 +1334,7 @@ export interface DocxEditorConfig {
     container?: HTMLElement;
     document?: DocumentSource;
     fieldResults?: FieldResultsMode;
-    fontExecution?: FontExecutionOptions;
+    fontShaping?: FontShapingOptions;
     fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
     imageDecodePort?: ImageDecodePort;
     locale?: string;
@@ -1561,7 +1561,7 @@ export interface FontConfigurationFragment {
 }
 
 // @public
-export interface FontExecutionOptions {
+export interface FontShapingOptions {
     readonly maxFontBytes?: number;
 }
 

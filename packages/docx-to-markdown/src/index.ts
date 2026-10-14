@@ -55,7 +55,7 @@ import type {
 import { createSuccessfulValueCache, provisionWithExportDeadline } from './export-deadline.ts';
 
 export { ExportResourceError } from '@docx-editor.dev/core/export';
-export type { FontExecutionOptions } from '@docx-editor.dev/core/layout';
+export type { FontShapingOptions } from '@docx-editor.dev/core/layout';
 export {
   forEachSemanticDrawing,
   HARD_MAX_AGGREGATE_FONT_BYTES,
@@ -323,10 +323,10 @@ export async function openDocumentForExport(
   const {
     fonts: _fonts,
     fallbackFonts: _fallbackFonts,
-    fontExecution: requestedExecution,
+    fontShaping: requestedExecution,
     ...coreOptions
   } = options;
-  const fontExecution =
+  const fontShaping =
     requestedExecution === undefined
       ? undefined
       : Object.freeze({ maxFontBytes: requestedExecution.maxFontBytes });
@@ -334,10 +334,10 @@ export async function openDocumentForExport(
     if (
       options.fontPolicy !== undefined ||
       options.onFontResolution !== undefined ||
-      fontExecution !== undefined
+      fontShaping !== undefined
     ) {
       throw new TypeError(
-        'fontPolicy, onFontResolution and fontExecution cannot verify a caller-supplied measurer; ' +
+        'fontPolicy, onFontResolution and fontShaping cannot verify a caller-supplied measurer; ' +
           'omit measurer to use document-aware Core font resolution'
       );
     }
@@ -356,7 +356,7 @@ export async function openDocumentForExport(
       ...coreOptions,
       reuseAcrossRevisions: false,
       fonts: [...callerFonts, packagedExportFonts, ...missingFonts],
-      fontExecution,
+      fontShaping,
       onFontResolution: options.onFontResolution,
     });
     return markdownFontBackedOpenResult(opened);
@@ -379,7 +379,7 @@ export async function openDocumentForExport(
   const shared = await provisionWithExportDeadline(
     (signal) =>
       defaultFonts(signal).then((loaded) =>
-        acquireSharedExportShaping(loaded.configuration, undefined, fontExecution)
+        acquireSharedExportShaping(loaded.configuration, undefined, fontShaping)
       ),
     options
   );

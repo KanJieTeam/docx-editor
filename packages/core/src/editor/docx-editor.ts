@@ -164,7 +164,7 @@ import {
 import {
   createLayoutShaping,
   disposeLayoutShaping,
-  sampleFontExecutionOptions,
+  sampleFontShapingOptions,
   toEditorFontError,
 } from './font-configuration.ts';
 import {
@@ -258,7 +258,7 @@ const EMPTY_FONT_SUBSTITUTIONS: readonly string[] = Object.freeze([]);
  * @public
  */
 export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
-  const fontExecution = sampleFontExecutionOptions(config.fontExecution);
+  const fontShaping = sampleFontShapingOptions(config.fontShaping);
   let refreshHost: RefreshHost | undefined = undefined;
   let deferredRefreshBytes: Uint8Array | null = null;
   /** The opening document's session between the prepare and mount tasks, for font work. */
@@ -946,7 +946,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         }
         return;
       }
-      let shaping = await createLayoutShaping(fonts, undefined, fontExecution);
+      let shaping = await createLayoutShaping(fonts, undefined, fontShaping);
       // A newer load (or a destroy) landed while this one awaited: the shaping can never
       // be installed, so release its wasm objects rather than dropping it unreferenced,
       // and clear the in-flight flag only if this load is still the current one. Reads
@@ -1008,7 +1008,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
             documentFonts
           );
           if (fonts.sources.length === 0) return bailToFixed(superseded);
-          shaping = await createLayoutShaping(fonts, undefined, fontExecution);
+          shaping = await createLayoutShaping(fonts, undefined, fontShaping);
           disposeLayoutShaping(superseded);
           if (supersededNow()) return;
           const refusedAfterRebuild = refusedIn(shaping, fonts);
@@ -1028,7 +1028,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
               documentFonts
             );
             if (fonts.sources.length === 0) return bailToFixed(rejected);
-            shaping = await createLayoutShaping(fonts, undefined, fontExecution);
+            shaping = await createLayoutShaping(fonts, undefined, fontShaping);
             disposeLayoutShaping(rejected);
             if (supersededNow()) return;
           }

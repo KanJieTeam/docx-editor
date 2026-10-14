@@ -70,7 +70,7 @@ import { FieldResultsMode } from '@docx-editor.dev/core/editor';
 import { FontConfiguration } from '@docx-editor.dev/core/contracts/editor';
 import { FontConfigurationBase } from '@docx-editor.dev/core/editor';
 import { FontConfigurationFragment } from '@docx-editor.dev/core/editor';
-import { FontExecutionOptions } from '@docx-editor.dev/core/editor';
+import { FontShapingOptions } from '@docx-editor.dev/core/editor';
 import { FontFaceRequest } from '@docx-editor.dev/core/contracts/editor';
 import { FontLoadFailure } from '@docx-editor.dev/core/editor';
 import { FontLoadFailureReason } from '@docx-editor.dev/core/editor';
@@ -3748,7 +3748,7 @@ export interface DocxEditorProps {
     // (undocumented)
     document?: DocumentSource;
     fieldResults?: FieldResultsMode;
-    fontExecution?: FontExecutionOptions;
+    fontShaping?: FontShapingOptions;
     // (undocumented)
     fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
     // (undocumented)
@@ -3928,9 +3928,9 @@ export const DocxEditorRoot: vue.DefineComponent<vue.ExtractPropTypes<{
         default: undefined;
         type: PropType<FieldResultsMode>;
     };
-    fontExecution: {
+    fontShaping: {
         default: undefined;
-        type: PropType<DocxEditorRootProps['fontExecution']>;
+        type: PropType<DocxEditorRootProps['fontShaping']>;
     };
     fonts: {
         default: undefined;
@@ -3991,9 +3991,9 @@ export const DocxEditorRoot: vue.DefineComponent<vue.ExtractPropTypes<{
         default: undefined;
         type: PropType<FieldResultsMode>;
     };
-    fontExecution: {
+    fontShaping: {
         default: undefined;
-        type: PropType<DocxEditorRootProps['fontExecution']>;
+        type: PropType<DocxEditorRootProps['fontShaping']>;
     };
     fonts: {
         default: undefined;
@@ -4043,7 +4043,7 @@ export const DocxEditorRoot: vue.DefineComponent<vue.ExtractPropTypes<{
     author: string;
     document: DocumentSource;
     fieldResults: FieldResultsMode;
-    fontExecution: _docx_editor_dev_core.FontExecutionOptions | undefined;
+    fontShaping: _docx_editor_dev_core.FontShapingOptions | undefined;
     fonts: _docx_editor_dev_core.FontConfiguration | _docx_editor_dev_core.FontConfigurationFragment | _docx_editor_dev_core.FontResolver | undefined;
     imageDecodePort: ImageDecodePort;
     locale: string;
@@ -4075,7 +4075,7 @@ export interface DocxEditorRootProps {
     // (undocumented)
     document?: DocumentSource;
     fieldResults?: FieldResultsMode;
-    fontExecution?: FontExecutionOptions;
+    fontShaping?: FontShapingOptions;
     // (undocumented)
     fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
     // (undocumented)

@@ -7,14 +7,14 @@ import {
 import type { ShapeInput, TextShaper } from './shaped-run.ts';
 
 /** Host-selected execution limits, separate from font admission limits. @public */
-export interface FontExecutionOptions {
+export interface FontShapingOptions {
   /** Per-face shaping byte ceiling. Defaults to 16 MiB; the hard ceiling is 64 MiB. */
   readonly maxFontBytes?: number;
 }
 
 /** Sample one explicit host execution ceiling before asynchronous initialization. @internal */
-export function fontExecutionPolicy(
-  options: FontExecutionOptions | undefined,
+export function fontShapingPolicy(
+  options: FontShapingOptions | undefined,
   base: LayoutHarfBuzzShaperPolicy = LAYOUT_HARFBUZZ_SHAPER_POLICY
 ): LayoutHarfBuzzShaperPolicy {
   const maxFontBytes = options?.maxFontBytes ?? base.maxFontBytes;
@@ -23,15 +23,13 @@ export function fontExecutionPolicy(
     maxFontBytes <= 0 ||
     maxFontBytes > HARD_MAX_FONT_BYTES
   ) {
-    throw new RangeError(
-      `Font execution byte ceiling must be between 1 and ${HARD_MAX_FONT_BYTES}`
-    );
+    throw new RangeError(`Font shaping byte ceiling must be between 1 and ${HARD_MAX_FONT_BYTES}`);
   }
   return maxFontBytes === base.maxFontBytes ? base : Object.freeze({ ...base, maxFontBytes });
 }
 
 /** Apply a host refusal before consulting a shared native shaper or its caches. @internal */
-export function withFontExecutionPolicy(
+export function withFontShapingPolicy(
   shaper: TextShaper,
   policy: LayoutHarfBuzzShaperPolicy,
   ownsShaper = false
