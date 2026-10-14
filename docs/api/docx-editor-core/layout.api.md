@@ -1081,11 +1081,6 @@ export type FixedPointRoundingMode = 'halfAwayFromZero' | 'halfToEven' | 'toward
 export type FontByteValidator = (bytes: Uint8Array, faceIndex: number) => FontValidationResult;
 
 // @public
-export interface FontShapingOptions {
-    readonly maxFontBytes?: number;
-}
-
-// @public
 export interface FontFingerprintInputs {
     // (undocumented)
     readonly byteLength: number;
@@ -1197,6 +1192,11 @@ export interface FontResourceSnapshotOptions {
     readonly substitutions?: readonly DeclaredFontSubstitution[];
     // (undocumented)
     readonly validateFont: FontByteValidator;
+}
+
+// @public
+export interface FontShapingOptions {
+    readonly maxFontBytes?: number;
 }
 
 // @public

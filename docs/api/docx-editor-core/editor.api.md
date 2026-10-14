@@ -1334,8 +1334,8 @@ export interface DocxEditorConfig {
     container?: HTMLElement;
     document?: DocumentSource;
     fieldResults?: FieldResultsMode;
-    fontShaping?: FontShapingOptions;
     fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
+    fontShaping?: FontShapingOptions;
     imageDecodePort?: ImageDecodePort;
     locale?: string;
     mode?: 'edit' | 'view' | 'suggesting';
@@ -1561,11 +1561,6 @@ export interface FontConfigurationFragment {
 }
 
 // @public
-export interface FontShapingOptions {
-    readonly maxFontBytes?: number;
-}
-
-// @public
 export interface FontLoadFailure {
     // (undocumented)
     readonly actualHash?: string;
@@ -1621,6 +1616,11 @@ export type FontResolver = (request: FontResolutionRequest) => FontConfiguration
 // @public
 export interface FontResolverMark {
     readonly 'docx-editor.dev/font-resolver': true;
+}
+
+// @public
+export interface FontShapingOptions {
+    readonly maxFontBytes?: number;
 }
 
 // @public

@@ -276,9 +276,9 @@ export function openFontBackedDocumentForExport(source: Uint8Array, options: Ope
 // @public
 export interface OpenFontBackedDocumentForExportOptions extends Omit<OpenDocumentForExportOptions, 'measurer' | 'reuseAcrossRevisions'> {
     readonly documentLigatures?: boolean;
-    readonly fontShaping?: FontShapingOptions;
     readonly fontPolicy?: 'best-effort' | 'strict';
     readonly fontResolutionTimeoutMs?: number;
+    readonly fontShaping?: FontShapingOptions;
     readonly fonts: FontOrigin | readonly FontOrigin[];
     readonly glyphFallbacks?: readonly FontRequest[];
     readonly lastResortFonts?: FontOrigin | readonly FontOrigin[];

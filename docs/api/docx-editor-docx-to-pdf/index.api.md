@@ -88,11 +88,6 @@ export class ExportResourceError extends Error {
 }
 
 // @public
-export interface FontShapingOptions {
-    readonly maxFontBytes?: number;
-}
-
-// @public
 export interface FontOriginFailure {
     // (undocumented)
     readonly cause: unknown;
@@ -108,6 +103,11 @@ export interface FontRequest {
     readonly style: 'normal' | 'italic';
     // (undocumented)
     readonly weight: number;
+}
+
+// @public
+export interface FontShapingOptions {
+    readonly maxFontBytes?: number;
 }
 
 // @public

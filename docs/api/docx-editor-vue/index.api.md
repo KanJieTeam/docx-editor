@@ -70,7 +70,6 @@ import { FieldResultsMode } from '@docx-editor.dev/core/editor';
 import { FontConfiguration } from '@docx-editor.dev/core/contracts/editor';
 import { FontConfigurationBase } from '@docx-editor.dev/core/editor';
 import { FontConfigurationFragment } from '@docx-editor.dev/core/editor';
-import { FontShapingOptions } from '@docx-editor.dev/core/editor';
 import { FontFaceRequest } from '@docx-editor.dev/core/contracts/editor';
 import { FontLoadFailure } from '@docx-editor.dev/core/editor';
 import { FontLoadFailureReason } from '@docx-editor.dev/core/editor';
@@ -78,6 +77,7 @@ import { FontOrigin } from '@docx-editor.dev/core/editor';
 import { FontResolutionRequest } from '@docx-editor.dev/core/editor';
 import { FontResolver } from '@docx-editor.dev/core/editor';
 import { FontResolverMark } from '@docx-editor.dev/core/editor';
+import { FontShapingOptions } from '@docx-editor.dev/core/editor';
 import { FontSource } from '@docx-editor.dev/core/contracts/editor';
 import { FontSourceSubstitution } from '@docx-editor.dev/core/contracts/editor';
 import { FontUrlSource } from '@docx-editor.dev/core/editor';
@@ -3748,9 +3748,9 @@ export interface DocxEditorProps {
     // (undocumented)
     document?: DocumentSource;
     fieldResults?: FieldResultsMode;
-    fontShaping?: FontShapingOptions;
     // (undocumented)
     fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
+    fontShaping?: FontShapingOptions;
     // (undocumented)
     hyperlinkPopup?: boolean;
     // (undocumented)
@@ -4075,9 +4075,9 @@ export interface DocxEditorRootProps {
     // (undocumented)
     document?: DocumentSource;
     fieldResults?: FieldResultsMode;
-    fontShaping?: FontShapingOptions;
     // (undocumented)
     fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
+    fontShaping?: FontShapingOptions;
     // (undocumented)
     imageDecodePort?: ImageDecodePort;
     locale?: string;

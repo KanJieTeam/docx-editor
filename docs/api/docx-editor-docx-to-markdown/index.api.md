@@ -253,11 +253,6 @@ export interface ExportSession {
 }
 
 // @public
-export interface FontShapingOptions {
-    readonly maxFontBytes?: number;
-}
-
-// @public
 export interface FontOriginFailure {
     // (undocumented)
     readonly cause: unknown;
@@ -273,6 +268,11 @@ export interface FontRequest {
     readonly style: 'normal' | 'italic';
     // (undocumented)
     readonly weight: number;
+}
+
+// @public
+export interface FontShapingOptions {
+    readonly maxFontBytes?: number;
 }
 
 // @public
@@ -696,8 +696,8 @@ export type OpenDocumentForExportResult = {
 // @public
 export interface OpenMarkdownDocumentForExportOptions extends OpenDocumentForExportOptions {
     readonly fallbackFonts?: MarkdownFontsSource;
-    readonly fontShaping?: FontShapingOptions;
     readonly fontPolicy?: 'best-effort' | 'strict';
+    readonly fontShaping?: FontShapingOptions;
     readonly fonts?: MarkdownFontsSource;
     readonly onFontResolution?: (report: ExportFontResolutionReport) => void;
     readonly reuseAcrossRevisions?: boolean;
