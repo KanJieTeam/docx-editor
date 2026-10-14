@@ -116,8 +116,6 @@ In compatibility mode 15 and later, a right-to-left table moves toward its visua
 
 A table percentage width can be larger than 100%, up to 655.34%. The table then extends past the text column and keeps its cells' line breaks. This applies to every alignment, to AutoFit and fixed tables, and in every compatibility mode. A nested table can extend past its cell in the same way. A supported full-width table in a file without a compatibility mode, or in compatibility mode 11, 12, or 14, measures the percentage against the text-column width plus its outer cell margins. A larger count of fiftieths wraps at 65536, and a count that wraps above 32767 states no width. A larger value stated with a percent sign makes the table as narrow as its content allows.
 
-A table percentage width can be larger than 100%, up to 655.34%. The table then extends past the text column and keeps its cells' line breaks. This applies to every alignment, to AutoFit and fixed tables, and in every compatibility mode. A nested table can extend past its cell in the same way. A supported full-width table in a file without a compatibility mode, or in compatibility mode 11, 12, or 14, measures the percentage against the text-column width plus its outer cell margins. A larger count of fiftieths wraps at 65536, and a count that wraps above 32767 states no width. A larger value stated with a percent sign makes the table as narrow as its content allows.
-
 An AutoFit column widens to hold its widest unbroken word, such as a long URL, with its indents and cell margins. The other columns give up width in proportion to their spare room. When the minimums are wider than both the text column and the table, the columns shrink in proportion to their minimums to the wider of the two.
 
 An AutoFit column whose cells state no width is sized by its content. Each such column takes its widest unwrapped line when the table has room, and the columns share any extra room in proportion to those widths. A table with no width of its own takes only what its content needs. Columns with a stated width give way first. When the table is still too narrow, the content-sized columns wrap, each by the same fraction of its range.
@@ -230,6 +228,10 @@ A hidden break does not separate the border group. This includes tracked changes
 
 This rule does not apply to some paragraphs. A paragraph with only one page break, or with only hidden content after the break, keeps the ordinary rule. This includes a single break after a table that fills the page. A paragraph that opens with a page break followed by another page or column break keeps its first break on the current page. Each later break starts one more page. A paragraph that anchors a floating table, text frame, or drawing also keeps it. After a full page, its break line moves to a new page. Its text starts one page later.
 
+A manual column break at the start of a paragraph stays at the bottom of a full page or column, even with nothing after it. The content after the break starts in the next column, or on the next page after the last column. That content gets the paragraph's space before and top border, as text after a leading page break does.
+
+A page break directly followed by a line break does not start a new page. The line break still ends the line, so the text after it continues on the next line.
+
 ### Section boundaries
 
 A continuous section can share the preceding section’s last page when its page size and orientation stay the same. A trailing page break in the preceding section starts the continued text on the next page. A shared page retains its header, footer, and text area, even if the following section uses different variants or heights. The following section’s header and footer start on the next page.
@@ -243,6 +245,8 @@ An empty paragraph that ends a section ignores its own page break before, from d
 Bottom-to-top cell text does not make its row taller. The text wraps at the final row height, or along the full merged cell height. The cell width clips overflowing text.
 
 A table row starts below other content only when the remaining space holds its minimum height. If it does not, the row moves to the next page, also when its content is taller than a page. A keep-with-next paragraph before the table moves with the row. If a fresh page cannot hold that minimum below repeated headers, the row splits where it stands. Rows of positioned tables keep their existing placement.
+
+A row with an exact height taller than the page content starts on a fresh page and does not split. It fills the rest of that page, and its content is clipped at the bottom margin. The next block starts on the next page. The reference layout keeps the full row height past the bottom margin, so the bottom edge of the row differs.
 
 Keep-with-next table groups include closed vertical merges. Their merged content contributes its height once across the covered rows. Table decisions measure at most 256 kept rows and the next row. Longer groups use that measured prefix as a lower bound. Paragraph keep lookahead remains unchanged.
 
@@ -268,7 +272,7 @@ Adjacent paragraph spacing normally uses the larger of the preceding space after
 
 Supply usable font bytes for accurate text measurement. For more information, see [Fonts and measurement](/docs/2.x/guides/fonts).
 
-Known single-byte Symbol and Wingdings bullets use Unicode fallback when their font is unavailable. The editor preserves the original numbering definition when you save.
+Known single-byte Symbol and Wingdings bullets use Unicode fallback when their font is unavailable. Layout still uses the line height and advance widths of the symbol font. The editor preserves the original numbering definition when you save.
 
 No-break spaces (U+00A0, U+2007, and U+202F) retain their line-break behavior across formatting runs. This also applies to word joiners (U+2060 and U+FEFF). Ordinary spaces can still provide break positions. Oversized groups retain the existing overflow rules.
 
@@ -286,7 +290,7 @@ East Asian font hints select the document's East Asian face for supported punctu
 
 Document settings control kinsoku, Japanese strict rules, and language-specific break restrictions. They also control Korean character wrapping, punctuation overflow, and punctuation or kana compression. Punctuation compression removes shared side bearings and preserves the ink position during native text selection. Compression removes shared spacing between adjacent punctuation. Paragraph and manual line-break boundaries retain their advance widths.
 
-Run language uses Word `w:lang` elements and Word-qualified attributes across styles and direct formatting. Foreign language extensions remain saved but do not select the layout language.
+Run language uses `w:lang` elements and attributes in the WordprocessingML namespace across styles and direct formatting. Foreign language extensions remain saved but do not select the layout language.
 
 Colons can compress before opening brackets, bounded by the following bracket's available bearing. With measured glyph bounds, colons also compress before closing punctuation. This pair rule halves the colon's advance, including authored character spacing. Other centered punctuation, authored spaces, outlined text, decorated text, and tracked changes retain their advances. Colons with highlight or shading retain their advances.
 

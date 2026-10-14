@@ -35,6 +35,7 @@ import type {
 } from '../output/revision-presentation.ts';
 import type { FontConfigurationFragment, FontResolver } from './font-composition.ts';
 import type { PaginatedSurface, RemoteCaretLabelHost } from './paginated-surface.ts';
+import type { OpeningIndicatorHost } from './surface-opening-indicator.ts';
 import type { HyperlinkActivation } from './surface-navigation.ts';
 import type { EquationActivation } from './surface-equations.ts';
 
@@ -140,6 +141,9 @@ export interface DocxEditorConfig {
    *   display text, QUOTE, FILENAME, FILLIN, SEQ, and the save, print, and creation dates)
    *   accept typing, deletion, and selection inside the result. Fields the engine computes
    *   live (PAGE, NUMPAGES, REF, PAGEREF, DOCPROPERTY, and others) stay one unit.
+   *
+   * Editable results must be unnested. Simple fields inside complex field results are not
+   * supported in editable mode.
    *
    * Fixed for the instance. `'editable'` with a collaboration module throws a `TypeError`:
    * shared paragraph text keeps every field one unit.
@@ -261,6 +265,25 @@ export interface DocxEditorInstance extends Editor {
    * mount, and it survives a document reload the way the hyperlink chrome does.
    */
   setRemoteCaretLabelHost(host: RemoteCaretLabelHost | null): void;
+  /**
+   * Render the host's own loading indicator on the first page while a large document lays out
+   * its remaining pages, or restore the packaged spinner with `null`. The engine keeps owning
+   * the element and its place on the page; the host owns its content.
+   *
+   * Instance-only, like `setRemoteCaretLabelHost`, and tolerated at any time: a host set
+   * before the open applies when the first pages show. `DocxEditor.Loading` with `overlay`
+   * registers one for you, so set this only when you build your own loading screen.
+   *
+   * @example
+   * ```ts
+   * editor.setOpeningIndicatorHost({
+   *   publish(element) {
+   *     element?.replaceChildren(document.createTextNode('Opening…'));
+   *   },
+   * });
+   * ```
+   */
+  setOpeningIndicatorHost(host: OpeningIndicatorHost | null): void;
   /**
    * Monotonic version of the observable editor state. Bumps whenever anything
    * `snapshot()` reports could have moved — a committed change, a selection move, zoom,

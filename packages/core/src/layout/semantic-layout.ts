@@ -101,9 +101,11 @@ import {
 } from './paragraph-break-request.ts';
 import { collapsingSpaceAfter, resolveParagraphLayoutInputs } from './style-cascade.ts';
 import { paragraphBorderGroupKey } from './cell-border-groups.ts';
+import { paragraphBoxOutdent } from './paragraph-indent.ts';
 import { paragraphShadingBox } from './ooxml-shading.ts';
 import { paragraphFragmentBorders } from './paragraph-fragment-borders.ts';
-import { holdsOnlyPageBreak, lineContentX } from './pending-line.ts';
+import { holdsOnlyPageBreak, lineBreakAfterFields, lineContentX } from './pending-line.ts';
+import { withSectionBreakMarks } from './section-break-marks.ts';
 import { alignLineWithPictures } from './line-picture-alignment.ts';
 import { createLeadingBreakGroups } from './leading-break-border-group.ts';
 import { type TableAnchorFrames } from './semantic-table.ts';
@@ -112,6 +114,7 @@ import * as tableWrap from './table-float-exclusion.ts';
 import {
   bodyAnchorFrameBase,
   atKeptBreakY,
+  holdsOnlyColumnBreak,
   opensWithPageBreak,
   paragraphHoldsNothing,
   paragraphPaintsNothing,
@@ -182,6 +185,7 @@ import {
   sectionLineGridPt,
 } from './section-properties.ts';
 import { pageBreakBeforeRules } from './page-break-before.ts';
+import { marginInset } from './page-body-margins.ts';
 import { columnSeparatorBoxes, resolveSectionColumns } from './section-columns.ts';
 import {
   inheritNotesLayoutInput,
@@ -403,7 +407,8 @@ function* layoutInModeSteps(
     if (options.session && options.bodyBlockLimit === undefined) {
       projected = relabelListMarkers(projected, optionsWithLists.listItems, options.measurer);
     }
-    const withBoundaries = attachContentControlBoundaries(projected, part, controlToken);
+    const bounded = attachContentControlBoundaries(projected, part, controlToken);
+    const withBoundaries = withSectionBreakMarks(bounded, part, allBlocks);
     carryLayoutReadCaches(layout, withBoundaries);
     if (options.session) {
       options.session.previous = withBoundaries;
@@ -888,7 +893,7 @@ function* layoutBlocksPass(
         // collapsed outside column 0 and every paragraph there drew its own box. Which
         // column a paragraph lands in is a layout outcome; the group is an authored
         // relationship between neighbours, and only the authored insets may decide it.
-        borderGroupKey: paragraphBorderGroupKey({ borders, indent }),
+        borderGroupKey: paragraphBorderGroupKey({ borders, indent, props }),
         shading,
         inheritedRunProperties,
         markRunProperties,
@@ -1492,10 +1497,15 @@ function* layoutBlocksPass(
     columnCount,
   });
 
-  const { breaksBeforeAt, keepsBeforeAtPageStart } = pageBreakBeforeRules(
+  const { breaksBeforeAt, keepsBeforeAtPageStart, spaceBeforeAt } = pageBreakBeforeRules(
     prepared.length,
     options.compatibilityMode,
-    () => firstParagraphOfSection
+    () => firstParagraphOfSection,
+    // The HTML automatic gap only: the fixed 5pt setting keeps its value.
+    styleCascade?.fixedParagraphSpacing !== true &&
+      pageIndexStart === 0 &&
+      flowStartY === 0 &&
+      insetsFor(0).top <= marginInset(geometry.margin.top)
   );
 
   // Placement and keep-with-next lookahead share cached line breaks.
@@ -1525,7 +1535,10 @@ function* layoutBlocksPass(
       const sameStyle =
         entry.styleId !== null &&
         flowNeighbourStyle(entry.paragraph, -1, previous, styleCascade) === entry.styleId;
-      const before = entry.contextualSpacing && sameStyle ? 0 : entry.spacing.before;
+      const before =
+        entry.contextualSpacing && sameStyle
+          ? 0
+          : spaceBeforeAt(entryIndex, entry, entry.spacing.before);
       const continuesBorder = leadingBreakGroups.joins(previous, entry);
       paragraphSpaceBefore = appliedSpaceBefore(
         before,
@@ -2000,8 +2013,13 @@ function* layoutBlocksPass(
     const { paragraph, props, contextualSpacing, styleId, borders, shading, keeps } = entry;
     // Width-specific preparation owns line inputs; the prepass owns neighbor spacing.
     const preparedEntry = prepared[index]!;
-    const authoredSpacing =
+    const preparedSpacing =
       preparedEntry.kind === 'paragraph' ? preparedEntry.spacing : entry.spacing;
+    const startBefore = spaceBeforeAt(index, entry, preparedSpacing.before);
+    const authoredSpacing =
+      startBefore === preparedSpacing.before
+        ? preparedSpacing
+        : { ...preparedSpacing, before: startBefore };
     let { indent, alignment, markRunProperties } = entry;
     const rtl = paragraphIsRtl(entry.props);
     let available = entry.available;
@@ -2214,6 +2232,17 @@ function* layoutBlocksPass(
     let keptBreakLine = false;
     /** Where that kept line would sit unclamped: its shading fills there, past the band. */
     let keptBreakY = 0;
+    /** After a break line. Text after leading breaks opens with its space before and top rule. */
+    const openAfterBreak = (endsHere: boolean): void => {
+      fragmentBefore = 0;
+      fragmentTopExtent = 0;
+      endedWithPageBreak = !breakLinesOnly || endsHere;
+      if (endedWithPageBreak) return;
+      breakLinesOnly = false;
+      fragmentBefore = textBefore;
+      fragmentTopExtent = paragraphBorderExtentPt(borders.top);
+      cursorY += fragmentBefore + fragmentTopExtent;
+    };
     let fragmentParagraphStartY = cursorY;
     /** Clearance applied above the fragment's first placed line, for anchor framing. */
     let fragmentFirstLineSkip = 0;
@@ -2277,6 +2306,7 @@ function* layoutBlocksPass(
         regionX,
         indentLeft: indent.left,
         available,
+        outdent: paragraphBoxOutdent(indent, rtl),
         drawn: !breakLinesOnly,
       });
       if (isLast) cursorY = Math.max(cursorY, bottom);
@@ -2658,6 +2688,7 @@ function* layoutBlocksPass(
         leading: pendingLine.leading,
         trailingSpacing: pendingLine.trailingSpacing,
         ...(pendingLine.manualBreakAfter ? { manualBreakAfter: true } : {}),
+        ...lineBreakAfterFields(pendingLine),
         ...(pendingLine.deletedRanges ? { deletedRanges: pendingLine.deletedRanges } : {}),
         ...(alignedDrawings.length > 0 ? { drawings: alignedDrawings } : {}),
         ...(pendingLine.anchorRevisions ? { anchorRevisions: pendingLine.anchorRevisions } : {}),
@@ -2672,9 +2703,8 @@ function* layoutBlocksPass(
         const priorPageHadExclusions = pageExclusionZones().length > 0;
         flushFragment(isLastLine);
         advanceColumn();
-        fragmentBefore = 0;
-        fragmentTopExtent = 0;
-        endedWithPageBreak = true;
+        const next = lines[lineIndex + 1];
+        openAfterBreak(!next || holdsOnlyPageBreak(next) || holdsOnlyColumnBreak(next));
         if (
           !isLastLine &&
           (columnWidth() !== priorColumnWidth ||
@@ -2696,18 +2726,8 @@ function* layoutBlocksPass(
         if (isLastLine && options.markJoinsBreakSheet && !frame && emptySectionMarkAt(index + 1)) {
           markOnBreakSheet = index + 1;
         } else flushPage();
-        fragmentBefore = 0;
-        fragmentTopExtent = 0;
-        // Text after leading breaks opens here with its space before and its own top rule. It
-        // starts on this sheet, so its space after collapses with the next paragraph as usual.
-        endedWithPageBreak =
-          !breakLinesOnly || isLastLine || holdsOnlyPageBreak(lines[lineIndex + 1]!);
-        if (!endedWithPageBreak) {
-          breakLinesOnly = false;
-          fragmentBefore = textBefore;
-          fragmentTopExtent = paragraphBorderExtentPt(borders.top);
-          cursorY += fragmentBefore + fragmentTopExtent;
-        }
+        // The text starts on this sheet, so its space after collapses with the next paragraph.
+        openAfterBreak(isLastLine || holdsOnlyPageBreak(lines[lineIndex + 1]!));
         if (!isLastLine && (priorPageHadExclusions || pageExclusionZones().length > 0)) {
           rebreakInCurrentColumn(pendingLine.end, cursorY);
           appliedSkipByLineIndex.clear();
