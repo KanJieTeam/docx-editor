@@ -7,6 +7,8 @@ seoTitle: 'Loading and saving DOCX documents'
 
 Pass DOCX bytes to load a document. Call `save()` to serialize edits as DOCX bytes. Loading and saving run in the browser; your application owns storage and network requests.
 
+Opening a DOCX retains valid MIME declarations, such as `image/.jpg`, for opaque parts. Save keeps their bytes.
+
 ## Input formats
 
 Pass `Uint8Array` DOCX bytes through the `document` prop:

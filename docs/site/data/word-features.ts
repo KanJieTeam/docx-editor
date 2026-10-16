@@ -1056,6 +1056,17 @@ export const wordFeatures: WordFeature[] = [
 
   // --- Document structure & content controls ---------------------------------
   {
+    id: 'structure.content-types',
+    name: 'Package content types',
+    category: 'structure',
+    editing: 'none',
+    rendering: 'none',
+    roundTrip: 'preserved',
+    tier: 'community',
+    notes: 'Valid ASCII MIME tokens, including image/.jpg, survive open and save.',
+    docsLink: '/docs/2.x/guides/loading-and-saving',
+  },
+  {
     id: 'structure.content-controls',
     name: 'Content controls (SDT): block, inline',
     category: 'structure',

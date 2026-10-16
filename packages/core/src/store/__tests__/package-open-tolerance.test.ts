@@ -239,7 +239,7 @@ describe('malformed content-type records', () => {
       '[Content_Types].xml': contentTypes(
         RELS_DEFAULT,
         XML_DEFAULT,
-        '<Default Extension="PNG" ContentType="image/.png"/>',
+        '<Default Extension="PNG" ContentType="image/"/>',
         MAIN_OVERRIDE
       ),
       'word/document.xml': pictureDocument,
@@ -258,7 +258,7 @@ describe('malformed content-type records', () => {
   });
 
   test('ignores an invalid Override on an inert image part and keeps the record on save', () => {
-    const invalid = '<Override PartName="/extra/images/icon.png" ContentType="image/.png"/>';
+    const invalid = '<Override PartName="/extra/images/icon.png" ContentType="image/"/>';
     const bytes = build({
       '[Content_Types].xml': contentTypes(
         RELS_DEFAULT,
@@ -283,7 +283,7 @@ describe('malformed content-type records', () => {
         '[Content_Types].xml': contentTypes(
           RELS_DEFAULT,
           XML_DEFAULT,
-          '<Default Extension="JPG" ContentType="image/.jpg"/>',
+          '<Default Extension="JPG" ContentType="image/"/>',
           '<Default Extension="jpg" ContentType="image/jpeg"/>',
           MAIN_OVERRIDE
         ),
@@ -295,8 +295,8 @@ describe('malformed content-type records', () => {
   test('still refuses an invalid type on the main document or a relationships part', () => {
     for (const records of [
       [RELS_DEFAULT, XML_DEFAULT, `<Override PartName="/word/document.xml" ContentType="bogus"/>`],
-      [RELS_DEFAULT, '<Default Extension="xml" ContentType="application/.xml"/>'],
-      ['<Default Extension="rels" ContentType="application/.rels"/>', XML_DEFAULT, MAIN_OVERRIDE],
+      [RELS_DEFAULT, '<Default Extension="xml" ContentType="application/"/>'],
+      ['<Default Extension="rels" ContentType="application/"/>', XML_DEFAULT, MAIN_OVERRIDE],
     ]) {
       expect(
         readOoxmlPackage(build({ '[Content_Types].xml': contentTypes(...records) }))
@@ -310,7 +310,7 @@ describe('malformed content-type records', () => {
         RELS_DEFAULT,
         XML_DEFAULT,
         MAIN_OVERRIDE,
-        '<Override PartName="/word/styles.xml" ContentType="application/.xml"/>'
+        '<Override PartName="/word/styles.xml" ContentType="application/"/>'
       ),
       'word/_rels/document.xml.rels':
         `<Relationships xmlns="${REL_NS}">` +
@@ -328,7 +328,7 @@ describe('malformed content-type records', () => {
   test('refuses a dropped Default that decides a non-payload part of the main document', () => {
     const records = [
       RELS_DEFAULT,
-      '<Default Extension="xml" ContentType="application/.xml"/>',
+      '<Default Extension="xml" ContentType="application/"/>',
       MAIN_OVERRIDE,
     ];
     const related = (type: string) =>
@@ -355,7 +355,7 @@ describe('malformed content-type records', () => {
         RELS_DEFAULT,
         XML_DEFAULT,
         MAIN_OVERRIDE,
-        '<Override PartName="/word/styles.xml" ContentType="application/.xml"/>',
+        '<Override PartName="/word/styles.xml" ContentType="application/"/>',
         `<Override PartName="/word/styles.xml" ContentType="${STYLES_TYPE}"/>`
       ),
       'word/_rels/document.xml.rels':

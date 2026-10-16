@@ -47,14 +47,14 @@ export type ContentTypeError =
   | { readonly code: 'invalid-override-name'; readonly partName: string }
   | { readonly code: 'too-many-records'; readonly limit: number };
 
-// Media type per RFC 2045-ish: type "/" subtype. Parameters are checked by hand below,
+// Media type per RFC 2616: type and subtype are non-empty tokens. Parameters are checked below,
 // NOT by a trailing `(\s*;\s*[^;]+)*` group: `\s*` and `[^;]+` both match whitespace, so a
 // crafted `[Content_Types].xml` value like "a/b;" plus a long run of spaces made the engine
 // backtrack exponentially. The essence pattern alone is unambiguous and linear.
-const MIME_ESSENCE_RE = /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/;
+const MIME_ESSENCE_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+\/[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
 // The same essence, allowing the trailing whitespace a `;` may sit behind.
 const MIME_ESSENCE_BEFORE_PARAMS_RE =
-  /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\s*$/;
+  /^[A-Za-z0-9!#$%&'*+.^_`|~-]+\/[A-Za-z0-9!#$%&'*+.^_`|~-]+\s*$/;
 
 /** Whether a string is syntactically a MIME type. Syntax only — no registry lookup. */
 export function isValidMime(value: string): boolean {
@@ -178,7 +178,7 @@ export interface IgnoredContentTypes {
 /**
  * Build the index while treating a record with an invalid MIME type as absent.
  *
- * One malformed record (`image/.jpg` on an image extension, say) does not make the other
+ * One malformed record (`image/` on an image extension, say) does not make the other
  * records untrustworthy, so it is dropped rather than refusing the package. The dropped
  * record stays in the authored `[Content_Types].xml` bytes, which a save writes back
  * unchanged. Every other rule still fails closed: conflicting valid Defaults, conflicting

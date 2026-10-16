@@ -1,0 +1,14 @@
+{
+  "impact": "compatible",
+  "fields": [],
+  "before": "Strict content type indexing rejects valid MIME tokens, and tolerant loading skips their lookup entries.",
+  "after": "Content type indexes retain valid ASCII MIME tokens. Conflicting valid declarations still fail closed.",
+  "reason": "Shared operations, identities, repair rules, and baseline encoding stay unchanged. Released readers can skip newly recognized lookup entries while retaining their authored bytes. They can still refuse records that govern required parts. Newly recognized conflicting declarations can also prevent package loading. The regression checks current participants; it does not claim a published mixed-version matrix.",
+  "tests": [
+    "packages/core/src/store/__tests__/content-types.test.ts",
+    "packages/core/src/store/__tests__/package-open-tolerance.test.ts",
+    "packages/pro/src/collaboration/__tests__/document-package-tolerance.test.ts"
+  ],
+  "changeset": "tidy-mime-token-boundaries",
+  "migration": null
+}

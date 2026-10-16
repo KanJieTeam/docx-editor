@@ -26,7 +26,10 @@ const OFFICE_DOC =
   'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument';
 const FOREIGN_CT = 'http://example.com/foreign-content-types';
 
-function minimalPackage(contentTypesXml: string): Uint8Array {
+function minimalPackage(
+  contentTypesXml: string,
+  extraParts: Record<string, Uint8Array> = {}
+): Uint8Array {
   return zipSync({
     '[Content_Types].xml': strToU8(contentTypesXml),
     '_rels/.rels': strToU8(
@@ -37,6 +40,7 @@ function minimalPackage(contentTypesXml: string): Uint8Array {
     'word/document.xml': strToU8(
       `<w:document xmlns:w="${W}"><w:body><w:p><w:r><w:t>x</w:t></w:r></w:p></w:body></w:document>`
     ),
+    ...extraParts,
   });
 }
 
@@ -94,6 +98,14 @@ describe('content-type index', () => {
       ok: false,
       error: { code: 'conflicting-default', extension: 'xml' },
     });
+    expect(
+      buildContentTypeIndex(
+        records([
+          ['JPG', 'image/.jpg'],
+          ['jpg', 'image/jpeg'],
+        ])
+      )
+    ).toMatchObject({ ok: false, error: { code: 'conflicting-default', extension: 'jpg' } });
   });
 
   test('identical duplicate Defaults are preserved (no error)', () => {
@@ -123,6 +135,61 @@ describe('content-type index', () => {
     expect(isValidMime('application/xml')).toBe(true);
     expect(isValidMime('not-a-mime')).toBe(false);
     expect(buildContentTypeIndex(records([['xml', 'bogus']])).ok).toBe(false);
+  });
+
+  test('type and subtype accept ASCII tokens and reject separators and controls', () => {
+    const separators = new Set([
+      '(',
+      ')',
+      '<',
+      '>',
+      '@',
+      ',',
+      ';',
+      ':',
+      '\\',
+      '"',
+      '/',
+      '[',
+      ']',
+      '?',
+      '=',
+      '{',
+      '}',
+      ' ',
+      '\t',
+    ]);
+    for (let code = 0; code < 128; code++) {
+      const character = String.fromCharCode(code);
+      const token = code > 32 && code < 127 && !separators.has(character);
+      expect(isValidMime(`${character}type/subtype`)).toBe(token);
+      expect(isValidMime(`type/${character}subtype`)).toBe(token);
+      if (token) expect(isValidMime(`type/${character}subtype; charset=UTF-8`)).toBe(true);
+    }
+  });
+
+  test('token characters do not admit separators, controls, or empty components', () => {
+    for (const value of [
+      '/subtype',
+      'type/',
+      'type/sub/type',
+      'type/sub type',
+      'type/sub\ttype',
+      'type/sub\ntype',
+      'type/sub\0type',
+      'type/sub\u00e4type',
+      'type/(subtype)',
+      'type/sub?type',
+      'type/sub=type',
+      'type/sub:type',
+      'type/sub\\type',
+      'type/sub"type',
+      'type/sub@type',
+      'type/sub[type',
+      'type/sub{type',
+    ]) {
+      expect(isValidMime(value)).toBe(false);
+    }
   });
 
   test('parameters are accepted, and an empty parameter is not', () => {
@@ -166,6 +233,29 @@ describe('content-type index', () => {
 });
 
 describe('content-types reader namespace awareness', () => {
+  test('preserves a punctuation-leading subtype through package read and save', () => {
+    const xml =
+      `<Types xmlns="${CT_NS}">` +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Default Extension="JPG" ContentType="image/.jpg"/>' +
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+      '</Types>';
+    const partName = '/word/media/opaque.JPG';
+    const opaqueBytes = new Uint8Array([7, 11, 13]);
+    const loaded = readOoxmlPackage(minimalPackage(xml, { 'word/media/opaque.JPG': opaqueBytes }));
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(resolveContentTypeOf(loaded.package, partName)).toBe('image/.jpg');
+    expect(loaded.package.partBytes.get(partName)).toEqual(opaqueBytes);
+
+    const reopened = readOoxmlPackage(writeOoxmlPackage(loaded.package));
+    expect(reopened.ok).toBe(true);
+    if (!reopened.ok) return;
+    expect(resolveContentTypeOf(reopened.package, partName)).toBe('image/.jpg');
+    expect(reopened.package.partBytes.get(partName)).toEqual(opaqueBytes);
+  });
+
   test('indexes Default and Override under a prefixed content-types namespace', () => {
     const xml =
       `<ct:Types xmlns:ct="${CT_NS}">` +
