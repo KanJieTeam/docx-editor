@@ -1,0 +1,168 @@
+// OOXML inter-script advances. Source text and UTF-16 model offsets never change.
+// autoSpaceDN/DE inherit through the ordinary paragraph cascade and default to true.
+import type { CjkParagraphTypography } from './cjk-typography.ts';
+import type { ResolvedRunStyle } from './run-style.ts';
+import type { FieldAwarePiece } from './field-pieces.ts';
+import type { StyleSpanRecord } from './semantic-records.ts';
+import { styleForFontSlot } from './script-itemization.ts';
+import { paragraphSpanMetadata } from './paragraph-span-metadata.ts';
+
+interface TextBoundary {
+  readonly text: string;
+  readonly style: ResolvedRunStyle;
+  readonly projected?: boolean;
+  readonly equation?: unknown;
+  readonly fieldAtom?: unknown;
+  readonly positionalTab?: unknown;
+  readonly inlineDrawing?: unknown;
+  readonly measureText?: string;
+  readonly noteNav?: unknown;
+  readonly noteSeparator?: unknown;
+}
+
+const automaticBefore = Symbol('automatic-inter-script-advance');
+type Spaced = { readonly [automaticBefore]?: { readonly gap: number; readonly start: number } };
+
+/** Enumerable metadata survives copies; only the original start owns the advance. */
+export function withAutomaticTextSpacing<T extends { readonly range: { readonly start: number } }>(
+  value: T,
+  gap: number
+): T {
+  return { ...value, [automaticBefore]: { gap, start: value.range.start } };
+}
+
+export function automaticTextSpacingBefore(value: {
+  readonly range: { readonly start: number };
+}): number {
+  const marker = (value as Spaced)[automaticBefore];
+  return marker?.start === value.range.start ? marker.gap : 0;
+}
+
+function ordinaryText(item: TextBoundary): boolean {
+  const style = item.style;
+  return (
+    !item.projected &&
+    !item.equation &&
+    !item.fieldAtom &&
+    !item.positionalTab &&
+    !item.inlineDrawing &&
+    item.measureText === undefined &&
+    !item.noteNav &&
+    !item.noteSeparator &&
+    !style.latinLane &&
+    style.shaping?.direction !== 'rtl' &&
+    style.characterSpacingPt === 0 &&
+    style.horizontalScalePercent === 100 &&
+    style.verticalAlign === 'baseline' &&
+    style.baselineShiftPt === 0
+  );
+}
+
+type Script = 'eastAsian' | 'latin' | 'number' | null;
+function script(character: string): Script {
+  const cp = character.codePointAt(0);
+  if (cp === undefined || (cp >= 0xff00 && cp <= 0xffef)) return null;
+  if (/^[0-9]$/u.test(character)) return 'number';
+  if (/^\p{Script=Latin}$/u.test(character)) return 'latin';
+  return /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}\p{Script=Yi}]$/u.test(
+    character
+  )
+    ? 'eastAsian'
+    : null;
+}
+
+function lastBase(text: string): string {
+  // Preserve combining marks. They neither introduce a boundary nor orphan a base.
+  let end = text.length;
+  while (end > 0) {
+    const tail = text.charCodeAt(end - 1);
+    const start = tail >= 0xdc00 && tail <= 0xdfff && end > 1 ? end - 2 : end - 1;
+    const character = text.slice(start, end);
+    if (!/^\p{M}$/u.test(character)) return character;
+    end = start;
+  }
+  return '';
+}
+
+/** A same-line boundary advance; callers omit it after a break or an exclusion jump. */
+export function automaticTextGap(
+  before: TextBoundary,
+  after: TextBoundary,
+  policy: CjkParagraphTypography
+): number {
+  if (!ordinaryText(before) || !ordinaryText(after)) return 0;
+  const left = script(lastBase(before.text));
+  const right = script(String.fromCodePoint(after.text.codePointAt(0) ?? 0));
+  if (left !== 'eastAsian' && right !== 'eastAsian') return 0;
+  const other = left === 'eastAsian' ? right : left;
+  if (
+    other === 'number'
+      ? policy.autoSpaceDN === false
+      : other === 'latin'
+        ? policy.autoSpaceDE === false
+        : true
+  )
+    return 0;
+  // A relative inter-script advance, never a document-specific point correction.
+  // Twenty percent is also used by Writer's inter-script spacing implementation.
+  const em = Math.min(before.style.fontSizePt, after.style.fontSizePt);
+  return Number.isFinite(em) && em > 0 ? em / 5 : 0;
+}
+
+/** Re-read the destination line after wrapping. A new line has no leading advance. */
+export function automaticLineTextGap(
+  line: { readonly spans: readonly StyleSpanRecord[]; readonly width: number },
+  lineOrigin: () => number,
+  paragraphId: string,
+  start: number,
+  piece: FieldAwarePiece,
+  text: string,
+  faceStyle: ResolvedRunStyle,
+  policy: CjkParagraphTypography
+): number {
+  const previous = line.spans.at(-1);
+  if (
+    !previous ||
+    previous.range.paragraphId !== paragraphId ||
+    previous.range.end !== start ||
+    Math.abs(lineOrigin() + line.width - previous.box.x - previous.box.width) > 0.001
+  )
+    return 0;
+  return automaticTextGap(
+    { ...previous, style: styleForFontSlot(previous.style, previous.fontSlot) },
+    { ...piece, text, style: faceStyle },
+    policy
+  );
+}
+
+/** Build the same drawn span and keep its original source range and metadata. */
+export function automaticTextSpan(
+  piece: FieldAwarePiece,
+  range: StyleSpanRecord['range'],
+  text: string,
+  style: ResolvedRunStyle,
+  x: number,
+  width: number,
+  height: number,
+  gap: number,
+  projected: boolean,
+  lineEndWhitespace = false
+): StyleSpanRecord {
+  return withAutomaticTextSpacing(
+    {
+      range,
+      text,
+      props: piece.props,
+      style,
+      box: { x, y: 0, width, height },
+      ...(piece.link ? { link: piece.link } : {}),
+      ...(projected ? { projected: true as const } : {}),
+      ...(piece.noteNav ? { noteNav: piece.noteNav } : {}),
+      ...(piece.fontSlot ? { fontSlot: piece.fontSlot } : {}),
+      ...(piece.glyphOffsetPt !== undefined ? { glyphOffsetPt: piece.glyphOffsetPt } : {}),
+      ...(lineEndWhitespace ? { lineEndWhitespace: true as const } : {}),
+      ...paragraphSpanMetadata(piece),
+    },
+    gap
+  );
+}

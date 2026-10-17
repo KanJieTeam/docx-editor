@@ -62,6 +62,7 @@ import {
   type LineLocalAdvances,
 } from './cjk-spacing.ts';
 import { resolveCjkTypography } from './cjk-typography.ts';
+import { automaticLineTextGap, automaticTextSpan } from './cjk-automatic-spacing.ts';
 import {
   EMPTY_TAB_STOPS,
   tabAdvanceWidth,
@@ -1340,6 +1341,17 @@ export function breakParagraph(
       // Measured as DRAWN: `w:caps` changes the glyphs, so measuring the source text
       // would size the line for characters the reader never sees. Note marks may reserve
       // a wider measureText (eachPage) while painting the real digits.
+      const automaticGap = (text = candidate, start = spanRange.start): number =>
+        automaticLineTextGap(
+          line,
+          lineOrigin,
+          paragraphId,
+          start,
+          piece,
+          text,
+          faceStyle,
+          typography
+        );
       const measureSource = piece.measureText ?? candidate;
       let width = piece.noteSeparator
         ? Math.min(piece.noteSeparator === 'separator' ? 144 : lineAvailable(), lineAvailable())
@@ -1380,7 +1392,7 @@ export function breakParagraph(
           ? lineEndSpaces.clipWordEnd(
               candidate,
               naturalWidth,
-              lineAvailable() - line.width,
+              lineAvailable() - line.width - automaticGap(),
               measureFace,
               OVERFLOW_TOLERANCE_PT
             )
@@ -1443,7 +1455,8 @@ export function breakParagraph(
         width = Math.min(width, Math.max(0, lineAvailable() - line.width));
       }
       // A bearing shared across a line break is lost, so fit at the natural advance.
-      const fitWidth = opticalFit ? width : (seamNaturalWidths.get(piece) ?? width);
+      const baseFitWidth = opticalFit ? width : (seamNaturalWidths.get(piece) ?? width);
+      const fitWidth = baseFitWidth + automaticGap();
       const overflows =
         !hangs &&
         // A space after a word that borrowed inter-word space hangs on its line.
@@ -1470,7 +1483,7 @@ export function breakParagraph(
           candidate,
           faceStyle,
           measurer,
-          line.width,
+          line.width + automaticGap(),
           lineAvailable(),
           opensWord ? line.spans.length : wordStartSpan,
           opensWord ? line.width : wordStartWidth,
@@ -1500,16 +1513,16 @@ export function breakParagraph(
           clipsWordEnd && !opticalFit
             ? lineEndSpaces.wordInkWidth(candidate, measureFace)
             : undefined;
-        const placeWidth = inkWidth ?? fitWidth;
+        const placeWidth = () => (inkWidth ?? baseFitWidth) + automaticGap();
         if (openDecision === 'forbidden' && (wordStartSpan < 0 || wordOpensLine())) {
           // Keep the protected seam on this line. The chop below may still use later safe
           // cuts inside an oversized Latin word; only its leading fragment must stay here.
         } else if (opensWord || wordStartSpan < 0) {
-          if (tryAdvanceToNextPassage() && line.width + placeWidth <= lineAvailable() + 0.001) {
+          if (tryAdvanceToNextPassage() && line.width + placeWidth() <= lineAvailable() + 0.001) {
             // carry on in the next horizontal passage on this line
           } else {
             closeLine();
-            if (!ensurePlacementWidth(placeWidth)) continue;
+            if (!ensurePlacementWidth(placeWidth())) continue;
             wordStartSpan = 0;
             wordStartWidth = 0;
             wordStartEnd = line.end;
@@ -1521,7 +1534,7 @@ export function breakParagraph(
           const start = carryWordAtOptionalHyphens(
             wordCarry,
             { span: wordStartSpan, width: wordStartWidth, end: wordStartEnd, ...wordStartMetrics },
-            placeWidth,
+            placeWidth(),
             overflows,
             OVERFLOW_TOLERANCE_PT
           );
@@ -1574,31 +1587,28 @@ export function breakParagraph(
           lineHasText: holdsContent,
           measureText: (text) => measurer.measure(displayText(text, prefixFace()), prefixFace()),
           appendPrefix: (prefix) => {
+            const gap = automaticGap(prefix.text, prefix.modelStart);
+            line.width += gap;
             const metrics = measurer.lineMetrics(faceStyle, displayText(prefix.text, faceStyle));
-            line.spans.push({
-              range: layoutOwned
-                ? spanRange
-                : {
-                    paragraphId,
-                    start: prefix.modelStart,
-                    end: prefix.modelStart + prefix.text.length,
-                  },
-              text: prefix.text,
-              props: piece.props,
-              style: opening ?? piece.style,
-              box: {
-                x: lineOrigin() + line.width,
-                y: 0,
-                width: prefix.width,
-                height: metrics.height,
-              },
-              ...(piece.link ? { link: piece.link } : {}),
-              ...(layoutOwned ? { projected: true as const } : {}),
-              ...(piece.noteNav ? { noteNav: piece.noteNav } : {}),
-              ...(piece.fontSlot ? { fontSlot: piece.fontSlot } : {}),
-              ...(piece.glyphOffsetPt !== undefined ? { glyphOffsetPt: piece.glyphOffsetPt } : {}),
-              ...paragraphSpanMetadata(piece),
-            });
+            line.spans.push(
+              automaticTextSpan(
+                piece,
+                layoutOwned
+                  ? spanRange
+                  : {
+                      paragraphId,
+                      start: prefix.modelStart,
+                      end: prefix.modelStart + prefix.text.length,
+                    },
+                prefix.text,
+                opening ?? piece.style,
+                lineOrigin() + line.width,
+                prefix.width,
+                metrics.height,
+                gap,
+                layoutOwned
+              )
+            );
             line.width += prefix.width;
             growLineMetricsForText(line, metrics, prefix.text, faceStyle);
             line.end = layoutOwned ? piece.end : prefix.modelStart + prefix.text.length;
@@ -1635,27 +1645,22 @@ export function breakParagraph(
           faceStyle,
           lineBandText(piece, displayText(remaining, faceStyle))
         );
-        const span: StyleSpanRecord = {
-          range: layoutOwned
+        const gap = automaticGap(remaining, remainingStart);
+        line.width += gap;
+        const span: StyleSpanRecord = automaticTextSpan(
+          piece,
+          layoutOwned
             ? spanRange
             : { paragraphId, start: remainingStart, end: piece.start + boundary },
-          text: remaining,
-          props: piece.props,
-          style: remainingStyle,
-          box: {
-            x: lineOrigin() + line.width,
-            y: 0,
-            width: remainingWidth,
-            height: metrics.height,
-          },
-          ...(piece.link ? { link: piece.link } : {}),
-          ...(layoutOwned && !piece.positionalTab ? { projected: true as const } : {}),
-          ...(piece.noteNav ? { noteNav: piece.noteNav } : {}),
-          ...(piece.fontSlot ? { fontSlot: piece.fontSlot } : {}),
-          ...(piece.glyphOffsetPt !== undefined ? { glyphOffsetPt: piece.glyphOffsetPt } : {}),
-          ...(lineEndWhitespace ? { lineEndWhitespace: true as const } : {}),
-          ...paragraphSpanMetadata(piece),
-        };
+          remaining,
+          remainingStyle,
+          lineOrigin() + line.width,
+          remainingWidth,
+          metrics.height,
+          gap,
+          layoutOwned && !piece.positionalTab,
+          lineEndWhitespace
+        );
         if (opticalFit) appendOpticalCjkCandidate(line.spans, span, opticalFit);
         else lineEndSpaces.appendWordEnd(line.spans, span, clippedWordEnd);
         line.width += remainingWidth;

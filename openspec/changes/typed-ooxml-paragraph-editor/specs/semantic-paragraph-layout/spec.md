@@ -249,3 +249,32 @@ Row and column insertion, deletion, and column resize commits SHALL publish `flo
 #### Scenario: Unaffected pages keep identity after table resize
 - **WHEN** a middle-table column resize converges without repagination before the following page
 - **THEN** preceding and following unchanged pages retain stable identities
+
+### Requirement: Automatic inter-script spacing
+
+Semantic layout SHALL resolve `w:autoSpaceDE` and `w:autoSpaceDN` through the paragraph cascade, with enabled defaults.
+It SHALL add bounded layout advances at supported East Asian and Latin-letter or ASCII-digit boundaries.
+It SHALL preserve source text and canonical UTF-16 offsets.
+Line fitting, paint, caret geometry, and anchor prediction SHALL use the same advances.
+Authored character spacing and unsupported run forms SHALL retain their existing behavior.
+
+#### Scenario: An inherited false overrides the enabled default
+
+- **WHEN** a paragraph inherits `w:autoSpaceDN` or `w:autoSpaceDE` with a false value
+- **THEN** that boundary type retains its original advance unless a direct true overrides the inherited value
+
+#### Scenario: A source run boundary separates scripts
+
+- **WHEN** supported adjacent text changes between East Asian and Latin letters or ASCII digits across source runs
+- **THEN** layout applies one boundary advance without adding a source character or changing source ranges
+
+#### Scenario: A boundary moves to another line
+
+- **WHEN** the additional advance prevents adjacent text from fitting on one line
+- **THEN** layout wraps the text and removes the boundary advance at the new line start
+
+#### Scenario: Shared edits remove a script boundary
+
+- **WHEN** two editors converge after edits remove the only East Asian character from a warm paragraph
+- **THEN** both editors remove the obsolete automatic advances and retain shared text, history, and saved source offsets
+
