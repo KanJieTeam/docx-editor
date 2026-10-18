@@ -22,7 +22,7 @@ function settings(mode: number | undefined, value = '') {
     ${value}</w:compat></w:settings>`).root;
 }
 
-test('exact baselines are face-independent across short and tall authored heights', () => {
+test('exact baselines centre face metrics across short and tall authored heights', () => {
   for (const height of [8, 10, 12, 14, 18, 24, 36]) {
     for (const [natural, baseline] of [
       [12.649, 10.318],
@@ -31,7 +31,7 @@ test('exact baselines are face-independent across short and tall authored height
     ]) {
       expect(applyLineSpacing({ rule: 'exact', value: height }, natural!, baseline!)).toEqual({
         height,
-        baseline: height * 0.8,
+        baseline: Math.max(0, Math.min(baseline! + (height - natural!) / 2, height)),
       });
     }
   }
@@ -88,7 +88,7 @@ test('baseline policy reaches body and cell lines and invalidates reused paragra
     const cell = table.rows[0]!.cells[0]!.blocks.find((block) => block.kind === 'paragraph')!;
     for (const line of [body.lines[0]!, cell.lines[0]!]) {
       expect(line.box.height).toBe(20);
-      expect(line.baseline).toBeCloseTo(cascade === legacy ? 11.2 : 16, 8);
+      expect(line.baseline).toBeCloseTo(cascade === legacy ? 11.2 : 14.2, 8);
     }
   }
 });

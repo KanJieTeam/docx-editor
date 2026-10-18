@@ -437,7 +437,7 @@ export function paragraphLineSpacing(props: readonly OoxmlProperty[]): Paragraph
  * high. `w:line="240" atLeast` is below the natural line, falls through to the natural
  * height, and is unaffected. See `.cache/pdf/claude-linerule/`.
  *
- * Exact-height boxes place their baseline at 80% of the height; the legacy
+ * Exact-height boxes centre the natural glyph band within the authored height; the
  * noExtraLineSpacing switch instead preserves the face baseline within the box.
  *
  * An `auto` or `atLeast` line of a snapping paragraph under an active line grid takes whole
@@ -461,14 +461,14 @@ export function applyLineSpacing(
       : spacing.rule === 'exact'
         ? spacing.value
         : Math.max(naturalHeight, spacing.value);
-  // Exact-height lines use a fixed 80/20 baseline split, independent of the face.
-  // Legacy noExtraLineSpacing retains the natural baseline (clamped to the box).
+  // Exact spacing centres the natural glyph band without changing the authored height.
+  // Clamp shortened boxes; legacy noExtraLineSpacing keeps the natural baseline instead.
   if (spacing.rule === 'exact') {
     return {
       height,
       baseline: spacing.preserveExactBaseline
         ? Math.max(0, Math.min(naturalBaseline, height))
-        : height * 0.8,
+        : Math.max(0, Math.min(naturalBaseline + (height - naturalHeight) / 2, height)),
     };
   }
   const delta = height - naturalHeight;

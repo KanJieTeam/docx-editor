@@ -1,0 +1,15 @@
+{
+  "impact": "compatible",
+  "fields": [],
+  "before": "Exact-height lines use a fixed proportion of the authored height for their baseline.",
+  "after": "Exact-height lines center the natural text baseline without changing line height or source content.",
+  "reason": "Only derived layout geometry changes. Shared nodes, canonical offsets, operations, and package serialization stay unchanged.",
+  "tests": [
+    "packages/core/src/layout/__tests__/line-spacing-indent.test.ts",
+    "packages/core/src/layout/__tests__/line-grid.test.ts",
+    "packages/core/src/layout/__tests__/exact-line-baseline.test.ts",
+    "packages/core/src/layout/__tests__/centered-exact-boundaries.test.ts"
+  ],
+  "changeset": "center-exact-line-baselines",
+  "migration": null
+}

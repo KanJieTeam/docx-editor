@@ -154,7 +154,7 @@ describe('line box under an active line grid', () => {
   test('exact spacing never snaps', () => {
     expect(applyLineSpacing({ rule: 'exact', value: 15, gridPitch: 18 }, 14, 11.2)).toEqual({
       height: 15,
-      baseline: 12,
+      baseline: 11.7,
     });
   });
 });
