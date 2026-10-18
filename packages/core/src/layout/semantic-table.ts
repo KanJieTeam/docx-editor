@@ -59,7 +59,11 @@ import {
   type StyleCascadeTable,
   type TableCellStyleFormatting,
 } from './style-cascade.ts';
-import { mergeCellBorders, mergeTableBorders } from './table-border-cascade.ts';
+import {
+  mergeCellBorders,
+  mergeCellDiagonalBorders,
+  mergeTableBorders,
+} from './table-border-cascade.ts';
 import {
   EMPTY_CELL_BORDER_BOX,
   EMPTY_TABLE_BORDER_BOX,
@@ -726,6 +730,19 @@ function readTableStructureUncached(
       cellIndex += 1;
       let conditionalShading: string | undefined;
       let conditionalBorders = EMPTY_CELL_BORDER_BOX;
+      // Whole-table tcPr and basedOn layers contribute diagonals before conditions.
+      for (const node of tableStyle.tableCellPropertyNodes ?? []) {
+        conditionalBorders = mergeCellDiagonalBorders(conditionalBorders, readCellBorders(node));
+      }
+      // Preserve omitted diagonals across derived conditional style layers as well.
+      for (const conditionType of conditions) {
+        for (const layer of tableStyle.conditionalStyleLayers?.get(conditionType) ?? []) {
+          conditionalBorders = mergeCellDiagonalBorders(
+            conditionalBorders,
+            readCellBorders(childNamed(layer, 'tcPr'))
+          );
+        }
+      }
       for (const conditionType of conditions) {
         const format = tableStyle.conditional.get(conditionType);
         if (!format) continue;
