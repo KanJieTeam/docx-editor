@@ -109,6 +109,30 @@ export function automaticTextGap(
   return Number.isFinite(em) && em > 0 ? em / 5 : 0;
 }
 
+interface SourceTextBoundary extends TextBoundary {
+  readonly start: number;
+  readonly end: number;
+}
+
+/** Price inter-script advances without splitting or reshaping a source word. */
+export function automaticTextSpacingAdvance(
+  before: SourceTextBoundary | undefined,
+  current: SourceTextBoundary,
+  policy: CjkParagraphTypography
+): number {
+  let gap = before?.end === current.start ? automaticTextGap(before, current, policy) : 0;
+  let previousBase = '';
+  for (const character of current.text) {
+    gap += automaticTextGap(
+      { ...current, text: previousBase },
+      { ...current, text: character },
+      policy
+    );
+    if (!/^\p{M}$/u.test(character)) previousBase = character;
+  }
+  return gap;
+}
+
 /** Re-read the destination line after wrapping. A new line has no leading advance. */
 export function automaticLineTextGap(
   line: { readonly spans: readonly StyleSpanRecord[]; readonly width: number },

@@ -53,6 +53,8 @@ import {
 import { cellContentInsets } from './table-cell-geometry.ts';
 import { preferredSpreadWidths } from './table-autofit-spread.ts';
 import type { PreferredWidth } from './table-widths.ts';
+import { automaticTextSpacingAdvance } from './cjk-automatic-spacing.ts';
+import { resolveCjkTypography } from './cjk-typography.ts';
 import { withoutTrailingSpaces } from './trailing-spaces.ts';
 
 /**
@@ -275,6 +277,8 @@ export function paragraphContentWidthsPt(
     bidiSourceBoundaries(paragraph),
     true
   );
+  const typography = resolveCjkTypography(layoutInputs.props);
+  let previousText: Parameters<typeof automaticTextSpacingAdvance>[0];
   const { left, right, firstLine, hanging } = layoutInputs.indent;
   const tabs = withDefaultTabInterval(layoutInputs.tabStops, context.defaultTabStopPt);
   // Tab stops count from the leading indent, which is the right one in right-to-left text.
@@ -300,6 +304,7 @@ export function paragraphContentWidthsPt(
   let longest = 0;
   let onFirstLine = true;
   const endLine = (): void => {
+    previousText = undefined;
     const width = line - hung + Math.max(0, left + right + (onFirstLine ? firstShift : 0));
     if (line > 0 && width > longest) longest = width;
     line = 0;
@@ -352,6 +357,7 @@ export function paragraphContentWidthsPt(
             .geometry.box.width
         : undefined;
     if (atomWidth !== undefined) {
+      previousText = undefined;
       advance(atomWidth);
       close();
       segment = (lineStart ? lead : 0) + atomWidth;
@@ -373,10 +379,12 @@ export function paragraphContentWidthsPt(
     }
     let from = 0;
     for (const to of wordBoundaries(piece.text, false)) {
+      const start = piece.start + from;
       const candidate = piece.text.slice(from, to);
       from = to;
       if (candidate.length === 0) continue;
       if (candidate === '\t') {
+        previousText = undefined;
         // A tab uses up the first-line indent, and spaces after it no longer open the line.
         const at = line + leading + (onFirstLine ? firstShift : 0);
         advance(Math.max(0, nextTabStop(at) - at));
@@ -389,8 +397,12 @@ export function paragraphContentWidthsPt(
       // Measured as line breaking measures it, so the advance comes from the same cache;
       // the trailing spaces it hangs are priced on their own.
       const ink = withoutTrailingSpaces(candidate);
+      const current = { ...piece, start, text: candidate, style, end: piece.start + to };
+      const gap = automaticTextSpacingAdvance(previousText, current, typography);
+      previousText = current;
+      segment += gap;
       const full = measure(candidate);
-      advance(full, ink.length === candidate.length ? 0 : full - (ink ? measure(ink) : 0));
+      advance(full + gap, ink.length === candidate.length ? 0 : full - (ink ? measure(ink) : 0));
       if (lineStart && ink.length === 0) {
         lead += measure(candidate);
         continue;

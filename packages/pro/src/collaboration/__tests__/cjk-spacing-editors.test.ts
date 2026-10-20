@@ -39,7 +39,9 @@ test('automatic inter-script spacing follows two-peer edits, carets, history, an
   const geometry = (editor: DocxEditorInstance) =>
     editor
       .surface!.layout()
-      .pages.flatMap((page) => page.fragments.flatMap((fragment) => fragment.lines))
+      .pages.flatMap((page) =>
+        page.fragments.flatMap((fragment) => (fragment.kind === 'paragraph' ? fragment.lines : []))
+      )
       .filter((line) => line.spans.length)
       .map((line) => ({
         text: line.spans.map((span) => span.text).join(''),
