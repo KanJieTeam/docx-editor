@@ -1,3 +1,7 @@
+import {
+  createUnsupportedElementProjection,
+  validateUnsupportedElementRules,
+} from './unsupported-element-state.ts';
 import { DocumentSelectionHistory } from './document-selection-history.ts';
 import { timedLayout, timedPress } from './surface-timing.ts';
 import {
@@ -55,13 +59,21 @@ import {
   writeRejectionReason,
 } from './command-protection.ts';
 import { registerSurfaceMeasurement } from './surface-measurement.ts';
-import { startOpeningSlices } from './surface-progressive-open.ts';
+import {
+  PROGRESSIVE_OPEN_FIRST_BLOCKS,
+  completeProgressiveOpen,
+  openingReveals,
+  startOpeningSlices,
+} from './surface-progressive-open.ts';
+import { scrollBandIntoView, type ContentScrollOptions } from './surface-content-scroll.ts';
 import { createDeferredLayout } from './surface-deferred-layout.ts';
 import { createCanonicalLayout } from './surface-canonical-layout.ts';
 import { drainLayoutSteps, type LayoutSteps } from '../layout/layout-steps.ts';
 import { createReviewOrderIndex } from './surface-review-order.ts';
 import { litReviewKeys, reviewItemsByKey } from './review-replacement-pairs.ts';
-import { bodyBlockCountOf, bodyBlocksOf } from '../layout/body-block-limit.ts';
+import { bodyBlockCountOf, bodyBlockLimitAfter, bodyBlocksOf } from '../layout/body-block-limit.ts';
+import { snapshotLayoutSession } from '../layout/layout-session-snapshot.ts';
+import { furnitureLaterSteps } from './surface-furniture-later.ts';
 import {
   createContentControlWidgetSessions,
   contentControlValueOps,
@@ -347,9 +359,6 @@ export type {
 } from './paginated-surface-contract.ts';
 import { revisionDateNow } from '../automation/revision-date.ts';
 
-/** Body blocks a sliced opening lays out at mount, before its first yield. */
-const PROGRESSIVE_OPEN_FIRST_BLOCKS = 64;
-
 /**
  * Mount a paginated surface over DOCX bytes.
  *
@@ -379,6 +388,9 @@ export function mountPaginatedSurface(
     };
   }
   const session = scopeSession(opened.session, fieldScope);
+  let unsupportedProjection = createUnsupportedElementProjection(
+    validateUnsupportedElementRules(options.unsupportedElementRules ?? [])
+  );
   const reviewOrder = createReviewOrderIndex(session);
   const reviewOrderIndex = reviewOrder.index;
   const collaborationSession = options.collaborationModel?.session;
@@ -1004,7 +1016,7 @@ export function mountPaginatedSurface(
     fieldCodes = showFieldCodes
   ): ReturnType<typeof createFurnitureSource> => {
     const source = createFurnitureSource({
-      session,
+      session: unsupportedProjection.view(session),
       measurer,
       producer,
       cache: layoutCache,
@@ -1086,9 +1098,9 @@ export function mountPaginatedSurface(
     },
   };
 
-  /** The body block limit of an opening still in slices; null once a full layout ran. */
-  /** Finishes a paused opening prefix pass; see `startOpeningSlices`. */
+  /** Finishes a paused opening prefix pass, and drops the opening; see `startOpeningSlices`. */
   let finishOpeningPass = (): void => undefined;
+  let stopOpening = (): void => undefined;
   // The pages after the screen finish after the commit; see `surface-deferred-layout.ts`.
   const deferredLayout = createDeferredLayout({
     now,
@@ -1098,15 +1110,13 @@ export function mountPaginatedSurface(
       return visible && visible.size > 0 ? Math.max(...visible) + 1 : undefined;
     },
     current: () => currentLayout,
+    partial: () => openingBlockLimit !== null,
     revision: () => session.packageRevision(),
     publish: (layout) => fieldScope.wrap(() => publishLayout(layout))(),
-    // A pass replaces the session's fields and never mutates them, so a shallow copy restores it.
-    snapshot: () => {
-      const saved = { ...layoutSession };
-      return () => void Object.assign(layoutSession, saved);
-    },
+    snapshot: () => snapshotLayoutSession(layoutSession),
     // Marks the container while later pages still show the previous layout.
-    pendingChanged: (pending) => container.toggleAttribute('data-docx-layout-pending', pending),
+    pendingChanged: (pending) =>
+      container.toggleAttribute('data-docx-layout-pending', pending || openingBlockLimit !== null),
     passTimed: (ms) => options.onTiming?.('layout', ms),
   });
   let openingBlockLimit: number | null = runtimeOptions.progressiveOpen
@@ -1315,6 +1325,7 @@ export function mountPaginatedSurface(
     storyScope,
     editingMode: () => editingMode,
     writeRefusal: (op) => writeRefusal(true, [op]),
+    trackedOps,
     selection: () => selection,
     selectionMark: () => selectionMark(),
     commit: (run, selectionAfter) => commit(run, selectionAfter),
@@ -1365,6 +1376,8 @@ export function mountPaginatedSurface(
     linkById: (linkId) => fieldLinks.linkById(linkId) ?? hyperlinks.linkById(linkId),
     drawingLinkById: (drawingNodeId) => drawingLinkByIdFromLayout(currentLayout, drawingNodeId),
     setSelection: (position) => setSelection(collapsedAt(position)),
+    whenLaidOut: (position, retry) => laterOnOpening(position, retry),
+    beginJump: () => beginReveal(),
     enterStoryFor: (paragraphId) => enterStoryHolding(paragraphId),
     // Viewing makes no range from a press, so a range left over from editing is no drag.
     isCollapsedSelection: () =>
@@ -1414,7 +1427,7 @@ export function mountPaginatedSurface(
     if (!context && bodyBlockLimit === undefined) openingBlockLimit = null;
     drawingBundle.sync(session);
     return yield* layoutDocumentViewSteps({
-      view: session,
+      view: unsupportedProjection.view(session),
       revision,
       measurer,
       cache: layoutCache,
@@ -1705,8 +1718,13 @@ export function mountPaginatedSurface(
       const began = now();
       finishOpeningPass();
       deferredLayout.abandon();
-      const steps = layoutDocumentSteps(scope.revision, scope);
+      // An edit during an opening lays out the prefix so far; the opening slices go on after it.
+      const steps = furnitureLaterSteps(
+        layoutDocumentSteps(scope.revision, scope, undefined, openingBlockLimit ?? undefined),
+        visiblePages()
+      );
       const layout = deferredLayout.run(steps, scope.revision, timedLayout(scope));
+      openingBlockLimit = bodyBlockLimitAfter(layoutSession, openingBlockLimit);
       lastLayoutMs = now() - began;
       return layout;
     },
@@ -2241,6 +2259,12 @@ export function mountPaginatedSurface(
    * paragraph is laid out on every page that uses its variant, so that resolved the page-1
    * copy and threw the reader to the top of the document.
    */
+  const { begin: beginReveal, later: laterOnOpening } = openingReveals(() => surface, {
+    flushLayout: () => void flushLayout(),
+    paragraphIds: () => session.paragraphIds(),
+    scroller: () => surfaceScroller(container),
+  });
+
   function revealTravelledTo(position: SemanticPosition): void {
     if (hfScope?.getActive() || noteOps?.activeNoteScope()) return;
     if (storyScopeOfNodeId(session, position.paragraphId, { kind: 'body' }).kind !== 'body') return;
@@ -2726,6 +2750,15 @@ export function mountPaginatedSurface(
         materialize: materializedSet,
         ariaHidden: false,
         drawingStrings,
+        unsupportedOwnerPartName: (nodeId) =>
+          partOfNodeId(session, nodeId)?.name ?? session.part().name,
+        unsupportedSource: (nodeId, ownerPartName) => {
+          const part = ownerPartName
+            ? session.currentPackage().parts.get(ownerPartName)
+            : partOfNodeId(session, nodeId);
+          const node = part ? findNode(part, nodeId) : null;
+          return node && node.kind !== 'textValue' ? node : null;
+        },
         breakMarkStrings,
         ...(options.fieldShading ? { fieldShading: options.fieldShading } : {}),
         ...(revisionStyles !== undefined ? { revisionStyles } : {}),
@@ -4189,7 +4222,7 @@ export function mountPaginatedSurface(
   function refreshToc(tocId?: string, mode: 'entire' | 'pageNumbers' = 'entire'): boolean {
     let toc = targetToc(tocId);
     if (!toc || !canRefreshToc(toc.id)) return false;
-
+    completeProgressiveOpen(surface); // Page numbers read the whole pagination.
     let layout = surface.layout();
     const outline = session.documentOutline();
     const sources = resolveTocSources(session.part(), outline, toc.instruction);
@@ -4289,6 +4322,7 @@ export function mountPaginatedSurface(
    * `false` return says so rather than claiming freshness.
    */
   function refreshRefFieldResults(): boolean {
+    completeProgressiveOpen(surface); // PAGEREF results read the whole pagination.
     return refreshSurfaceRefFieldResults({
       session,
       editingMode,
@@ -4746,6 +4780,7 @@ export function mountPaginatedSurface(
     },
 
     navigate(command, extend = false) {
+      if (command === 'documentEnd') completeProgressiveOpen(surface); // The real end.
       // Arrow keys move from the caret AFTER the typed text, over the layout
       // that includes it.
       flushPendingInputAndLayout();
@@ -4954,6 +4989,7 @@ export function mountPaginatedSurface(
       }
       // At the end of a paragraph, Delete pulls the NEXT one up — the mirror of Backspace at
       // offset zero, and the reason a document can be flattened without reaching for a mouse.
+      if (paragraphOrder().at(-1) === position.paragraphId) completeProgressiveOpen(surface); // Its successor needs the rest of a large open laid out.
       const order = paragraphOrder();
       const next = order[order.indexOf(position.paragraphId) + 1];
       if (!next) return;
@@ -5012,16 +5048,21 @@ export function mountPaginatedSurface(
     revealPage(pageIndex, options) {
       // Flushed like its siblings below: a page the deferred pass creates is not findable
       // in the superseded layout, and "false" must mean "no such page", not "not yet".
-      flushLayout();
+      beginReveal();
       const page = currentLayout.pages.find((entry) => entry.index === pageIndex);
+      if (!page && laterOnOpening(pageIndex, () => surface.revealPage(pageIndex, options)))
+        return true;
       return page ? scrollToContentY(page.box.y, page.box.height, options) : false;
     },
 
     revealParagraph(paragraphId, options) {
-      flushLayout();
+      beginReveal();
       // The paragraph's own line, not the top of its page: a heading two thirds down a
       // page is the thing the caller asked to see.
-      const caret = caretAt(editingLayout(), { paragraphId, offset: 0 });
+      const start = { paragraphId, offset: 0 };
+      const caret = caretAt(editingLayout(), start);
+      if (!caret && laterOnOpening(start, () => surface.revealParagraph(paragraphId, options)))
+        return true;
       if (!caret) return false;
       const page = currentLayout.pages.find((entry) => entry.index === caret.pageIndex);
       if (!page) return false;
@@ -5034,8 +5075,10 @@ export function mountPaginatedSurface(
     },
 
     revealPosition(position, options) {
-      flushLayout();
+      beginReveal();
       const caret = caretAt(editingLayout(), position);
+      if (!caret && laterOnOpening(position, () => surface.revealPosition(position, options)))
+        return true;
       if (!caret) return false;
       const page = currentLayout.pages.find((entry) => entry.index === caret.pageIndex);
       if (!page) return false;
@@ -5054,6 +5097,7 @@ export function mountPaginatedSurface(
     },
 
     selectAll() {
+      completeProgressiveOpen(surface); // The order below reads the whole layout.
       const ids = paragraphOrder();
       const first = ids[0];
       const last = ids[ids.length - 1];
@@ -5375,6 +5419,23 @@ export function mountPaginatedSurface(
     remotePresenceColor,
     setShowParagraphMarks: paragraphMarks.set,
     setRevisionMarkup: markupSettings.set,
+    setUnsupportedElementRules: (rules) => {
+      const projection = createUnsupportedElementProjection(validateUnsupportedElementRules(rules));
+      projection.view(session).currentPackage();
+      unsupportedProjection.view(session).currentPackage();
+      const geometryUnchanged = projection.geometryKey() === unsupportedProjection.geometryKey();
+      if (geometryUnchanged) {
+        unsupportedProjection = projection;
+        furnitureSource = createCurrentFurnitureSource(revisionFilter());
+        return;
+      }
+      flushPendingInputAndLayout();
+      unsupportedProjection = projection;
+      furnitureSource = createCurrentFurnitureSource(revisionFilter());
+      scheduler.invalidateAll(session.packageRevision(), 'unsupported-content');
+      scheduler.flush();
+      options.onChange?.(currentState());
+    },
     setRevisionStyles: (colors) => {
       if (colors === revisionStyles) return;
       revisionStyles = colors;
@@ -5724,6 +5785,8 @@ export function mountPaginatedSurface(
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      stopOpening();
+      openingBlockLimit = null; // So cancelling a deferred pass clears the pending marker.
       deferredLayout.cancel();
       canonicalLayout.cancel();
       // Typed-but-unflushed text lands before teardown, so a detach-then-save
@@ -5842,36 +5905,13 @@ export function mountPaginatedSurface(
   function scrollToContentY(
     contentY: number,
     contentHeight: number,
-    options?: {
-      block?: 'start' | 'center' | 'centerIfNeeded' | 'nearest';
-      offsetPx?: number;
-      behavior?: ScrollBehavior;
-    }
+    options?: ContentScrollOptions
   ): boolean {
     const scroller = surfaceScroller(container);
     if (!scroller || scroller.clientHeight === 0) return false;
     payOwedPaint();
     const top = contentY * scale + container.offsetTop;
-    const height = contentHeight * scale;
-    const padding = options?.offsetPx ?? 24;
-    const block = options?.block ?? 'start';
-    const viewport = scroller.clientHeight;
-    if (block === 'nearest' || block === 'centerIfNeeded') {
-      const above = top < scroller.scrollTop;
-      const below = top + height > scroller.scrollTop + viewport;
-      if (!above && !below) return true;
-    }
-    const target =
-      block === 'center' || block === 'centerIfNeeded'
-        ? top - Math.max(0, (viewport - height) / 2)
-        : block === 'nearest' && top > scroller.scrollTop
-          ? top + height + padding - viewport
-          : top - padding;
-    const maxScroll = Math.max(0, scroller.scrollHeight - viewport);
-    scroller.scrollTo({
-      top: Math.max(0, Math.min(target, maxScroll)),
-      behavior: options?.behavior ?? 'auto',
-    });
+    if (!scrollBandIntoView(scroller, top, contentHeight * scale, options)) return true;
     // Materialization follows the scroller, and a programmatic scroll fires `scroll`
     // asynchronously — repaint now so the revealed page is BUILT rather than a blank
     // sheet the caller has to scroll again to fill.
@@ -6262,25 +6302,32 @@ export function mountPaginatedSurface(
     }
   );
   registerRefreshComposition(surface, () => selectionSync.isComposing());
-  finishOpeningPass = startOpeningSlices(
+  ({ finishPaused: finishOpeningPass, stop: stopOpening } = startOpeningSlices(
     surface,
-    container,
+    () => container,
     {
+      pages: () => pagesLayer,
       now,
       destroyed: () => destroyed,
       limit: () => openingBlockLimit,
       setLimit: (limit) => (openingBlockLimit = limit),
       bodyBlockCount: () => bodyBlockCountOf(layoutSession),
       bodyBlock: (index) => bodyBlocksOf(layoutSession)?.[index],
+      publish: (layout) => publishLayout(layout as SemanticLayout),
+      inputPending: () => hasPendingBrowserInput(false),
+      busy: () => deferredLayout.pending(),
+      finishBusy: () => deferredLayout.finish(),
+      composing: () => selectionSync.isComposing(),
       prefixPass: (limit) =>
         layoutDocumentSteps(session.packageRevision(), undefined, undefined, limit),
       finish: fieldScope.wrap(() => {
+        // Cleared first: an edit since the last prefix can have added blocks past it.
+        openingBlockLimit = null;
         scheduler.invalidateAll(session.packageRevision(), 'opening');
         scheduler.flush();
-        openingBlockLimit = null;
       }),
     },
     PROGRESSIVE_OPEN_FIRST_BLOCKS
-  );
+  ));
   return { ok: true, surface: fieldScope.methods(surface) };
 }
