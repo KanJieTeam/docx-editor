@@ -978,6 +978,7 @@ export interface TextboxStoryLayout {
 
 // @public
 export interface TextMeasurer {
+    automaticTextSpacingGap?(style: ResolvedRunStyle): number | undefined;
     caretAdvances?(text: string, style: ResolvedRunStyle): readonly number[] | undefined;
     hasResolvedFont?(style: ResolvedRunStyle): boolean;
     inkBounds?(text: string, style: ResolvedRunStyle): {
