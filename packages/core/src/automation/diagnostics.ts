@@ -85,6 +85,9 @@ type HostRejectionToken =
   | 'no-document'
   | 'table-insert-refused'
   | 'table-of-contents-refused'
+  | 'field-unsupported'
+  | 'field-result-range-unsupported'
+  | 'ooxml-unsupported'
   | 'refresh-in-progress'
   | 'preview-active'
   | 'preview-operation-unsupported'
@@ -116,11 +119,19 @@ const STORE_EDIT_CODES: Readonly<
   'indivisible-content': 'edit.indivisible-content',
   'field-structure': 'edit.field-structure',
   'field-result-unsupported': 'edit.field-structure',
+  'field-unsupported': 'edit.field-unsupported',
+  'field-result-range-unsupported': 'edit.field-result-unsupported',
+  'ooxml-unsupported': 'edit.ooxml-unsupported',
   'carries-section-mark': 'edit.section-mark',
   'table-has-merge': 'edit.table-structure-unsupported',
   'row-hides-cell': 'edit.table-structure-unsupported',
   'unknown-grid-column': 'edit.table-structure-unsupported',
   'cross-cell-drawing': 'edit.table-structure-unsupported',
+  'cells-not-rectangle': 'edit.table-merge-not-rectangle',
+  'split-rows-not-divisor': 'edit.table-split-unsupported',
+  'cell-too-narrow': 'edit.table-split-unsupported',
+  'split-needs-grid': 'edit.table-split-unsupported',
+  'cell-has-revision': 'edit.revision-unsupported',
   trackedDrawingDeletionUnsupported: 'edit.tracked-drawing-delete-unsupported',
   packageTransactionRequired: 'edit.tracked-structure-unsupported',
   'automation-structural-tracking-unsupported': 'edit.tracked-structure-unsupported',

@@ -94,10 +94,13 @@ export interface RunOptions {
    * Pass the handle `editor.beginHistoryGroup()` returns, unchanged.
    *
    * Browser runtime only. A server or collaborative runtime refuses the run with
-   * `NotSupported` before the callback starts. A closed handle, or a handle from another
-   * editor, refuses with `InvalidArgument` and `target: 'historyGroup'` before the callback
-   * starts. A handle that closes during the run refuses the next `context.sync()` the same way,
-   * and that sync writes nothing. Runs without this option never join a group.
+   * `NotSupported` before the callback starts. To make one operation of a collaborative
+   * server runtime one undo step, open `beginUndoGroup()` on its collaboration session.
+   *
+   * A closed handle, or a handle from another editor, refuses with `InvalidArgument` and
+   * `target: 'historyGroup'` before the callback starts. A handle that closes during the run
+   * refuses the next `context.sync()` the same way, and that sync writes nothing. Runs without
+   * this option never join a group.
    *
    * The run has no `ExecResult`. The whole run is one write of the group: after the callback
    * finishes, `historyGroup.lastOutcome` holds its outcome, which is `split` if any sync split
@@ -357,9 +360,11 @@ export function createRuntime(options: CreateRuntimeOptions): DocxEditorServerRu
     save: options.save && host.capabilities.save,
     preview: options.preview !== undefined,
   });
+  // Trimmed once here, as the engine trims it before it writes `w:author`, so every reader of
+  // the runtime's author, such as the agent entry's author hook, sees the name the file records.
   const author =
     typeof options.author === 'string' && options.author.trim().length > 0
-      ? options.author
+      ? options.author.trim()
       : undefined;
   const revisionTextView = options.revisionTextView ?? 'allMarkup';
   if (revisionTextView !== 'allMarkup' && revisionTextView !== 'original') {

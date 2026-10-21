@@ -26,6 +26,7 @@ import { hasCompatibilityRule } from './compatibility/compatibility-rules.ts';
 import { framedTokenJoin } from './layout-cache.ts';
 import { sha256FontBytes } from '../store/package/sha256.ts';
 import { createKeepRangeIndex, type KeepRange } from './pagination-keep-index.ts';
+import { extendedFlowKey } from './flow-key-intern.ts';
 
 /** Extra retries for line retreat; this does not limit keep-chain membership. */
 export const KEEP_BREAK_RETRY_ALLOWANCE = 8;
@@ -219,6 +220,8 @@ export interface KeepNextPlan {
   readonly height: number;
   /** The last member that fits whole in the room before anything that does not, or -1. */
   readonly lastWhole: number;
+  /** The group ends at a table opening, rather than a following paragraph. */
+  readonly endsAtTable?: true;
 }
 
 /**
@@ -283,7 +286,11 @@ export function keepNextPlan(
           ? undefined
           : followingKeepOpening(look, index + 1, room - total - through);
       const height = typeof following === 'number' ? through! + following : table.height;
-      return finish({ height: total + height, lastWhole });
+      return finish({
+        height: total + height,
+        lastWhole,
+        ...(typeof following === 'number' ? {} : { endsAtTable: true as const }),
+      });
     }
     if (!block || block.kind !== 'paragraph' || !block.spacing || !block.keeps) return false;
     // A forced new page also discards the preceding paragraph's trailing spacing.
@@ -391,7 +398,9 @@ export interface KeepNextPlacement {
  * may split naturally. Natural page movement suppresses the head's before spacing, so that
  * destination is priced separately. A group that must move is priced again for a fresh
  * page, where members split later. A group that cannot fit a fresh page is abandoned, and
- * the head places by its own fit.
+ * the head places by its own fit. A group ending at a table first moves to a fresh page,
+ * even when the table opening cannot fit beside it there. Table placement then releases
+ * the impossible keep without leaving the caption beside earlier content.
  *
  * A group that fits a fresh page but not here moves the head whole in layout before Word
  * 2013. From Word 2013 on, the head stays when the last member that fits whole here may
@@ -411,7 +420,8 @@ export function keepNextGroupNeed(look: KeepNextLookahead, at: KeepNextPlacement
   if (at.cursorY + need <= at.contentHeight) return need;
   const fresh = plan(at.contentHeight - at.freshLead - at.topExtent);
   if (fresh === null) return null;
-  if (fresh.height - at.pricedLead + at.freshLead + at.topExtent > at.contentHeight) return null;
+  if (fresh.height - at.pricedLead + at.freshLead + at.topExtent > at.contentHeight)
+    return fresh.endsAtTable ? need : null;
   if (!hasCompatibilityRule(at.compatibilityMode, 'keepNextGivesTailLines') || group.lastWhole < 0)
     return need;
   return splitTailLines(look, group.lastWhole) > 0 ? null : need;
@@ -627,7 +637,7 @@ export function listMarkerFlowKeys(
     const marker = markerAt(index);
     if (marker === undefined) continue;
     if (flow === keys) flow = [...keys];
-    flow[index] = `${flow[index]}~mk~${marker}`;
+    flow[index] = extendedFlowKey(flow[index]!, '~mk~', marker);
   }
   return flow;
 }
@@ -665,7 +675,7 @@ export function contextualSpacingFlowKeys(
     const before = neighbourStyleAt(index, -1) === style;
     const after = neighbourStyleAt(index, 1) === style;
     if (flow === keys) flow = [...keys];
-    flow[index] = `${flow[index]}~cs~${before ? 1 : 0}${after ? 1 : 0}`;
+    flow[index] = extendedFlowKey(flow[index]!, '~cs~', `${before ? 1 : 0}${after ? 1 : 0}`);
   }
   return flow;
 }
@@ -712,7 +722,7 @@ export function borderGroupFlowKeys(
     const above = index > 0 && groupKeyAt(index - 1) === group;
     const below = index + 1 < keys.length && groupKeyAt(index + 1) === group;
     if (flow === keys) flow = [...keys];
-    flow[index] = `${flow[index]}~bg~${above ? 1 : 0}${below ? 1 : 0}`;
+    flow[index] = extendedFlowKey(flow[index]!, '~bg~', `${above ? 1 : 0}${below ? 1 : 0}`);
   }
   return flow;
 }
@@ -743,7 +753,7 @@ export function tocFieldFlowKeys(keys: string[], verdictAt: (index: number) => s
     const verdict = verdictAt(index);
     if (verdict === '') continue;
     if (flow === keys) flow = [...keys];
-    flow[index] = `${flow[index]}~toc~${verdict}`;
+    flow[index] = extendedFlowKey(flow[index]!, '~toc~', verdict);
   }
   return flow;
 }
@@ -842,7 +852,11 @@ export function keepNextFlowKeys(
   }
   const flow = [...keys];
   for (const index of heads)
-    flow[index] = `${keys[index]}~kn~${flags[index]! & 2 ? plain[index + 1] : through[index + 1]}`;
+    flow[index] = extendedFlowKey(
+      keys[index]!,
+      '~kn~',
+      flags[index]! & 2 ? plain[index + 1]! : through[index + 1]!
+    );
   return flow;
 }
 

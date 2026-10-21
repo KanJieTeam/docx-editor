@@ -1,4 +1,4 @@
-import type { AutomationSpanRef } from './operations.ts';
+import type { AutomationSpanRef, AutomationTextProjection } from './operations.ts';
 import type { AutomationHandle } from './protocol.ts';
 
 /** Table, picture, field, break, and list authoring transport operations. */
@@ -9,6 +9,21 @@ export type AutomationAuthoringOperation =
       readonly field: AutomationHandle;
     }
   | { readonly op: 'setFieldCode'; readonly field: AutomationHandle; readonly code: string }
+  /** The text of a field's cached result, read as a range over the field reads it. */
+  | {
+      readonly op: 'getFieldResult';
+      readonly field: AutomationHandle;
+      readonly projection?: AutomationTextProjection;
+    }
+  /** Replace a field's cached result with plain text. The instruction never changes. */
+  | { readonly op: 'setFieldResult'; readonly field: AutomationHandle; readonly text: string }
+  /** Insert the one equation a Flat OPC package holds. See `equation-snippet.ts`. */
+  | {
+      readonly op: 'insertOoxml';
+      readonly span: AutomationSpanRef;
+      readonly location: 'Before' | 'After' | 'Start' | 'End' | 'Replace';
+      readonly ooxml: string;
+    }
   | {
       readonly op: 'insertField';
       readonly span: AutomationSpanRef;
@@ -33,13 +48,22 @@ export type AutomationAuthoringOperation =
       readonly rowIndex: number;
       readonly cellIndex: number;
     }
+  /** The cell a merge of this rectangle merges into, read before the merge applies. */
+  | {
+      readonly op: 'getMergedTableCell';
+      readonly table: AutomationHandle;
+      readonly topRow: number;
+      readonly firstCell: number;
+      readonly bottomRow: number;
+      readonly lastCell: number;
+    }
   | { readonly op: 'getTableCellProperties' | 'getTableCellBody'; readonly cell: AutomationHandle }
   | {
       readonly op: 'updateTable';
       readonly table: AutomationHandle;
       readonly mutation: Exclude<
         import('./tables.ts').AutomationTableMutation,
-        { kind: 'cell' } | { kind: 'insertRows' }
+        { kind: 'cell' } | { kind: 'insertRows' } | { kind: 'splitCell' }
       >;
     }
   | {
@@ -52,6 +76,13 @@ export type AutomationAuthoringOperation =
         >,
         'kind' | 'cellId'
       >;
+    }
+  /** Split one cell into `rowCount` by `columnCount` cells. */
+  | {
+      readonly op: 'splitTableCell';
+      readonly cell: AutomationHandle;
+      readonly rowCount: number;
+      readonly columnCount: number;
     }
   | {
       readonly op: 'insertTable';

@@ -11,6 +11,7 @@ export { commentBodyText, commentInitials } from './review-text.ts';
 import { WML_NAMESPACE_URI } from '../package/ooxml-tree.ts';
 import type { OoxmlElement, OoxmlPart } from '../package/ooxml-tree.ts';
 import { mergeParagraphBreakEdits } from './review-paragraph-breaks.ts';
+import { mergeConsecutiveParagraphPropertyChanges } from './review-paragraph-property-groups.ts';
 import {
   changedLanguages,
   changedFormatting,
@@ -67,6 +68,26 @@ function wmlAttribute(node: OoxmlElement, localName: string): string | undefined
 
 function addressKey(address: RevisionAddress): string {
   return `${address.id}\u0000${address.author}\u0000${address.date ?? ''}`;
+}
+
+/**
+ * The key a site groups under, one string per site node and kind. Rebuilt per site on every
+ * derivation, each key was a new string that every map lookup hashed again; a long reviewed
+ * document derives the queue after each tracked keystroke. The node is immutable, and its
+ * address is read from its own attributes.
+ */
+const sourceKeys = new WeakMap<object, { readonly kind: string; readonly key: string }>();
+
+function sourceKeyOf(node: object, kind: ReviewRevisionKind, address: RevisionAddress): string {
+  const cached = sourceKeys.get(node);
+  if (cached?.kind === kind) return cached.key;
+  const localName = (node as { localName?: string }).localName;
+  const key =
+    kind === 'structural'
+      ? `structural\u0000${addressKey(address)}`
+      : `${kind}\u0000${localName}\u0000${addressKey(address)}`;
+  sourceKeys.set(node, { kind, key });
+  return key;
 }
 
 const CONTENT_KINDS: Readonly<Record<string, ReviewRevisionKind>> = {
@@ -244,10 +265,7 @@ function computeRevisionItemsOf(
     // date per editing burst, so an insertion and a deletion can legally share the triple —
     // and grouping on it alone showed them as one `insert` card with both texts run together,
     // whose Accept deleted the half the card claimed to be inserting.
-    const sourceKey =
-      kind === 'structural'
-        ? `structural\u0000${addressKey(address)}`
-        : `${kind}\u0000${site.node.localName}\u0000${addressKey(address)}`;
+    const sourceKey = sourceKeyOf(site.node, kind, address);
     // Same attributes do not join text across an unchanged character.
     let key = currentInlineGroup.get(sourceKey) ?? sourceKey;
     const previous = byAddress.get(key);
@@ -377,12 +395,13 @@ function computeRevisionItemsOf(
   // an atomic field, leaving those wrappers as separate review decisions.
   const tableItems = groupTableRevisions(part, items, sites, located, order);
   // Same-kind fragments remain one decision even when their source dates differ.
-  return mergeParagraphBreakEdits(
+  const textItems = mergeParagraphBreakEdits(
     mergeAdjacentSameKindEdits(tableItems, order),
     part,
     order,
     previewByNode
   );
+  return mergeConsecutiveParagraphPropertyChanges(textItems, part, sites, order);
 }
 
 /**

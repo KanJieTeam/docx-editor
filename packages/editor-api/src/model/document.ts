@@ -97,11 +97,18 @@ export class Document extends ModelObject {
     if (!['Off', 'TrackAll', 'TrackMineOnly'].includes(mode))
       fail({ code: 'InvalidArgument', target: 'document.changeTrackingMode' });
     const author = this.internals.author;
-    this.commandAnswering(
-      'document.changeTrackingMode',
-      () => ({ op: 'setChangeTrackingMode', mode, ...(author === undefined ? {} : { author }) }),
-      () => this.setLoadedProperty('changeTrackingMode', mode)
-    );
+    this.enqueue({
+      sort: 'write',
+      label: 'document.changeTrackingMode',
+      plan: () => ({
+        op: 'setChangeTrackingMode',
+        mode,
+        ...(author === undefined ? {} : { author }),
+      }),
+      settle: () => this.setLoadedProperty('changeTrackingMode', mode),
+      // TrackAll refuses at sync, so it must not ride along in a helper's sync unnoticed.
+      ...(mode === 'TrackAll' ? {} : { runtimeSetting: true as const }),
+    });
   }
 
   /**
@@ -197,7 +204,8 @@ export class Document extends ModelObject {
   /**
    * The tracked changes of the main-body story that this API can publish as typed objects.
    *
-   * Structural cards whose exact Word subtype cannot be named are omitted from `items`.
+   * Structural cards whose exact Word subtype cannot be named are omitted from `items`, and so
+   * are property changes that leave the resolved formatting unchanged.
    * `acceptAll` / `rejectAll` still resolve every store-resolvable revision in the main body
    * and refuse atomically if any `readOnly` or otherwise unsupported revision remains. Header,
    * footer, and note revisions live on those stories' own `Body.revisions` collections.

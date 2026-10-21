@@ -88,7 +88,7 @@ export function trackedProposalOf(
 }
 
 /** A deletion that starts right after the author's own pending mark deletion refuses. */
-function ownMarkDeletionRefusal(
+export function ownMarkDeletionRefusal(
   part: OoxmlPart,
   paragraphId: string,
   author: string
@@ -114,7 +114,8 @@ export function planProposal(
   packageReads: AutomationPackageReads,
   claim: (story: AutomationStoryReads, paragraphId: string) => PlannedOperation | null,
   trackedRangeReplacement = true,
-  collaborative = false
+  /** The write is followed by a paragraph split, so empty text still claims its paragraph. */
+  splitFollows = false
 ): PlannedOperation {
   const refuse = (
     code: AutomationErrorCode,
@@ -185,9 +186,7 @@ export function planProposal(
           undefined,
           // Another author's text may hold the struck text. A range that only reaches the
           // next paragraph's start writes nothing there and keeps the strict boundary.
-          end > start
-            ? { author: revision.author, strikesMark: index < ids.length - 1, collaborative }
-            : undefined
+          end > start ? { author: revision.author, strikesMark: index < ids.length - 1 } : undefined
         ) ?? (index < ids.length - 1 ? markStrikeRefusal(reads.part, paragraphId) : null);
       if (error) return { ok: false, error };
       // A range that ends at a paragraph's start writes nothing there, so deleting adjacent
@@ -235,7 +234,7 @@ export function planProposal(
     const adjacent = ownMarkDeletionRefusal(story.value.part, paragraphId, operation.author);
     if (adjacent) return adjacent;
   }
-  if (tracked && !deletion && start === end && operation.text === '')
+  if (tracked && !deletion && start === end && operation.text === '' && !splitFollows)
     return query({ kind: 'span', span: spanOf({ start: range.start, end: range.start }) });
   const revisionError = proposalRevisionError(
     story.value,
@@ -245,13 +244,7 @@ export function planProposal(
     tracked && insertion ? operation.author.trim() : undefined,
     insertion && start === (story.value.rawText(paragraphId) ?? '').length,
     tracked && !insertion && end > start ? operation.author.trim() : undefined,
-    tracked
-      ? {
-          author: operation.author.trim(),
-          collaborative,
-          ...(!deletion && operation.text.length > 0 ? { insertsAt: insertion ? start : end } : {}),
-        }
-      : undefined
+    tracked ? { author: operation.author.trim() } : undefined
   );
   if (revisionError) return { ok: false, error: revisionError };
   if (!deletion) {

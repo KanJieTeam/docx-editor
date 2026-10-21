@@ -64,6 +64,12 @@ export function anchorLineStartsByModelOffset(input: {
     probeLineIndex += 1;
   };
   for (const [pieceIndex, piece] of pieces.entries()) {
+    if (piece.unsupported) {
+      const width = piece.unsupported.width;
+      if (probeWidth > 0 && probeWidth + width > probeLineAvail()) closeProbeLine(piece.start);
+      probeWidth += width;
+      continue;
+    }
     const equation = equationLayoutOf(piece);
     if (equation) {
       const width = equation.geometry.box.width;
@@ -110,7 +116,7 @@ export function anchorLineStartsByModelOffset(input: {
       }
       const modelStart = piece.start + consumed;
       const probeDecision =
-        input.cjkBreaks?.decision(piece, consumed) ??
+        input.cjkBreaks?.decision(piece, consumed, probeLastEmitted, candidate) ??
         lineOpenDecisionAt(probeLastEmitted, candidate, consumed > 0);
       const opens = probeDecision === 'opens';
       if (opens) {

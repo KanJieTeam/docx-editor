@@ -1,3 +1,4 @@
+import { DocxEditorUnsupportedElement } from '../editor/DocxEditorUnsupportedElement';
 import { DocxEditorRevisionMarkupDialog } from '../editor/DocxEditorRevisionMarkupDialog';
 import { DocxEditorRevisionMarkup } from '../editor/DocxEditorRevisionMarkup';
 import { DocxEditorExportDialog } from '../editor/DocxEditorExportDialog';
@@ -34,6 +35,7 @@ import { Navigation as DocxEditorNavigationCompound } from '../editor/navigation
 import { DocxEditorPageSetupDialog } from '../editor/DocxEditorPageSetup';
 import { DocxEditorWatermarkDialog } from '../editor/DocxEditorWatermark';
 import { DocxEditorBookmarkDialog } from '../editor/DocxEditorBookmark';
+import { DocxEditorSplitCellDialog } from '../editor/DocxEditorSplitCell';
 import { DocxEditorParagraphDialog } from '../editor/DocxEditorParagraphDialog';
 import { DocxEditorPageNumber, PageNumberTranslationContext } from '../editor/DocxEditorPageNumber';
 import { DocxEditorFontNotice } from '../editor/DocxEditorFontNotice';
@@ -246,6 +248,7 @@ const DocxEditorFrame = forwardRef<DocxEditorRef, DocxEditorProps>(
       document: doc,
       fonts,
       fontShaping,
+      imageDecodePort,
       className,
       t,
       chrome = true,
@@ -439,14 +442,15 @@ const DocxEditorFrame = forwardRef<DocxEditorRef, DocxEditorProps>(
       [translate]
     );
 
-    // Root owns the facade: created once per document/fonts identity, zoom follows
-    // through `setZoom`, callbacks are read at their latest identity.
+    // Root owns the facade: created once per document identity, fonts follow
+    // through `setFonts` and zoom through `setZoom`; callbacks are read at their latest identity.
     return (
       <DocxEditorRoot
         popups={createPackagedPopups(props.popups, hyperlinkPopup, contextMenu, translate)}
         {...(doc !== undefined ? { document: doc } : {})}
         {...(fonts ? { fonts } : {})}
         {...(fontShaping ? { fontShaping } : {})}
+        {...(imageDecodePort ? { imageDecodePort } : {})}
         {...(author !== undefined ? { author } : {})}
         {...(locale !== undefined ? { locale } : {})}
         translate={translate}
@@ -529,6 +533,7 @@ export interface DocxEditorNamespace extends ForwardRefExoticComponent<
   readonly ColorByChangeType: typeof DocxEditorColorByChangeType;
   readonly RevisionMarkupDialog: typeof DocxEditorRevisionMarkupDialog;
   readonly RevisionMarkup: typeof DocxEditorRevisionMarkup;
+  readonly UnsupportedElement: typeof DocxEditorUnsupportedElement;
   readonly AuthorStyle: typeof DocxEditorAuthorStyle;
   /** Context-fed horizontal ruler with draggable margins (props-driven export stays). */
   readonly HorizontalRuler: typeof DocxEditorHorizontalRuler;
@@ -552,6 +557,8 @@ export interface DocxEditorNamespace extends ForwardRefExoticComponent<
   readonly WatermarkDialog: typeof DocxEditorWatermarkDialog;
   /** Bookmark dialog — list, add, delete and go to bookmarks. */
   readonly BookmarkDialog: typeof DocxEditorBookmarkDialog;
+  /** Split cells dialog — split the cell at the selection into columns and rows. */
+  readonly SplitCellDialog: typeof DocxEditorSplitCellDialog;
   /** The Paragraph dialog: alignment, indentation, spacing and the paragraph flags. */
   readonly TextFormFieldDialog: typeof DocxEditorTextFormFieldDialog;
   readonly ParagraphDialog: typeof DocxEditorParagraphDialog;
@@ -607,6 +614,7 @@ export const DocxEditor: DocxEditorNamespace = Object.assign(DocxEditorImpl, {
   ColorByChangeType: DocxEditorColorByChangeType,
   RevisionMarkup: DocxEditorRevisionMarkup,
   RevisionMarkupDialog: DocxEditorRevisionMarkupDialog,
+  UnsupportedElement: DocxEditorUnsupportedElement,
   AuthorStyle: DocxEditorAuthorStyle,
   HorizontalRuler: DocxEditorHorizontalRuler,
   VerticalRuler: DocxEditorVerticalRuler,
@@ -617,6 +625,7 @@ export const DocxEditor: DocxEditorNamespace = Object.assign(DocxEditorImpl, {
   PageSetupDialog: DocxEditorPageSetupDialog,
   WatermarkDialog: DocxEditorWatermarkDialog,
   BookmarkDialog: DocxEditorBookmarkDialog,
+  SplitCellDialog: DocxEditorSplitCellDialog,
   ParagraphDialog: DocxEditorParagraphDialog,
   TextFormFieldDialog: DocxEditorTextFormFieldDialog,
   PageNumber: DocxEditorPageNumber,

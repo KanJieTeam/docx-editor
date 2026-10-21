@@ -462,6 +462,7 @@ function placeCellParagraph(
       ? directionalListFirstLineShift(listItem, indent, deps.measurer, tabStops, available, rtl)
       : 0;
   const anchorScope = cellAnchorScope(options?.inTableCell, deps, paragraphId);
+  const storyFrame = !anchorScope.inTableCell ? deps.anchorFrameBase?.() : undefined;
   const rawZones = (anchorScope.anchorsWrapText && deps.pageExclusionZones?.()) || [];
   // The cell's own content box: tabs measure against it, and cell anchors resolve in it.
   const cellBoxWidth = indent.left + available + indent.right;
@@ -541,6 +542,7 @@ function placeCellParagraph(
           contentRight: cellBoxWidth,
           paragraphStartY: top,
           ...cellAnchorFlow(cellBoxWidth, available, anchorScope),
+          ...(storyFrame?.storyKind === 'header' ? { anchorFrameBase: storyFrame } : {}),
           ...(pageZones.length > 0 ? { pageExclusionZones: pageZones } : {}),
         },
       }),
@@ -1509,7 +1511,7 @@ export function layoutRowFragmentBounded(
   rowBottom = Math.min(flowMaxBottom, rowBottom);
 
   // Exact: force the authored height (clamped to the page budget) and clip leftover content.
-  // atLeast: floor a finished fragment when the minimum fits; never push past maxBottom.
+  // atLeast: a complete row fills its minimum, bounded by the available page band.
   let clipExact = false;
   if (exactHeightPt !== undefined) {
     const exactBottom = rowTop + exactHeightPt;
@@ -1536,7 +1538,7 @@ export function layoutRowFragmentBounded(
             rowGapPt
           );
     const spanFloorPt = isContinuation ? 0 : (vMerge?.heightFloorPt ?? 0);
-    const minBottom = rowTop + Math.max(authoredFloorPt, spanFloorPt);
+    const minBottom = rowTop + Math.max(Math.min(authoredFloorPt, maxBottom - rowTop), spanFloorPt);
     const floors = minBottom > rowBottom && minBottom <= maxBottom + 0.001;
     if (floors && flowed.every((entry) => entry.complete)) rowBottom = minBottom;
   }

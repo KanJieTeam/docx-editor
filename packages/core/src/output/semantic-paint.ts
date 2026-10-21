@@ -1,3 +1,5 @@
+import type { OoxmlElement } from '@docx-editor.dev/core/store';
+import { paintUnsupportedContent } from './unsupported-elements.ts';
 import {
   reflowTableFragment,
   rememberPaintedCell,
@@ -18,6 +20,7 @@ import { paragraphIsRtl } from '../layout/rtl-paragraph.ts';
 import { DEFAULT_RUN_STYLE } from '../layout/run-style.ts';
 
 import { paintedSpanText } from '../layout/optional-hyphen-break.ts';
+import { withoutTrailingZeroWidthSpaces } from '../layout/trailing-spaces.ts';
 import { paintManualLineBreak } from './semantic-paragraph-marks.ts';
 import {
   DEFAULT_BREAK_MARK_STRINGS,
@@ -95,7 +98,12 @@ import {
   type DrawingPaintStrings,
   type PaintImageUrlPort,
 } from './semantic-paint-drawings.ts';
-import { mountEquationGeometry } from './semantic-paint-equation.ts';
+import {
+  captureUnsupportedElementFocus,
+  notifyUnsupportedElementsPaint,
+} from './unsupported-elements.ts';
+import { mountEquationForSpan } from './semantic-paint-equation.ts';
+import { applyEquationRevision } from './semantic-paint-equation.ts';
 import { prepareTextPaintHost } from './semantic-paint-line-end-whitespace.ts';
 import { applyTextOutline } from './semantic-paint-text-outline.ts';
 
@@ -117,6 +125,8 @@ export const DEFAULT_FIELD_SHADING: FieldShadingMode = 'when-selected';
  * name entering the page-global CSS font namespace.
  */
 export interface PaintContext {
+  readonly unsupportedOwnerPartName?: (nodeId: string) => string;
+  readonly unsupportedSource?: (nodeId: string, ownerPartName?: string) => OoxmlElement | null;
   readonly scale: number;
   readonly paragraphFormatRevision?: import('../layout/revision-projection.ts').RevisionAttribution;
   /** Story's horizontal origin relative to its paper or containing textbox frame. */
@@ -215,6 +225,8 @@ function aliasIdentity(alias: (family: string) => string | undefined): string {
  * set through these options is ever serialised back into the document.
  */
 export interface PaintOptions {
+  readonly unsupportedOwnerPartName?: (nodeId: string) => string;
+  readonly unsupportedSource?: (nodeId: string, ownerPartName?: string) => OoxmlElement | null;
   /** Points to CSS pixels. 96/72 renders a point as a CSS point at 100% zoom. */
   readonly scale?: number;
   /** Generated paragraphs that paint as non-editable navigation surfaces. */
@@ -376,6 +388,7 @@ function resolvedDrawingPaint(ctx: ResolvedPaintContext): DrawingPaintContext {
   const storyCtx: ResolvedPaintContext = { ...ctx, inertLinks: true, tabLeaderOriginXPt: 0 };
   return Object.freeze({
     scale: ctx.scale,
+    ...(ctx.unsupportedSource ? { unsupportedSource: ctx.unsupportedSource } : {}),
     strings: ctx.drawingStrings,
     ...(ctx.imageUrlPort ? { imageUrlPort: ctx.imageUrlPort } : {}),
     ...(ctx.inertLinks ? { inertLinks: true } : {}),
@@ -821,6 +834,8 @@ function paintSpan(
   // Ink resolves the face through the span's font slot; `span.style` itself stays the
   // run's full resolution for every consumer that reads formatting rather than glyphs.
   const faceStyle = styleForFontSlot(span.style, span.fontSlot);
+  if (span.unsupported)
+    return paintUnsupportedContent(document, span.unsupported, span.box, ctx.scale);
   if (span.equation) {
     if (!ctx.unbound) {
       element.dataset.paragraphId = span.range.paragraphId;
@@ -828,10 +843,10 @@ function paintSpan(
       element.dataset.end = String(span.range.end);
     }
     applyRunFaceStyle(element, faceStyle, ctx);
-    mountEquationGeometry(document, element, span.equation, ctx.scale, (run, style) =>
+    mountEquationForSpan(document, element, span.equation, ctx, (run, style) =>
       applyRunFaceStyle(run, style, ctx)
     );
-    applyRevisionPresentation(element, span, ctx);
+    applyEquationRevision(document, element, span, ctx);
     return element;
   }
   element.className = 'layout-run layout-run-text';
@@ -1346,7 +1361,7 @@ const WORD_SEPARATOR = /[\t\n\r \u00A0\u1361\u{10100}-\u{10102}\u{1039F}\u{1091F
  * itself, stretching its trailing space, instead of as a margin on the next span.
  *
  * The stretch must move ONLY the trailing space. Layout puts justify slack after expandable
- * U+0020s and word-breaks after every one of them, so an ordinary word-span qualifies —
+ * U+0020s (and any U+200B after) and word-breaks after each, so an ordinary span qualifies —
  * including a projected field result, whose box was reserved from the drawn text like any
  * other. A span carrying any OTHER word separator keeps the margin, whose only cost is a
  * seam in the native selection band. A span with a forced width (`w:w` horizontal scaling)
@@ -1359,11 +1374,12 @@ const WORD_SEPARATOR = /[\t\n\r \u00A0\u1361\u{10100}-\u{10102}\u{1039F}\u{1091F
  * slack (and this span's underline and shading) inside the float's exclusion zone.
  */
 function absorbsFollowingGap(span: StyleSpanRecord, next: StyleSpanRecord): boolean {
-  if (!span.text.endsWith(' ')) return false;
+  const text = withoutTrailingZeroWidthSpaces(span.text);
+  if (!text.endsWith(' ')) return false;
   if (span.style.horizontalScalePercent !== 100) return false;
   if (!sharesAnchor(span, next)) return false;
   if ((next.wrapAdvanceBefore ?? 0) > 0.001) return false;
-  return !WORD_SEPARATOR.test(span.text.slice(0, -1));
+  return !WORD_SEPARATOR.test(text.slice(0, -1));
 }
 
 /**
@@ -2285,6 +2301,7 @@ export function paintSemanticLayoutWithAuthorSlots(
   options: PaintOptions,
   authorSlots?: ReadonlyMap<string, number>
 ): void {
+  captureUnsupportedElementFocus(container);
   container.classList.toggle('docx-show-paragraph-marks', options.showParagraphMarks ?? false);
   const chrome = options.contentControlChrome;
   // `hoverIds` is absent ON PURPOSE — see its doc comment. Including it made a pointer
@@ -2331,6 +2348,10 @@ export function paintSemanticLayoutWithAuthorSlots(
     scale: options.scale ?? 96 / 72,
     ariaHidden: options.ariaHidden ?? true,
     drawingStrings,
+    ...(options.unsupportedOwnerPartName
+      ? { unsupportedOwnerPartName: options.unsupportedOwnerPartName }
+      : {}),
+    ...(options.unsupportedSource ? { unsupportedSource: options.unsupportedSource } : {}),
     urlRegistry,
     ...(options.fontAlias ? { fontAlias: options.fontAlias } : {}),
     ...(options.readOnlyParagraphIds ? { readOnlyParagraphIds: options.readOnlyParagraphIds } : {}),
@@ -2463,6 +2484,7 @@ export function paintSemanticLayoutWithAuthorSlots(
     container.insertBefore(entry.element, cursor);
   }
   applyHeaderFooterPaintChrome(pages, resolved);
+  notifyUnsupportedElementsPaint(container);
 }
 import { tabLeaderPattern } from '../layout/tab-leader-pattern.ts';
 import { equalBlockElement } from './semantic-paint-block-reuse.ts';

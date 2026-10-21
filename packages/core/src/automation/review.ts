@@ -35,6 +35,10 @@ import type {
 } from '../store/store/review-items.ts';
 import { commentPartNameOf, commentsExtendedPartNameOf } from '../store/store/comment-writes.ts';
 import type { AutomationStoryReads } from './reads.ts';
+import {
+  inertPropertyChangeInputsOf,
+  withoutInertPropertyChanges,
+} from '../layout/review-inert-property-changes.ts';
 
 /**
  * Word's own name for a kind of change.
@@ -51,8 +55,19 @@ const REVISION_TYPES = {
   moveTo: 'MovedTo',
   /** `w:rPrChange` / `w:pPrChange`: the words are unchanged, their formatting is not. */
   format: 'Property',
-  /** `w:pPr/w:rPr/w:ins|w:del` — a paragraph mark proposed or struck. */
-  paragraphMark: 'ParagraphProperty',
+} as const;
+
+/**
+ * A paragraph mark proposed or struck (`w:pPr/w:rPr/w:ins|w:del|w:moveFrom|w:moveTo`) is a
+ * change to the text: the mark is a character. Word reports it by direction, so a split reads
+ * as `Insert` and a merge as `Delete`, never as `ParagraphProperty`, which names a formatting
+ * change of the paragraph (`w:pPrChange`).
+ */
+const MARK_TYPES = {
+  insert: 'Insert',
+  delete: 'Delete',
+  moveFrom: 'MovedFrom',
+  moveTo: 'MovedTo',
 } as const;
 
 export type AutomationRevisionType = (typeof REVISION_TYPES)[keyof typeof REVISION_TYPES];
@@ -111,15 +126,32 @@ export function revisionItemsInStory(reads: AutomationStoryReads): readonly Revi
 }
 
 /**
+ * The story's items a caller can list: {@link revisionItemsInStory} without the property changes
+ * that leave the formatting unchanged, as the editor's review queue lists them. With no package,
+ * every item. Collection decisions still resolve the others, because they name every item.
+ */
+export function listedRevisionItemsInStory(
+  reads: AutomationStoryReads,
+  pkg: OoxmlPackage | null
+): readonly ReviewRevisionItem[] {
+  const items = revisionItemsInStory(reads);
+  return pkg ? withoutInertPropertyChanges(items, inertPropertyChangeInputsOf(pkg)) : items;
+}
+
+/**
  * The decisions of one story, in document order.
  *
  * Omits `readOnly` items and structural cards whose Word subtype this protocol cannot name.
  * That listing is not the collection decision set: store-resolvable structural revisions are
  * still resolved by collection accept/reject.
  */
-export function revisionReads(reads: AutomationStoryReads): readonly AutomationRevisionRead[] {
+export function revisionReads(
+  reads: AutomationStoryReads,
+  pkg: OoxmlPackage | null
+): readonly AutomationRevisionRead[] {
   const found: AutomationRevisionRead[] = [];
-  for (const item of revisionItemsInStory(reads)) {
+  const listed = listedRevisionItemsInStory(reads, pkg);
+  for (const item of listed) {
     if (item.readOnly) continue;
     const rowChange = item.structuralChanges?.length === 1 ? item.structuralChanges[0] : undefined;
     const type =
@@ -129,7 +161,9 @@ export function revisionReads(reads: AutomationStoryReads): readonly AutomationR
           : rowChange === 'rowDelete'
             ? 'Delete'
             : undefined
-        : REVISION_TYPES[item.revisionKind as keyof typeof REVISION_TYPES];
+        : item.revisionKind === 'paragraphMark'
+          ? item.markDirection && MARK_TYPES[item.markDirection]
+          : REVISION_TYPES[item.revisionKind as keyof typeof REVISION_TYPES];
     if (type === undefined) continue;
     found.push(
       Object.freeze({

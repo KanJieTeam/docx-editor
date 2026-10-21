@@ -1,5 +1,8 @@
 import type { SetLegacyDropdownOp } from './legacy-dropdown-fields.ts';
 import type { SetFieldCodeOp } from './tree-op-field-code.ts';
+import type { InsertComplexFieldOp, InsertPageFieldOp } from './tree-op-field-insert.ts';
+import type { SetFieldResultOp } from './tree-op-field-result-write.ts';
+import type { InsertEquationOp } from './tree-op-equation-insert.ts';
 import type { InsertTextOp, DeleteTextOp } from './text-edit-op-types.ts';
 import type { SetTextFormFieldDefaultOp, CommitTextFormFieldOp } from './text-form-fields.ts';
 import type { SetLegacyCheckboxOp } from './legacy-checkbox-fields.ts';
@@ -300,26 +303,10 @@ export type TreeDocOp =
       /** Write this as a TRACKED insertion, on the same terms as `insertText`. */
       readonly revision?: RevisionAttributionInput;
     }
-  | {
-      /**
-       * Insert an allowlisted page-number complex field at a UTF-16 offset.
-       *
-       * `PAGE_X_OF_Y` is PAGE + literal " of " + NUMPAGES in one undoable op. Non-page
-       * instructions are refused — never authored through this path.
-       */
-      readonly op: 'insertPageField';
-      readonly paragraphId: string;
-      readonly offset: number;
-      readonly field: 'PAGE' | 'NUMPAGES' | 'SECTIONPAGES' | 'PAGE_X_OF_Y';
-      /**
-       * Write this as a TRACKED insertion, on the same terms as `insertText`.
-       *
-       * The whole field — every `w:fldChar`, the instruction, the `PAGE_X_OF_Y` literal —
-       * goes into ONE `w:ins`, because the field is one proposal: rejecting it must take
-       * the complete atom back, never leave a `begin` standing without its `end`.
-       */
-      readonly revision?: RevisionAttributionInput;
-    }
+  | InsertPageFieldOp
+  | InsertComplexFieldOp
+  | SetFieldResultOp
+  | InsertEquationOp
   | {
       /**
        * Move a numbered paragraph to another `w:numPr/w:ilvl`.
@@ -615,6 +602,8 @@ export type TreeDocOp =
         readonly xpath: string;
         readonly storeItemId: string;
       };
+      /** Propose the control as a tracked `w:ins`; rejecting removes it with its text. */
+      readonly revision?: RevisionAttributionInput;
     }
   | {
       /** Repeating-section item insert — unsupported at this layer (out of scope). */
@@ -698,6 +687,20 @@ export type TreeDocOp =
       readonly op: 'deleteTableColumn';
       readonly tableId: string;
       readonly gridColumnId: string;
+    }
+  | {
+      /** Merge cells covering one rectangle into its top-left cell, content in reading order. */
+      readonly op: 'mergeTableCells';
+      readonly tableId: string;
+      readonly cellIds: readonly string[];
+    }
+  | {
+      /** Split one cell into `rows` by `columns` equal cells; a one-row cell adds rows. */
+      readonly op: 'splitTableCell';
+      readonly tableId: string;
+      readonly cellId: string;
+      readonly rows: number;
+      readonly columns: number;
     }
   | {
       /**
@@ -1249,8 +1252,18 @@ export type TreeOpRejection =
    * mapping cannot be trusted and the inserted row would not match it.
    */
   | 'row-hides-cell'
-  /** Column edit refused because the table carries horizontal or vertical merges. */
+  /** The table carries a legacy `w:hMerge`, which grid edits cannot place. */
   | 'table-has-merge'
+  /** The cells to merge do not cover one rectangle, or cover only one cell. */
+  | 'cells-not-rectangle'
+  /** A cell merged over several rows splits only into a divisor of them. */
+  | 'split-rows-not-divisor'
+  /** The cells hold a tracked cell insertion, deletion, or merge. */
+  | 'cell-has-revision'
+  /** The split cells would be narrower than the minimum column width. */
+  | 'cell-too-narrow'
+  /** Without `w:tblGrid`, a cell splits only into a divisor of the columns it spans. */
+  | 'split-needs-grid'
   /** The addressed grid column id is missing or ambiguous without `w:tblGrid`. */
   | 'unknown-grid-column'
   /** The operation would exceed bounded table topology limits. */
