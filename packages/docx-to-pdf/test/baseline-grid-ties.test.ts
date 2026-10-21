@@ -5,7 +5,7 @@ Production use requires a commercial agreement: licensing@eigenpal.com
 */
 import { expect, test } from 'bun:test';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
-import { exportPdf } from '../src/index.ts';
+import { exportPdf, exportPdfFrom, openDocumentForExport } from '../src/index.ts';
 import { snapToGrid } from '../src/text.ts';
 import { docx } from './fixture.ts';
 
@@ -13,7 +13,8 @@ import { docx } from './fixture.ts';
 //
 // Ties are not rare: any exact line spacing that is an odd multiple of 0.12pt hits one on
 // every other line. Here `w:top="2880"` puts the story origin at 144pt — 600 units exactly —
-// and 15pt lines advance 62.5 units, so every other baseline lands on an exact .5.
+// and 15pt lines advance 62.5 units. The in-line baseline is gridded first, so every
+// other painted baseline lands on an exact .5 regardless of the font's ascent.
 // A captured control of this shape shows the reference taking the LOWER unit for all six of
 // them; `Math.round` took the upper one every time, 0.24pt low on the page.
 // See `.cache/pdf/claude-linerule/`.
@@ -46,17 +47,63 @@ test('an exact half-unit baseline rounds toward the page top', async () => {
     // Every painted baseline sits on the grid, and the ties took the lower unit.
     for (const top of tops)
       expect(Math.abs(top / GRID - Math.round(top / GRID))).toBeLessThan(1e-6);
+    // Exact spacing centres the face's natural band; it does not prescribe a 12pt
+    // baseline. Test the tie direction independently of that in-line offset.
+    const firstUnits = tops[0]! / GRID;
+    expect(firstUnits).toBeCloseTo(Math.round(firstUnits), 8);
+    const advances = tops.map((top) => Number((top - tops[0]!).toFixed(4)));
     const expected = Array.from({ length: LINES }, (_, i) =>
-      Number((Math.ceil((144 + 12 + i * 15) / GRID - 0.5) * GRID).toFixed(4))
+      Number((Math.ceil((i * 15) / GRID - 0.5) * GRID).toFixed(4))
     );
-    expect(tops).toEqual(expected);
+    expect(advances).toEqual(expected);
+    expect(advances[1]).toBe(14.88);
     // Half of them ARE ties, or the fixture stopped exercising the rule.
-    const ties = expected.filter(
-      (_, i) => Math.abs((((144 + 12 + i * 15) / GRID) % 1) - 0.5) < 1e-9
-    );
+    const ties = expected.filter((_, i) => Math.abs((((i * 15) / GRID) % 1) - 0.5) < 1e-9);
     expect(ties).toHaveLength(6);
   } finally {
     await pdf.destroy();
+  }
+});
+
+test('font-backed exact lines centre the natural band and export that baseline', async () => {
+  const paragraph = (label: string, line: string) =>
+    `<w:p><w:pPr><w:spacing w:before="0" w:after="0" ${line}/></w:pPr>` +
+    `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>` +
+    `<w:sz w:val="24"/></w:rPr><w:t>${label}</w:t></w:r></w:p>`;
+  const input = docx(
+    paragraph('Natural', 'w:line="240" w:lineRule="auto"') +
+      paragraph('Exact', 'w:line="480" w:lineRule="exact"')
+  );
+  const opened = await openDocumentForExport(input, { useSystemFonts: false });
+  if (!opened.ok) throw new Error('Cannot open the exact-line fixture');
+  try {
+    const layout = await opened.session.layout();
+    const page = layout.pages[0]!;
+    const paragraphs = page.fragments.filter((fragment) => fragment.kind === 'paragraph');
+    expect(paragraphs).toHaveLength(2);
+    const natural = paragraphs[0]!.lines[0]!;
+    const exact = paragraphs[1]!.lines[0]!;
+    expect(natural.box.height).toBeLessThan(24);
+    expect(exact.box.height).toBe(24);
+    expect(exact.baseline - natural.baseline).toBeCloseTo((24 - natural.box.height) / 2, 8);
+    expect(exact.box.y).toBeCloseTo(natural.box.y + natural.box.height, 8);
+    const result = await exportPdfFrom(opened.session);
+    const pdf = await getDocument({ data: result.bytes.slice(), useSystemFonts: false }).promise;
+    try {
+      const pdfPage = await pdf.getPage(1);
+      const content = await pdfPage.getTextContent();
+      const item = content.items.find((item) => 'str' in item && item.str === 'Exact');
+      if (!item || !('str' in item)) throw new Error('The exact line is missing from the PDF');
+      // This taller line rounds its in-line baseline, then grids the page position.
+      const lineTop = page.contentBox.y + exact.box.y;
+      const inLine = Math.round(exact.baseline / GRID) * GRID;
+      const expected = Math.ceil((lineTop + inLine) / GRID - 0.5) * GRID;
+      expect(pdfPage.view[3]! - item.transform[5]!).toBeCloseTo(expected, 6);
+    } finally {
+      await pdf.destroy();
+    }
+  } finally {
+    opened.session.dispose();
   }
 });
 
