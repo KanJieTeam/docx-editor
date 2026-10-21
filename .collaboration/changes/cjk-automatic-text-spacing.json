@@ -5,6 +5,8 @@
   "after": "Supported boundaries use automatic advances from resolved font metrics unless paragraph properties disable them.",
   "reason": "Only derived layout changes. Shared nodes, canonical UTF-16 offsets, operations, and package serialization remain unchanged. The optional measurer hook adds no document operations.",
   "tests": [
+    "packages/core/src/layout/__tests__/automatic-spacing-metadata.test.ts",
+    "packages/core/src/layout/__tests__/flow-checkpoint-guard.test.ts",
     "packages/core/src/layout/__tests__/cjk-automatic-spacing.test.ts",
     "packages/core/src/layout/__tests__/cjk-line-breaking.test.ts",
     "packages/core/src/layout/__tests__/cjk-followups.test.ts",

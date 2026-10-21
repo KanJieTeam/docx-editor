@@ -29,6 +29,13 @@ export function withAutomaticTextSpacing<T extends { readonly range: { readonly 
   value: T,
   gap: number
 ): T {
+  // A zero advance has no layout state. Do not mark unrelated text spans.
+  if (gap === 0) {
+    if (!(automaticBefore in value)) return value;
+    const result = { ...value };
+    delete (result as { [automaticBefore]?: unknown })[automaticBefore];
+    return result;
+  }
   return { ...value, [automaticBefore]: { gap, start: value.range.start } };
 }
 
