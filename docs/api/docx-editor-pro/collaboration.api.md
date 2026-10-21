@@ -161,11 +161,36 @@ export interface CollaborationSession {
 }
 
 // @public
+export interface CollaborationUndoGroup {
+    end(): void;
+    readonly state: 'open' | 'closed';
+}
+
+// @public
+export class CollaborationUndoGroupError extends Error {
+    constructor(
+    code: CollaborationUndoGroupErrorCode);
+    readonly code: CollaborationUndoGroupErrorCode;
+}
+
+// @public
+export type CollaborationUndoGroupErrorCode = 'undo-group-already-open' | 'editor-attached' | 'collaboration-session-destroyed';
+
+// @public
 export function compactCollaborationState(state: Uint8Array, options?: CompactCollaborationStateOptions): Promise<Uint8Array | null>;
 
 // @public
 export interface CompactCollaborationStateOptions {
     readonly minimumGain?: number;
+}
+
+// @public
+export function createCollaborationState(document: Uint8Array, options: CreateCollaborationStateOptions): Promise<Uint8Array>;
+
+// @public
+export interface CreateCollaborationStateOptions {
+    readonly documentId: string;
+    readonly maxBytes?: number;
 }
 
 // @public
@@ -190,9 +215,11 @@ export type DocumentCollaborationHandle = CollaborationHandle<DocumentCollaborat
 
 // @public
 export interface DocumentCollaborationSession extends EditorCollaborationSession {
+    beginUndoGroup(): CollaborationUndoGroup;
     resourceUsage(): CollaborationResourceUsage;
     setIdentity(update: CollaborationIdentityUpdate): void;
     setTransportStatus(status: 'ready' | 'disconnected' | 'error', reason?: CollaborationFailureCode, detail?: string): void;
+    readonly undoGroupOpen: boolean;
 }
 
 // @public

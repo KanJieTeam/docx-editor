@@ -1,3 +1,8 @@
+import {
+  UnsupportedElementRegistryContext,
+  createUnsupportedElementRegistry,
+  type UnsupportedElementRegistry,
+} from './unsupported-element-registry';
 import type {
   RevisionMarkupOptions,
   ResolvedRevisionMarkup,
@@ -69,9 +74,10 @@ import {
 } from './revision-style-registry';
 
 /**
- * Props for `DocxEditor.Root`. `document`, `fonts` and `imageDecodePort` identity changes remount
- * the editor. Changing `fontShaping.maxFontBytes` also remounts. Later `author`, `locale`, `mode`, `translate`, `zoom`, and `zoomMode` changes use
- * instance setters. `modules` is sampled at mount only.
+ * Props for `DocxEditor.Root`. `document` and `imageDecodePort` identity changes remount the
+ * editor. Changing `fontShaping.maxFontBytes` also remounts. Later `fonts`, `author`, `locale`,
+ * `mode`, `translate`, `zoom`, and `zoomMode` changes use instance setters, so edits, selection
+ * and undo history survive them. `modules` is sampled at mount only.
  *
  * @public
  */
@@ -87,8 +93,9 @@ export interface DocxEditorRootProps {
    * uses a fixed-width estimate; fonts embedded in the document are wired automatically
    * either way. Pass `await loadDefaultFonts()` from `@docx-editor.dev/fonts` for
    * Word's default faces — a bare fragment is accepted — or compose several origins
-   * with `composeFontConfiguration`. Sampled at mount; identity change remounts;
-   * failures degrade to the fixed measurer and report through `onFontError`.
+   * with `composeFontConfiguration`. An identity change replaces the fonts in place
+   * (`setFonts`), keeping the document, selection and undo history; keep the reference stable
+   * across renders. Failures degrade to the fixed measurer and report through `onFontError`.
    */
   fonts?: FontConfiguration | FontConfigurationFragment | FontResolver;
   /** Explicit shaping byte ceiling; a changed maxFontBytes value remounts. */
@@ -296,6 +303,8 @@ export function DocxEditorRoot(props: DocxEditorRootProps) {
   const createdContentLockPolicy = useRef(props.contentLockPolicy);
   /** The `lockedControlNavigation` the current instance was created with. */
   const createdLockedControlNavigation = useRef(props.lockedControlNavigation);
+  /** The `fonts` the current instance holds: created with, or last handed to `setFonts`. */
+  const createdFonts = useRef(props.fonts);
 
   // The channel `<DocxEditor.ColorByChangeType>` / `<DocxEditor.AuthorStyle>` declare through.
   // A store: declarations register from anywhere in the subtree, and identity must hold
@@ -308,8 +317,11 @@ export function DocxEditorRoot(props: DocxEditorRootProps) {
   const registryRef = useRef<RevisionStyleRegistry | null>(null);
   registryRef.current ??= createRevisionStyleRegistry();
   const revisionStyleRegistry = registryRef.current;
+  const unsupportedRegistryRef = useRef<UnsupportedElementRegistry | null>(null);
+  unsupportedRegistryRef.current ??= createUnsupportedElementRegistry();
+  const unsupportedRegistry = unsupportedRegistryRef.current;
 
-  // One instance per document/fonts identity, and per effect run: `destroy()` is
+  // One instance per document identity, and per effect run: `destroy()` is
   // terminal, so a StrictMode re-run must build anew rather than resurrect.
   useEffect(() => {
     const p = propsRef.current;
@@ -322,6 +334,7 @@ export function DocxEditorRoot(props: DocxEditorRootProps) {
     createdContentLockPolicy.current = p.contentLockPolicy;
     createdLockedControlNavigation.current = p.lockedControlNavigation;
     const instance = createDocxEditor({
+      unsupportedElementRules: unsupportedRegistry.current(),
       ...(p.document !== undefined ? { document: p.document } : {}),
       ...(p.fonts ? { fonts: p.fonts } : {}),
       ...(p.fontShaping ? { fontShaping: p.fontShaping } : {}),
@@ -344,6 +357,7 @@ export function DocxEditorRoot(props: DocxEditorRootProps) {
       ...(p.imageDecodePort ? { imageDecodePort: p.imageDecodePort } : {}),
       onFontError: (error) => propsRef.current.onFontError?.(error),
     });
+    createdFonts.current = p.fonts;
     const offMarkup = instance.on('revisionMarkupChange', (settings) => {
       if (applyingMarkup.current) return;
       propsRef.current.onRevisionMarkupChange?.(settings);
@@ -358,7 +372,16 @@ export function DocxEditorRoot(props: DocxEditorRootProps) {
       // Functional update: a StrictMode re-run's second instance must not be clobbered.
       setEditor((current) => (current === instance ? null : current));
     };
-  }, [doc, fonts, fontShapingMaxFontBytes, imageDecodePort, revisionStyleRegistry]);
+  }, [doc, fontShapingMaxFontBytes, imageDecodePort, revisionStyleRegistry, unsupportedRegistry]);
+
+  // A new `fonts` value replaces the instance's fonts in place. The instance a remount just
+  // created already has them, so only a change after creation reaches `setFonts`.
+  useEffect(() => {
+    if (!editor || createdFonts.current === fonts) return;
+    createdFonts.current = fonts;
+    // Rejects only after destroy; font failures report through `onFontError`.
+    editor.setFonts(fonts).catch(() => {});
+  }, [editor, fonts]);
 
   // Fired AFTER the instance is published: this effect runs in the commit that rendered
   // the new editor, after child layout effects — so a `DocxEditor.Content` in the tree
@@ -555,30 +578,37 @@ export function DocxEditorRoot(props: DocxEditorRootProps) {
     return () => revisionStyleRegistry.connect(null);
   }, [revisionStyleRegistry, editor]);
 
+  useEffect(() => {
+    unsupportedRegistry.connect(editor);
+    return () => unsupportedRegistry.connect(null);
+  }, [unsupportedRegistry, editor]);
+
   return (
-    <FormControlTranslateProvider value={translate ?? defaultTranslate}>
-      <ReviewRailContext.Provider value={railRegistry}>
-        <DocxEditorContext.Provider value={editor}>
-          <NavigationLayoutContext.Provider value={navigationLayout}>
-            <RevisionStyleRegistryContext.Provider value={revisionStyleRegistry}>
-              {/* ONE link-popover state per editor, published here so a TOOLBAR button and the
+    <UnsupportedElementRegistryContext.Provider value={unsupportedRegistry}>
+      <FormControlTranslateProvider value={translate ?? defaultTranslate}>
+        <ReviewRailContext.Provider value={railRegistry}>
+          <DocxEditorContext.Provider value={editor}>
+            <NavigationLayoutContext.Provider value={navigationLayout}>
+              <RevisionStyleRegistryContext.Provider value={revisionStyleRegistry}>
+                {/* ONE link-popover state per editor, published here so a TOOLBAR button and the
                 popover panel — which are siblings, not ancestor and descendant — see the same
                 open/closed state and only one of them registers with the engine's gestures. */}
-              <HyperlinkPopupProvider>
-                <ContentControlProvider>
-                  {/* Outside the picture insert, which shows its refusal through the registry. */}
-                  <PopupConfigProvider value={props.popups}>
-                    <ImageInsertProvider>
-                      <DialogProvider popups={props.popups}>{children}</DialogProvider>
-                    </ImageInsertProvider>
-                  </PopupConfigProvider>
-                </ContentControlProvider>
-              </HyperlinkPopupProvider>
-            </RevisionStyleRegistryContext.Provider>
-          </NavigationLayoutContext.Provider>
-        </DocxEditorContext.Provider>
-      </ReviewRailContext.Provider>
-    </FormControlTranslateProvider>
+                <HyperlinkPopupProvider>
+                  <ContentControlProvider>
+                    {/* Outside the picture insert, which shows its refusal through the registry. */}
+                    <PopupConfigProvider value={props.popups}>
+                      <ImageInsertProvider>
+                        <DialogProvider popups={props.popups}>{children}</DialogProvider>
+                      </ImageInsertProvider>
+                    </PopupConfigProvider>
+                  </ContentControlProvider>
+                </HyperlinkPopupProvider>
+              </RevisionStyleRegistryContext.Provider>
+            </NavigationLayoutContext.Provider>
+          </DocxEditorContext.Provider>
+        </ReviewRailContext.Provider>
+      </FormControlTranslateProvider>
+    </UnsupportedElementRegistryContext.Provider>
   );
 }
 

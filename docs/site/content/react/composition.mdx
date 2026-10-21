@@ -67,12 +67,12 @@ You can place optional chrome anywhere inside `Root`. Optional chrome includes t
 
 ### Root props
 
-The editor reads construction props when it creates the instance. Changes to `document`, `fonts`, or `imageDecodePort` remount the editor. Changes to `author`, `locale`, `mode`, `translate`, `zoom`, `zoomMode`, or the locale catalog apply without a remount. These changes preserve edits, caret position, and undo history.
+The editor reads construction props when it creates the instance. Changes to `document` or `imageDecodePort` remount the editor. Changes to `fonts`, `author`, `locale`, `mode`, `translate`, `zoom`, `zoomMode`, or the locale catalog apply without a remount. These changes preserve edits, caret position, and undo history.
 
 | Prop | Type | Description |
 | --- | --- | --- |
 | `document` | `DocumentSource` | Loads DOCX bytes, `'blank'`, or a `DocumentHandle`. An identity change remounts the editor. |
-| `fonts` | `FontConfiguration \| FontConfigurationFragment \| FontResolver` | Supplies font bytes or a resolver. An identity change remounts the editor. |
+| `fonts` | `FontConfiguration \| FontConfigurationFragment \| FontResolver` | Supplies font bytes or a resolver. An identity change replaces the fonts without a remount. |
 | `author` | `string` | Sets the author for later comments, replies, and tracked changes. Changes apply without a remount. |
 | `locale` | `string` | Regional date input and generated document labels. Defaults to `en-US`; updates without a remount. |
 | `mode` | `'edit' \| 'view' \| 'suggesting'` | Sets the editing mode. When omitted, `w:trackRevisions` can select suggesting mode. |
@@ -419,7 +419,7 @@ With `overlay`, the indicator moves onto the first page once the first pages of 
 </div>
 ```
 
-Children replace the whole first screen, and the first page then shows `indicator`, or the packaged spinner without it. `<DocxEditor loadingIndicator={...} />` passes its value to `indicator`.
+Children replace the whole first screen. While the remaining pages lay out, the space below the laid-out pages shows `indicator`, or the packaged spinner without it. `<DocxEditor loadingIndicator={...} />` passes its value to `indicator`.
 
 Use `DocxEditor.Loading.Spinner` with `className` to style the packaged spinner. If you conditionally mount content, use `snapshot().isLoading`. Do not use `isOpening` for that condition. `DocxEditor.Content` must remain mounted while the scheduled open completes.
 

@@ -28,7 +28,11 @@ export {
   type DocumentCollaborationHandle,
   type DocumentCollaborationSession,
 } from './document-session.ts';
-export { prepareCollaborationServerDocument } from './server-document.ts';
+export {
+  createCollaborationState,
+  prepareCollaborationServerDocument,
+  type CreateCollaborationStateOptions,
+} from './server-document.ts';
 export {
   checkCollaborationRoomGeneration,
   compactCollaborationState,
@@ -52,6 +56,11 @@ export {
   type CollaborationResourceUsage,
 } from './resource-usage.ts';
 export { CollaborationSchemaError } from './errors.ts';
+export {
+  CollaborationUndoGroupError,
+  type CollaborationUndoGroup,
+  type CollaborationUndoGroupErrorCode,
+} from './document-undo-group.ts';
 export {
   DOCUMENT_COLLABORATION_VERSIONS,
   assertDocumentCollaborationCompatibility,

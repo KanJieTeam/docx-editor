@@ -1,3 +1,4 @@
+import type { UnsupportedElementRule } from '../layout/unsupported-content-types.ts';
 import type {
   RevisionMarkupOptions,
   RevisionMarkupChromeHandlers,
@@ -142,6 +143,8 @@ export interface DocxEditorConfig {
    * the proposed view still marks surviving insertions.
    */
   revisionStyles?: RevisionStyles;
+  /** Ordered unsupported-content registrations; the first matching rule reserves a layout box. */
+  unsupportedElementRules?: readonly UnsupportedElementRule[];
   /** Initial local revision presentation and tracking preferences. */
   revisionMarkup?: RevisionMarkupOptions;
   /** Initial review projection. Markup modes require a review module. */
@@ -335,6 +338,18 @@ export interface AttachOptions {
  * need. Production adapters program against `Editor` for everything else.
  */
 export interface DocxEditorInstance extends Editor {
+  /**
+   * Replace host font resources without replacing the document or its edit history.
+   * Old resolution is cancelled. Existing host faces are removed before the new
+   * resolver runs; no answer keeps the bounded fallback. Document-embedded faces
+   * remain independent of host fonts. Failures report through `onFontError`.
+   *
+   * The session, selection, undo, protection, and collaboration state stay intact.
+   * Throws after `destroy()`. This does not grant permission to load native fonts.
+   * @public
+   */
+  setFonts(fonts: DocxEditorConfig['fonts']): Promise<void>;
+
   /** Bumps on mount, detach, destroy, and document reload — guards async image intents. */
   readonly mountGeneration: number;
   /**
@@ -570,6 +585,8 @@ export interface DocxEditorInstance extends Editor {
    * of calling it. Call it directly from headless and non-React hosts.
    */
   setRevisionStyles(styles: RevisionStyles): void;
+  /** Replace registrations while preserving document edits and undo history. */
+  setUnsupportedElementRules(rules: readonly UnsupportedElementRule[]): void;
   /** Merge local preferences and emit revisionMarkupChange after a change.
    * Invalid settings throw TypeError without changing the previous settings.
    */

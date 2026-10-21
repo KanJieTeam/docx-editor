@@ -351,3 +351,26 @@ Semantic layout SHALL resolve `w:autoSpaceDE` and `w:autoSpaceDN` through the pa
 - **WHEN** the automatic-spacing hook returns an unavailable or invalid metric
 - **THEN** the boundary receives no invented gap
 - **AND** measurers without the hook retain the proportional fallback
+
+### Requirement: Host font resource replacement
+
+The editor SHALL replace host font resources without replacing its document session, content, selection, or undo history. Replacement SHALL invalidate font-dependent measurement, paragraph layout, and paint. Document protection and shared collaboration data SHALL remain unchanged.
+
+#### Scenario: Resolved host fonts are removed
+
+- **WHEN** the host calls `setFonts(undefined)` after a document uses resolved host fonts
+- **THEN** the previous faces and shaping resources are removed and font-dependent caches are invalidated
+- **AND** bounded fallback measurement applies unless the document supplies embedded faces
+- **AND** unsaved edits and undo history remain available in the same session
+
+#### Scenario: A retired resolution completes
+
+- **WHEN** the host replaces fonts while a previous resolver is pending
+- **THEN** the previous request is cancelled
+- **AND** its late result or failure cannot replace the current font resources or publish a current error
+
+#### Scenario: Replacement fails
+
+- **WHEN** the current replacement resolver fails
+- **THEN** the editor reports the failure with its cause and keeps bounded fallback measurement
+- **AND** it does not restore fonts that the host removed

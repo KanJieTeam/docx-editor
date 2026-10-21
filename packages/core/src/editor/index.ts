@@ -420,6 +420,14 @@ export type {
   RevisionAuthorStyle,
   RevisionStyles,
 } from '../output/revision-presentation.ts';
+// The adapters render custom components over unsupported content through these.
+export {
+  observeUnsupportedElements,
+  type UnsupportedElement,
+  type UnsupportedElementHost,
+  type UnsupportedElementLayout,
+  type UnsupportedElementRule,
+} from '../output/unsupported-elements.ts';
 
 export type {
   TextFormFieldDialogSession,
@@ -453,6 +461,14 @@ export {
   withTabStop,
   trapTabWithin,
 } from './paragraph-dialog-fields.ts';
+export {
+  SPLIT_CELL_FALLBACK_MAX,
+  initialSplitCellCounts,
+  readSplitCellCounts,
+  type SplitCellCountProblem,
+  type SplitCellCounts,
+  type SplitCellLimits,
+} from './split-cell-dialog-model.ts';
 export { TEXT_FORM_FORMATS } from '../store/store/text-form-field-options.ts';
 
 export type {

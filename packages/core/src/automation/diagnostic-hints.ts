@@ -105,21 +105,31 @@ const HINTS: Readonly<Record<Exclude<DiagnosticCode, CollaborationDiagnosticCode
   'edit.tracked-deleted-text-only':
     'The tracked deletion or replacement covers only text that is already deleted, so nothing was applied. Include live text in the range, or insert next to the deleted text instead.',
   'edit.tracked-foreign-revision-unsupported':
-    "The tracked edit touches another author's pending change in a way this editor cannot record: their paragraph mark, formatting, move, or structural change, a link or content control inside their insertion, or, in a collaboration session, strikes over another author's pending insertion or deletion, and edits that start inside or right after one. Nothing was applied. Edit outside that change, or leave it for a person to review first.",
+    'The tracked edit touches a pending change of another author in a way this editor cannot record: their paragraph mark, formatting, move, or structural change, or a link or content control inside their insertion. Nothing was applied. Edit outside that change, or leave it for a person to review first. A formatting change that leaves the formatting unchanged has no review card but still counts; Accept All or Reject All over the story clears it.',
   'edit.tracked-own-pending-change':
-    'The tracked edit covers or borders your own pending change and would merge with that decision, so nothing was applied. Edit outside your pending change, or reject it and edit again.',
+    "The tracked edit covers or borders your own pending change and would merge with that decision, so nothing was applied. Read the proposed text with getReviewedText('Current'), then edit a range outside your pending change. To change your proposal itself, reject it and propose again.",
   'edit.picture-selected':
     'A picture is selected, so the new picture has no place to go and nothing was inserted. Place the caret in text next to the picture, then insert again.',
   'edit.cross-structure-join':
     'The edit would join paragraphs that live in different containers, such as two table cells. Edit each container separately.',
   'edit.indivisible-content':
-    'The edit would split content that must stay whole, such as an equation or a field. Select the whole item instead.',
+    'The edit would split content that must stay whole, such as an equation or a field, or a paragraph break would land inside an inline content control. Select the whole item, or make the edit outside the control.',
   'edit.field-structure':
     'The edit would break the structure of a field. Edit the field result as a whole, or remove the whole field.',
+  'edit.field-unsupported':
+    'The field type or instruction is not one the editing API writes. Fields that fetch, embed, link, run, or prompt always refuse. Use Page, NumPages, Ref, PageRef, NoteRef, Seq, StyleRef, Date, Time, or TOC with supported arguments. The instruction is written as text and never run.',
+  'edit.field-result-unsupported':
+    "The operation is not one a field result supports. A field result reads its text and takes insertText(text, 'Replace') with plain text; its other range members refuse. A result write also refuses when the result holds content other than plain runs. Read or write the result with those members only.",
+  'edit.ooxml-unsupported':
+    'The OOXML is not the one shape insertOoxml inserts: a Flat OPC package (pkg:package) whose document part holds one paragraph with exactly one inline m:oMath and, around it, plain runs. Other parts, relationships, images, fields, paragraph properties, display equations, and unknown elements refuse. Send only that shape.',
   'edit.section-mark':
     'The edit would remove a section break that holds page layout settings. Remove the section break on its own.',
   'edit.table-structure-unsupported':
-    'The table edit is not supported for this table shape, for example a table with merged cells. Change the merge first.',
+    'The table edit is not supported for this table shape, for example a legacy horizontal merge, a row that starts or ends with an authored gap, or cells that do not fit the column grid. Edit that row or table directly.',
+  'edit.table-merge-not-rectangle':
+    'The cells to merge do not form a rectangle, or the rectangle holds only one cell. Name the top-left and bottom-right cells of a rectangle that no merged cell crosses, then merge again.',
+  'edit.table-split-unsupported':
+    'The cell cannot split into these counts. A cell merged over several rows splits into a number of rows that divides its rows, each new column must keep the minimum column width, and a table without a column grid splits into a divisor of the columns the cell spans.',
   'edit.table-insert-refused':
     'A table cannot be inserted at the selection, for example inside a field or a locked content control. Move the caret first.',
   'edit.table-of-contents-refused':
@@ -135,7 +145,7 @@ const HINTS: Readonly<Record<Exclude<DiagnosticCode, CollaborationDiagnosticCode
   'edit.stale-target':
     'The operation addresses content that no longer exists, usually after a remote or undone change. Read the document again and retry.',
   'edit.invalid-argument':
-    'The command arguments are not valid for this target. Check the command type and its fields.',
+    'The arguments are not valid for this target, such as text with a character the call does not take, a value out of range, or a range that spans more than the call allows. Check each argument against the method or editor command you called.',
   'edit.resource-limit':
     'The edit would exceed a size or nesting limit. Split the change into smaller edits.',
   'edit.refresh-in-progress':

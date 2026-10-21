@@ -215,6 +215,8 @@ export {
   ContextMenuDeleteTableRow,
   ContextMenuInsertColumnLeft,
   ContextMenuInsertColumnRight,
+  ContextMenuMergeCells,
+  ContextMenuSplitCell,
   ContextMenuInsertRowAbove,
   ContextMenuInsertRowBelow,
   ContextMenuRefreshToc,
@@ -383,6 +385,13 @@ export {
   type DocxEditorBookmarkDialogProps,
   type UseBookmarkDialogReturn,
 } from './editor/DocxEditorBookmark';
+export {
+  DocxEditorSplitCellDialog,
+  useSplitCellDialog,
+  type DocxEditorSplitCellDialogProps,
+  type SplitCellDialogFields,
+  type UseSplitCellDialogReturn,
+} from './editor/DocxEditorSplitCell';
 export { useBookmarks, type UseBookmarksReturn } from './editor/useBookmarks';
 
 export {
@@ -637,3 +646,13 @@ export type {
   RevisionMarkupDialogSession,
   RevisionMarkupChromeHandlers,
 } from '@docx-editor.dev/core/editor';
+
+export type {
+  UnsupportedElement,
+  UnsupportedElementLayout,
+  UnsupportedElementRule,
+} from '@docx-editor.dev/core/editor';
+export {
+  DocxEditorUnsupportedElement,
+  type DocxEditorUnsupportedElementProps,
+} from './editor/DocxEditorUnsupportedElement';

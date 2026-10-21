@@ -26,6 +26,8 @@ import {
   type JournalCoverageFixture,
 } from './canonical-primitive-journal-coverage-support.ts';
 import { readOoxmlPart, type OoxmlPart } from '../package/ooxml-tree.ts';
+import { readEquationSnippet } from '../store/equation-snippet.ts';
+import { equationPackage, X_SQUARED } from './equation-snippet-fixtures.ts';
 
 const TWO_P =
   '<w:p><w:r><w:t>Hello</w:t></w:r></w:p><w:p><w:r><w:t>World</w:t></w:r></w:p><w:sectPr/>';
@@ -308,6 +310,13 @@ export function authorableCoverageFixtures(): JournalCoverageFixture[] {
       offset: 5,
       field: 'PAGE',
     })),
+    story('insertComplexField', plainDoc(), (store) => ({
+      op: 'insertComplexField',
+      paragraphId: firstParagraphId(store),
+      offset: 5,
+      instruction: 'REF _Ref1 \\h',
+      revision: { author: 'Ada', date: '2026-01-01T00:00:00Z' },
+    })),
     story('setListLevel', listDoc(), (store) => ({
       op: 'setListLevel',
       paragraphId: firstParagraphId(store),
@@ -480,6 +489,20 @@ export function authorableCoverageFixtures(): JournalCoverageFixture[] {
     story('deleteTableColumn', zipDoc({ body: TABLE }), (store) => {
       const ids = tableIds(store);
       return { op: 'deleteTableColumn', tableId: ids.tableId, gridColumnId: ids.gridColIds[1]! };
+    }),
+    story('mergeTableCells', zipDoc({ body: TABLE }), (store) => {
+      const ids = tableIds(store);
+      return { op: 'mergeTableCells', tableId: ids.tableId, cellIds: ids.cellIds };
+    }),
+    story('splitTableCell', zipDoc({ body: TABLE }), (store) => {
+      const ids = tableIds(store);
+      return {
+        op: 'splitTableCell',
+        tableId: ids.tableId,
+        cellId: ids.cellIds[0]!,
+        rows: 2,
+        columns: 2,
+      };
     }),
     story('setTableColumnWidths', zipDoc({ body: TABLE }), (store) => {
       const ids = tableIds(store);
@@ -740,6 +763,31 @@ export function authorableCoverageFixtures(): JournalCoverageFixture[] {
       return {
         op: 'refreshFieldResults',
         updates: [{ paragraphId: paragraphIds(store)[1]!, fieldNodeId: beginId, text: 'new' }],
+      };
+    }),
+    story('setFieldResult', zipDoc({ body: REF_FIELD_BODY }), (store) => {
+      let beginId: string | undefined;
+      walkNodes(store.bodyStore().part.root, (node) => {
+        if (beginId === undefined && node.kind === 'fldChar') beginId = node.id;
+      });
+      if (beginId === undefined) throw new Error('missing field begin fldChar');
+      return {
+        op: 'setFieldResult',
+        paragraphId: paragraphIds(store)[1]!,
+        fieldNodeId: beginId,
+        text: 'written',
+      };
+    }),
+    story('insertEquation', plainDoc(), (store) => {
+      const read = readEquationSnippet(equationPackage(`<w:r><w:t>a</w:t></w:r>${X_SQUARED}`));
+      if (!read.ok) throw new Error(read.reason);
+      return {
+        op: 'insertEquation',
+        paragraphId: firstParagraphId(store),
+        offset: 2,
+        nodes: read.snippet.nodes,
+        length: read.snippet.length,
+        revision: { author: 'Ada', date: '2026-01-01T00:00:00Z' },
       };
     }),
     story(

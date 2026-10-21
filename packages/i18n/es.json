@@ -8,6 +8,7 @@
     "dismiss": "Descartar"
   },
   "disabledReason": {
+    "contentLocked": "Este contenido está bloqueado",
     "editorNotReady": "El editor no está listo",
     "notWired": "Este control no está conectado a un comando del editor",
     "viewing": "Este documento está abierto en modo de lectura",
@@ -23,9 +24,20 @@
     "noCommentDraftView": "Aquí no se pueden añadir comentarios",
     "mergeUnsupported": "No se admite combinar celdas",
     "splitUnsupported": "No se admite dividir celdas",
+    "mergeNeedsRectangle": "Selecciona dos o más celdas que formen un rectángulo para combinarlas",
+    "mergeNeedsSelection": "Selecciona dos o más celdas para combinarlas",
+    "splitNeedsOneCell": "Selecciona una celda para dividirla",
+    "splitRowsNotDivisor": "Una celda combinada solo se divide en un número de filas que divida exactamente sus filas",
+    "cellTooNarrow": "La celda es demasiado estrecha para dividirla en tantas columnas",
+    "splitNeedsGrid": "Esta tabla no tiene cuadrícula de columnas, así que la celda solo se divide en un número de columnas que divida exactamente las que abarca",
+    "cellHasRevision": "Estas celdas tienen un cambio con seguimiento. Acéptalo o recházalo primero.",
+    "cellStructureSuggesting": "Desactiva las sugerencias para combinar o dividir celdas. Estos cambios no se pueden sugerir.",
+    "legacyMerge": "Esta tabla usa un tipo antiguo de celda combinada que no se puede cambiar aquí",
+    "tableGridUnplaceable": "Esta tabla tiene una celda que no encaja en su cuadrícula de columnas",
     "imageSuggesting": "Los cambios de imagen no están disponibles en modo de sugerencias",
     "equationSourceFormatting": "La edición lineal perdería el formato de esta ecuación",
-    "equationSuggesting": "Los cambios de ecuación no están disponibles en modo de sugerencias",
+    "equationSuggesting": "La edición de ecuaciones no está disponible en modo de sugerencias",
+    "equationSuggestingDisplay": "En modo de sugerencias, quite el bloque de ecuaciones completo en lugar de una sola ecuación",
     "invalidValue": "Este valor no es válido para el comando",
     "unavailable": "Este comando no está disponible",
     "bodyOnlySectionBreak": "Los saltos de sección van en el cuerpo del documento.",
@@ -437,6 +449,13 @@
       "refused": "No se pudo cambiar el marcador.",
       "duplicates": "{count, plural, one {# lugar más usa este nombre.} other {# lugares más usan este nombre.}} Los vínculos e Ir a usan el primero.",
       "keepFirst": "Conservar el primero"
+    },
+    "splitCell": {
+      "columns": "Número de columnas",
+      "rows": "Número de filas",
+      "range": "Escribe un número entero del 1 al {max}",
+      "oneCell": "Divide en al menos dos celdas",
+      "submit": "Dividir"
     }
   },
   "comments": {

@@ -2,7 +2,12 @@ import { textboxInsertionRefusal } from './textbox-commands.ts';
 import { tocAtPosition } from './surface-toc-ranges.ts';
 import { formsProtectionRefusal } from '../store/store/tree-op-content-controls.ts';
 import { settingsPartOf } from '../store/package/note-properties.ts';
-import { commandProtectionRefusal, FORMS_WRITE_REASON } from './command-protection.ts';
+import {
+  commandProtectionRefusal,
+  contentLockPolicyFor,
+  FORMS_WRITE_REASON,
+} from './command-protection.ts';
+import { contentLockFormatRefusal } from './content-lock-format-refusal.ts';
 // Snapshot derivations for `createDocxEditor` (editor seam).
 //
 // The reads that turn a mounted surface into contract values: run formatting, page setup,
@@ -32,6 +37,9 @@ export type CommandGate =
   | { ok: true; tablePlan?: import('./table-command-plan.ts').TableCommandPlan }
   | { ok: false; refusal: Exclude<ExecResult, { ok: true }> };
 import { tableContextAt } from '@docx-editor.dev/core/layout';
+import { tableAnchorAt } from '../layout/semantic-cell-selection.ts';
+import { splitCellLimits } from '../store/store/tree-op-table-split.ts';
+import { SUGGESTING_CELL_STRUCTURE_REFUSAL } from './table-cell-structure-plan.ts';
 import {
   isTableEditorCommand,
   planTableCommand,
@@ -268,6 +276,14 @@ export function tableCommandState(
   if (plan.ok && plan.ops.some((op) => formsProtectionRefusal(input.part, settings, op))) {
     plan = { ok: false, code: 'locked', reason: FORMS_WRITE_REASON };
   }
+  // Asked here too, so chrome greys out instead of offering a press the surface refuses.
+  if (
+    plan.ok &&
+    surface.editingMode() === 'suggest' &&
+    (command.type === 'mergeCells' || command.type === 'splitCell')
+  ) {
+    plan = { ok: false, code: 'unsupported', reason: SUGGESTING_CELL_STRUCTURE_REFUSAL };
+  }
   return plan.ok
     ? { can: { ok: true }, plan }
     : { can: { ok: false, code: plan.code, reason: plan.reason }, plan };
@@ -334,6 +350,8 @@ export function gateCommand(
   }
   const protection = support.mutating ? commandProtectionRefusal(command, surface) : null;
   if (protection) return { ok: false, refusal: protection };
+  const locked = contentLockFormatRefusal(command, surface, contentLockPolicyFor(surface));
+  if (locked) return { ok: false, refusal: locked };
   if (command.type === 'insertTextBox') {
     const refusal = textboxInsertionRefusal(surface);
     return refusal ? { ok: false, refusal } : { ok: true };
@@ -633,6 +651,18 @@ export function tableContextOf(surface: PaginatedSurface | null): TableContext |
     rowIndex: cells ? cells.rows.from : context.rowIndex,
     columnIndex: cells ? cells.columns.from : context.columnIndex,
   };
+}
+
+/** How far the cell at the caret splits, for a split dialog; null when it does not split. */
+export function splitCellConfigOf(
+  surface: PaginatedSurface | null
+): { maxRows: number; maxCols: number } | null {
+  if (!surface) return null;
+  const input = buildTableCommandPlannerInput({ type: 'splitCell', rows: 1, cols: 2 }, surface);
+  const anchor = tableAnchorAt(input.layout, input.selection.head.paragraphId, input.cellSelection);
+  if (!anchor || anchor.cellIds.length > 1) return null;
+  const limits = splitCellLimits(input.part, anchor.tableId, anchor.cellId);
+  return limits ? { ...limits } : null;
 }
 
 /** Half-point reshape of `snapshot().formatting` for `getSelectionFormatting`. */
