@@ -1,3 +1,4 @@
+import type { TextMeasurer } from './text-measurer.ts';
 // OOXML inter-script advances. Source text and UTF-16 model offsets never change.
 // autoSpaceDN/DE inherit through the ordinary paragraph cascade and default to true.
 import type { CjkParagraphTypography } from './cjk-typography.ts';
@@ -88,7 +89,8 @@ function lastBase(text: string): string {
 export function automaticTextGap(
   before: TextBoundary,
   after: TextBoundary,
-  policy: CjkParagraphTypography
+  policy: CjkParagraphTypography,
+  measurer?: Pick<TextMeasurer, 'automaticTextSpacingGap'>
 ): number {
   if (!ordinaryText(before) || !ordinaryText(after)) return 0;
   const left = script(lastBase(before.text));
@@ -103,6 +105,12 @@ export function automaticTextGap(
         : true
   )
     return 0;
+  if (measurer?.automaticTextSpacingGap) {
+    const gap = measurer.automaticTextSpacingGap(before.style);
+    return gap !== undefined && Number.isFinite(gap) && gap >= 0 && gap <= before.style.fontSizePt
+      ? gap
+      : 0;
+  }
   // A relative inter-script advance, never a document-specific point correction.
   // Twenty percent is also used by Writer's inter-script spacing implementation.
   const em = Math.min(before.style.fontSizePt, after.style.fontSizePt);
@@ -118,15 +126,17 @@ interface SourceTextBoundary extends TextBoundary {
 export function automaticTextSpacingAdvance(
   before: SourceTextBoundary | undefined,
   current: SourceTextBoundary,
-  policy: CjkParagraphTypography
+  policy: CjkParagraphTypography,
+  measurer?: Pick<TextMeasurer, 'automaticTextSpacingGap'>
 ): number {
-  let gap = before?.end === current.start ? automaticTextGap(before, current, policy) : 0;
+  let gap = before?.end === current.start ? automaticTextGap(before, current, policy, measurer) : 0;
   let previousBase = '';
   for (const character of current.text) {
     gap += automaticTextGap(
       { ...current, text: previousBase },
       { ...current, text: character },
-      policy
+      policy,
+      measurer
     );
     if (!/^\p{M}$/u.test(character)) previousBase = character;
   }
@@ -142,7 +152,8 @@ export function automaticLineTextGap(
   piece: FieldAwarePiece,
   text: string,
   faceStyle: ResolvedRunStyle,
-  policy: CjkParagraphTypography
+  policy: CjkParagraphTypography,
+  measurer?: Pick<TextMeasurer, 'automaticTextSpacingGap'>
 ): number {
   const previous = line.spans.at(-1);
   if (
@@ -155,7 +166,8 @@ export function automaticLineTextGap(
   return automaticTextGap(
     { ...previous, style: styleForFontSlot(previous.style, previous.fontSlot) },
     { ...piece, text, style: faceStyle },
-    policy
+    policy,
+    measurer
   );
 }
 

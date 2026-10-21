@@ -398,7 +398,7 @@ export function paragraphContentWidthsPt(
       // the trailing spaces it hangs are priced on their own.
       const ink = withoutTrailingSpaces(candidate);
       const current = { ...piece, start, text: candidate, style, end: piece.start + to };
-      const gap = automaticTextSpacingAdvance(previousText, current, typography);
+      const gap = automaticTextSpacingAdvance(previousText, current, typography, measurer);
       previousText = current;
       segment += gap;
       const full = measure(candidate);

@@ -2,13 +2,15 @@
   "impact": "compatible",
   "fields": [],
   "before": "East Asian and Latin-letter or digit boundaries use their natural text advances.",
-  "after": "Supported boundaries use automatic layout advances unless paragraph properties disable them.",
-  "reason": "Only derived layout changes. Shared nodes, canonical UTF-16 offsets, operations, and package serialization remain unchanged.",
+  "after": "Supported boundaries use automatic advances from resolved font metrics unless paragraph properties disable them.",
+  "reason": "Only derived layout changes. Shared nodes, canonical UTF-16 offsets, operations, and package serialization remain unchanged. The optional measurer hook adds no document operations.",
   "tests": [
     "packages/core/src/layout/__tests__/cjk-automatic-spacing.test.ts",
     "packages/core/src/layout/__tests__/cjk-line-breaking.test.ts",
     "packages/core/src/layout/__tests__/cjk-followups.test.ts",
-    "packages/pro/src/collaboration/__tests__/cjk-spacing-editors.test.ts"
+    "packages/pro/src/collaboration/__tests__/cjk-spacing-editors.test.ts",
+    "packages/core/src/layout/__tests__/sfnt-auto-spacing-metrics.test.ts",
+    "packages/core/src/layout/__tests__/cjk-auto-spacing-font-port.test.ts"
   ],
   "changeset": "cjk-automatic-text-spacing",
   "migration": null

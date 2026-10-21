@@ -1,3 +1,4 @@
+import { createResolvedCjkAutoSpacingGapMetric } from './sfnt-auto-spacing-metrics.ts';
 import { isRunKerningEnabled } from './run-kerning.ts';
 import { runLigatureFeatureKey } from './run-ligatures.ts';
 import { createShapedLineMetrics } from './shaped-line-metrics.ts';
@@ -222,6 +223,8 @@ export function createShapedMeasurer(
     return font;
   };
 
+  const automaticTextSpacingGap = createResolvedCjkAutoSpacingGapMetric(resolveFontCached);
+
   const widthsFor = (
     font: ResolvedFont,
     halfPoints: number,
@@ -285,6 +288,7 @@ export function createShapedMeasurer(
   const strikeoutByFont = new WeakMap<ResolvedFont, StrikeoutStrokeEm | null>();
 
   return {
+    automaticTextSpacingGap,
     hasResolvedFont(style) {
       return resolveFontCached(style) !== null;
     },

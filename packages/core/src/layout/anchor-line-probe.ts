@@ -109,7 +109,8 @@ export function anchorLineStartsByModelOffset(input: {
           ? automaticTextGap(
               previousText,
               { ...piece, text: candidate, style },
-              input.typography ?? DEFAULT_CJK_TYPOGRAPHY
+              input.typography ?? DEFAULT_CJK_TYPOGRAPHY,
+              measurer
             )
           : 0;
       let width =

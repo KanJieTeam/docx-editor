@@ -1,5 +1,5 @@
 ---
-"@docx-editor.dev/core": patch
+'@docx-editor.dev/core': minor
 ---
 
-Honor automatic spacing between East Asian text and Latin letters or digits without changing source text.
+Honor automatic CJK spacing from resolved font metrics without changing source text.

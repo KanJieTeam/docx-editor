@@ -1337,7 +1337,6 @@ export function breakParagraph(
         consumed = boundary;
         continue;
       }
-
       // Measured as DRAWN: `w:caps` changes the glyphs, so measuring the source text
       // would size the line for characters the reader never sees. Note marks may reserve
       // a wider measureText (eachPage) while painting the real digits.
@@ -1350,7 +1349,8 @@ export function breakParagraph(
           piece,
           text,
           faceStyle,
-          typography
+          typography,
+          measurer
         );
       const measureSource = piece.measureText ?? candidate;
       let width = piece.noteSeparator

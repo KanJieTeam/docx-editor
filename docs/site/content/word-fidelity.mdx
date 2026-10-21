@@ -82,7 +82,9 @@ Control properties hold default formatting when their run properties contain onl
 
 #### Automatic inter-script spacing
 
-Paragraphs use automatic spacing between East Asian text and Latin letters or ASCII digits by default. `w:autoSpaceDE` and `w:autoSpaceDN` control the two boundary types through the paragraph style cascade. An authored false disables the corresponding spacing. The advance is 20% of the smaller font size; source text and UTF-16 offsets remain unchanged. Line fitting, caret positions, and paint use the same advance across source run boundaries. Explicit character spacing, scaled or shifted text, equations, projected fields, and right-to-left runs keep their existing advances. Vertical Japanese layout and all legacy Word compatibility rules remain outside this subset.
+Paragraphs use automatic spacing between East Asian text and Latin letters or ASCII digits by default. `w:autoSpaceDE` and `w:autoSpaceDN` control the two boundary types through the paragraph style cascade. An authored false disables the corresponding spacing. Shaped measurers derive each gap from the preceding resolved face's average character width and font size. Source text and UTF-16 offsets remain unchanged. Line fitting, table widths, caret positions, and paint use the same advance across source run boundaries.
+
+The optional `TextMeasurer.automaticTextSpacingGap` hook supplies this derived metric. An unavailable or invalid metric adds no gap. Canvas and custom measurers without this hook retain 20% of the smaller adjacent font size. Mixed-size boundaries can have different gaps in each direction. Explicit character spacing, scaled or shifted text, equations, projected fields, and right-to-left runs keep their existing advances. Vertical Japanese layout and all legacy Word compatibility rules remain outside this subset.
 
 #### Tabs and paragraph keeps
 
