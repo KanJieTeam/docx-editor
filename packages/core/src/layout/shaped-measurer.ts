@@ -1,4 +1,5 @@
 import { sfntScriptSizeEm, type ScriptSizeEm } from './sfnt-script-size.ts';
+import { createScriptFamilyAliasQualifier } from './script-family-alias.ts';
 import {
   isSingleScriptFace,
   layoutGlyphSizingOf,
@@ -313,6 +314,7 @@ export function createShapedMeasurer(
   const strikeoutByFont = new WeakMap<ResolvedFont, StrikeoutStrokeEm | null>();
 
   const scriptSizes = new WeakMap<ResolvedFont, ScriptSizeEm | null>();
+  const isScriptFamilyAlias = createScriptFamilyAliasQualifier();
   const scriptGlyphSizing: TextMeasurer['scriptGlyphSizing'] =
     options.scriptGlyphSizing === 'font-metrics'
       ? (text, style, scope) => {
@@ -325,8 +327,9 @@ export function createShapedMeasurer(
           )
             return undefined;
           const font = resolveFontCached(style);
-          if (!font || font.substitution) return undefined;
+          if (!font) return undefined;
           try {
+            if (font.substitution && !isScriptFamilyAlias(font, style)) return undefined;
             const run = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
             if (!scriptFaceMatches(style, font, run)) throw new ScriptGlyphSizingError();
             if (!isSingleScriptFace(run, font)) return undefined;

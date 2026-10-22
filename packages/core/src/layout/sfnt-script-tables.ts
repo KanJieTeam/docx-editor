@@ -6,6 +6,10 @@ const SFNT_SIGNATURES = new Set([0x00010000, 0x4f54544f, 0x74727565]);
 export interface SfntTables {
   readonly view: DataView;
   table(tag: number, minimumLength: number): number | null;
+  tableBounds(
+    tag: number,
+    minimumLength: number
+  ): Readonly<{ offset: number; length: number }> | null;
 }
 
 export function sfntTables(bytes: Uint8Array, faceIndex: number): SfntTables | null {
@@ -23,21 +27,26 @@ export function sfntTables(bytes: Uint8Array, faceIndex: number): SfntTables | n
   if (base + 12 > length || !SFNT_SIGNATURES.has(view.getUint32(base))) return null;
   const count = view.getUint16(base + 4);
   if (count > MAX_TABLE_RECORDS || base + 12 + count * 16 > length) return null;
+  const tableBounds = (
+    tag: number,
+    minimumLength: number
+  ): Readonly<{ offset: number; length: number }> | null => {
+    let found: Readonly<{ offset: number; length: number }> | null = null;
+    for (let index = 0; index < count; index++) {
+      const record = base + 12 + index * 16;
+      if (view.getUint32(record) !== tag) continue;
+      // Ambiguous table records cannot define one trusted metric.
+      if (found !== null) return null;
+      const offset = view.getUint32(record + 8);
+      const tableLength = view.getUint32(record + 12);
+      if (tableLength < minimumLength || offset + tableLength > length) return null;
+      found = Object.freeze({ offset, length: tableLength });
+    }
+    return found;
+  };
   return Object.freeze({
     view,
-    table(tag: number, minimumLength: number): number | null {
-      let found: number | null = null;
-      for (let index = 0; index < count; index++) {
-        const record = base + 12 + index * 16;
-        if (view.getUint32(record) !== tag) continue;
-        // Ambiguous table records cannot define one trusted metric.
-        if (found !== null) return null;
-        const offset = view.getUint32(record + 8);
-        const tableLength = view.getUint32(record + 12);
-        if (tableLength < minimumLength || offset + tableLength > length) return null;
-        found = offset;
-      }
-      return found;
-    },
+    table: (tag: number, minimumLength: number) => tableBounds(tag, minimumLength)?.offset ?? null,
+    tableBounds,
   });
 }

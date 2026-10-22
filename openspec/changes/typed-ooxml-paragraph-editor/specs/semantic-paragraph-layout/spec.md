@@ -349,6 +349,13 @@ The engine SHALL retain the legacy 65% script factor unless the host selects `fo
 - **THEN** the complete piece retains the legacy factor
 - **AND** generated text retains the legacy factor without qualification
 
+#### Scenario: A translated family name uses the admitted face
+
+- **WHEN** a substitution changes only the family name without changing weight, style, or line metrics
+- **AND** both family names occur in the admitted face's supported, bounded name table
+- **THEN** ordinary source text can use that face's script metrics
+- **AND** font registration, substitution records, and authored family names stay unchanged
+
 #### Scenario: Qualified source text splits across lines
 
 - **WHEN** a complete ordinary source piece qualifies through one admitted face

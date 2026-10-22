@@ -155,7 +155,7 @@ export const wordFeatures: WordFeature[] = [
     id: 'text.sub-superscript',
     name: 'Subscript & superscript',
     notes:
-      'Nonzero authored or inherited baseline positions contribute translated run extents to automatic and minimum line spacing, including positioned subscript and superscript text. Exact line spacing retains its authored height.',
+      'Nonzero authored or inherited baseline positions contribute translated run extents to automatic and minimum line spacing, including positioned subscript and superscript text. Exact line spacing retains its authored height. Opt-in font-derived script sizes accept verified same-face family aliases. Font fallback and weight or style changes retain legacy sizing.',
     category: 'text',
     editing: 'full',
     rendering: 'full',
