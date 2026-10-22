@@ -1616,6 +1616,7 @@ function* layoutBlocksPass(
         displayMode,
         ...(authorFilter ? { revisionAuthorFilter: authorFilter } : {}),
         ...inlineDrawingFlow(options.inlineDrawingLayout, hostedStory),
+        // Line placement below clips these pictures to the sheet; frames keep the flow clip.
         ...(!entry.frame ? { deferInlineDrawingHorizontalClip: true } : {}),
         contentLeft: 0,
         contentRight:
@@ -2664,14 +2665,6 @@ function* layoutBlocksPass(
       }));
       // Word aligns inside the passage a float leaves the line, not the page margins.
       const measure = lineAlignmentMeasure(pendingLine, columnX, lineIndent, lineAvailableWidth);
-      // Use physical paper horizontally, retaining the body vertical clip.
-      const paperClip = pageContentClip();
-      const pageClip = Object.freeze({
-        x: paperClip.x,
-        y: 0,
-        width: paperClip.width,
-        height: contentHeight(),
-      });
       const placedDrawings = pendingLine.drawings.map((drawing) =>
         Object.freeze({ ...shiftInlineDrawingRecord(drawing, penX, cursorY), paragraphId })
       );
@@ -2697,10 +2690,16 @@ function* layoutBlocksPass(
           lineAlignOffset(placedSpans, aligned, alignment, measure.available, measure.used)
       );
       const { spans: alignedSpans, offset: alignOffset } = content;
-      // Clip where alignment put each picture, not where the line's fill left it.
-      const alignedDrawings = content.drawings.map((drawing) =>
-        clipInlineDrawingRecordToRegion(drawing, pageClip)
-      );
+      // Clip where alignment put each picture, not where the line's fill left it: physical
+      // paper horizontally, retaining the body vertical clip. Most lines carry no picture.
+      let alignedDrawings = content.drawings;
+      if (alignedDrawings.length > 0) {
+        const paperClip = pageContentClip();
+        const pageClip = { x: paperClip.x, y: 0, width: paperClip.width, height: contentHeight() };
+        alignedDrawings = alignedDrawings.map((drawing) =>
+          clipInlineDrawingRecordToRegion(drawing, pageClip)
+        );
+      }
       const record: LineRecord = {
         id: bodyLineId(paragraph.id, pendingLine.start, lineIndex),
         range: { paragraphId, start: pendingLine.start, end: pendingLine.end },

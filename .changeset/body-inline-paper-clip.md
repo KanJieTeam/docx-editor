@@ -2,4 +2,4 @@
 '@docx-editor.dev/core': patch
 ---
 
-Preserve body inline pictures across horizontal page margins. Crop them at the physical paper edges without changing their authored size.
+Inline pictures in the main document text that are wider than the text area extend into the left and right page margins instead of being cut at the text edge.

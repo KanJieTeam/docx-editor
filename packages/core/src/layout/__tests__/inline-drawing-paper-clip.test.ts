@@ -100,6 +100,12 @@ test('inline pictures retain visible margin content and crop only at the physica
   expect(cell.authoredWidth).toBe(170);
   expect(cell.paint.width).toBeLessThanOrEqual(100);
   expect(cell.paint.width).toBeGreaterThan(0);
+  // A negative indent past the paper edge crops at the edge, not at the text area.
+  const pastPaper = sample(100, -40);
+  expect(pastPaper.x).toBe(-40);
+  expect(pastPaper.paint.x).toBe(-20);
+  expect(pastPaper.paint.width).toBe(80);
+  expect(pastPaper.paint).toEqual(pastPaper.hit);
 });
 
 test('body paper clipping preserves vertical limits and frame-local clipping', () => {
