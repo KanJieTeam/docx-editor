@@ -143,6 +143,11 @@ export const MODE_RULES = {
 
 /** Rules that read compatibility options, so they need the parsed settings. */
 export const PROFILE_RULES = {
+  noColumnBalance: {
+    behavior: 'Fill text columns in source order without balancing a section',
+    source: 'ECMA-376 Part 4 §14.8.3.27 noColumnBalance',
+    applies: (p) => p.legacy.noColumnBalance === true,
+  },
   adjustLineHeightInTable: {
     behavior: 'Paragraphs in table cells snap to the section line grid',
     source: 'ECMA-376 Part 1 §17.15.3.1 adjustLineHeightInTable',

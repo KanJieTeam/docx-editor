@@ -26,6 +26,7 @@ const MODE_MATRIX = {
   anchorsLayOutInCell: 'modern',
   fixedTableContentEdgeOrigin: 'legacy',
   floatingTableContentOrigin: 'legacy',
+  floatingTableOverlapMovesLeft: 'modern',
   headerFooterAnchorsWrapText: 'modern',
   headerRowsKeepWithBody: 'modern',
   justifiedSpaceShrink: 'modern',
@@ -95,6 +96,7 @@ const PROFILE_MATRIX: Record<
   keyof typeof PROFILE_RULES,
   { options: string; on: readonly string[]; withoutOptions?: readonly string[] }
 > = {
+  noColumnBalance: { options: '<w:noColumnBalance/>', on: EVERY_MODE },
   adjustLineHeightInTable: { options: '<w:adjustLineHeightInTable/>', on: EVERY_MODE },
   doNotBreakWrappedTables: { options: '<w:doNotBreakWrappedTables/>', on: EVERY_MODE },
   fixedParagraphSpacing: { options: '<w:doNotUseHTMLParagraphAutoSpacing/>', on: EVERY_MODE },
