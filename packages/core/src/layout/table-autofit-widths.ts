@@ -273,21 +273,14 @@ export function paragraphContentWidthsPt(
   );
   // The bidi pass gives each piece the shaping and joining context line breaking measures with;
   // an unshaped complex-script word measures far wider than it paints.
-  const pieces = projectScriptGlyphSizing(
-    bidiPieces(
-      projected,
-      paragraphIsRtl(layoutInputs.props),
-      bidiSourceBoundaries(paragraph),
-      true
-    ),
-    paragraph.id,
-    measurer
-  );
+  const rtl = paragraphIsRtl(layoutInputs.props);
+  const ordered = bidiPieces(projected, rtl, bidiSourceBoundaries(paragraph), true);
+  const pieces = projectScriptGlyphSizing(ordered, paragraph.id, measurer);
   const { left, right, firstLine, hanging } = layoutInputs.indent;
   const tabs = withDefaultTabInterval(layoutInputs.tabStops, context.defaultTabStopPt);
   // Tab stops count from the leading indent, which is the right one in right-to-left text.
   // The line breaker clamps a negative leading indent at the content edge.
-  const leading = Math.max(0, paragraphIsRtl(layoutInputs.props) ? right : left);
+  const leading = Math.max(0, rtl ? right : left);
   // Where a tab at `at` lands: the next stop the paragraph states, else the default grid.
   const nextTabStop = (at: number): number => {
     for (const stop of tabs.stops)
