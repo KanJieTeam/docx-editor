@@ -14,7 +14,7 @@ import {
   autoSpacingCollectionFixture,
   autoSpacingSfntFixture,
 } from './fixtures/sfnt-auto-spacing-fixture.ts';
-import observations from './fixtures/cjk-auto-spacing-wps-metrics.json';
+import observations from './fixtures/cjk-auto-spacing-reference-metrics.json';
 
 const style = (fontSizePt = 14): ResolvedRunStyle => ({
   ...DEFAULT_RUN_STYLE,
@@ -108,14 +108,14 @@ test('resolved metric refuses missing faces invalid metrics and authored transfo
   ).toBeUndefined();
 });
 
-test('metadata fixture predictions retain all32 independent WPS gap observations and their original tolerance', () => {
+test('metadata fixture predictions retain all 32 reference gap observations and their original tolerance', () => {
   expect(observations.rows).toHaveLength(32);
   expect(observations.tolerancePt).toBe(0.2);
   for (const row of observations.rows) {
     const font = resolved(autoSpacingSfntFixture(row.averageWidth, row.unitsPerEm));
     const gap = createResolvedCjkAutoSpacingGapMetric(() => font)!(style(row.sizePt))!;
     expect(gap).toBeCloseTo(row.expectedGapPt, 12);
-    expect(Math.abs(gap - row.wpsAddedAdvancePt)).toBeLessThanOrEqual(observations.tolerancePt);
+    expect(Math.abs(gap - row.referenceAdvancePt)).toBeLessThanOrEqual(observations.tolerancePt);
   }
 });
 

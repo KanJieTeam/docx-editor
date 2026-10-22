@@ -350,7 +350,7 @@ Semantic layout SHALL resolve `w:autoSpaceDE` and `w:autoSpaceDN` through the pa
 
 - **WHEN** the automatic-spacing hook returns an unavailable or invalid metric
 - **THEN** the boundary receives no invented gap
-- **AND** measurers without the hook retain the proportional fallback
+- **AND** measurers without the hook add no reverse advance
 
 ### Requirement: Host font resource replacement
 

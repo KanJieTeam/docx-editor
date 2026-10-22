@@ -1,5 +1,5 @@
 ---
-'@docx-editor.dev/core': minor
+'@docx-editor.dev/core': patch
 ---
 
-Honor automatic CJK spacing without changing source text. Use one quarter of the East Asian font size before Latin letters or digits. Read reverse gaps only from the authored font. Keep the metric port internal and refuse substitute font averages.
+Add automatic spacing between East Asian text and Latin letters or digits.

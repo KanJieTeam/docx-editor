@@ -1,5 +1,5 @@
 {
-  "scope": "Numeric observations from independently exported public synthetic CJK spacing controls. They test derived gaps, not glyph advances or all Word versions.",
+  "scope": "Numeric observations from independently exported public synthetic CJK spacing controls. They test derived gaps, not glyph advances.",
   "tolerancePt": 0.2,
   "rows": [
     {
@@ -11,7 +11,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 5,
-      "wpsAddedAdvancePt": 5.040000000000006
+      "referenceAdvancePt": 5.040000000000006
     },
     {
       "case": "auto-ea20-western10-times-new-roman-on",
@@ -22,7 +22,7 @@
       "unitsPerEm": 2048,
       "averageWidth": 821,
       "expectedGapPt": 2.00439453125,
-      "wpsAddedAdvancePt": 1.918999999999997
+      "referenceAdvancePt": 1.918999999999997
     },
     {
       "case": "auto-ea20-western10-times-new-roman-on",
@@ -33,7 +33,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 5,
-      "wpsAddedAdvancePt": 5.040999999999997
+      "referenceAdvancePt": 5.040999999999997
     },
     {
       "case": "auto-ea20-western10-times-new-roman-on",
@@ -44,7 +44,7 @@
       "unitsPerEm": 2048,
       "averageWidth": 821,
       "expectedGapPt": 2.00439453125,
-      "wpsAddedAdvancePt": 2.040999999999997
+      "referenceAdvancePt": 2.040999999999997
     },
     {
       "case": "auto-ea20-western10-times-new-roman-on",
@@ -55,7 +55,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 5,
-      "wpsAddedAdvancePt": 4.917999999999992
+      "referenceAdvancePt": 4.917999999999992
     },
     {
       "case": "auto-ea20-western10-times-new-roman-on",
@@ -66,7 +66,7 @@
       "unitsPerEm": 2048,
       "averageWidth": 821,
       "expectedGapPt": 2.00439453125,
-      "wpsAddedAdvancePt": 2.0410000000000252
+      "referenceAdvancePt": 2.0410000000000252
     },
     {
       "case": "auto-ea20-western10-times-new-roman-on",
@@ -77,7 +77,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 5,
-      "wpsAddedAdvancePt": 5.039999999999992
+      "referenceAdvancePt": 5.039999999999992
     },
     {
       "case": "auto-ea20-western10-times-new-roman-on",
@@ -88,7 +88,7 @@
       "unitsPerEm": 2048,
       "averageWidth": 821,
       "expectedGapPt": 2.00439453125,
-      "wpsAddedAdvancePt": 1.9210000000000207
+      "referenceAdvancePt": 1.9210000000000207
     },
     {
       "case": "auto-ea10-western20-times-new-roman-on",
@@ -99,7 +99,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 2.5,
-      "wpsAddedAdvancePt": 2.3999999999999986
+      "referenceAdvancePt": 2.3999999999999986
     },
     {
       "case": "auto-ea10-western20-times-new-roman-on",
@@ -110,7 +110,7 @@
       "unitsPerEm": 2048,
       "averageWidth": 821,
       "expectedGapPt": 4.0087890625,
-      "wpsAddedAdvancePt": 4.080000000000005
+      "referenceAdvancePt": 4.080000000000005
     },
     {
       "case": "auto-ea10-western20-times-new-roman-on",
@@ -121,7 +121,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 2.5,
-      "wpsAddedAdvancePt": 2.519999999999996
+      "referenceAdvancePt": 2.519999999999996
     },
     {
       "case": "auto-ea10-western20-times-new-roman-on",
@@ -132,7 +132,7 @@
       "unitsPerEm": 2048,
       "averageWidth": 821,
       "expectedGapPt": 4.0087890625,
-      "wpsAddedAdvancePt": 4.081000000000003
+      "referenceAdvancePt": 4.081000000000003
     },
     {
       "case": "auto-ea10-western20-times-new-roman-on",
@@ -143,7 +143,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 2.5,
-      "wpsAddedAdvancePt": 2.399000000000001
+      "referenceAdvancePt": 2.399000000000001
     },
     {
       "case": "auto-ea10-western20-times-new-roman-on",
@@ -154,7 +154,7 @@
       "unitsPerEm": 2048,
       "averageWidth": 821,
       "expectedGapPt": 4.0087890625,
-      "wpsAddedAdvancePt": 3.9599999999999937
+      "referenceAdvancePt": 3.9599999999999937
     },
     {
       "case": "auto-ea10-western20-times-new-roman-on",
@@ -165,7 +165,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 2.5,
-      "wpsAddedAdvancePt": 2.519999999999996
+      "referenceAdvancePt": 2.519999999999996
     },
     {
       "case": "auto-ea10-western20-times-new-roman-on",
@@ -176,7 +176,7 @@
       "unitsPerEm": 2048,
       "averageWidth": 821,
       "expectedGapPt": 4.0087890625,
-      "wpsAddedAdvancePt": 4.199999999999989
+      "referenceAdvancePt": 4.199999999999989
     },
     {
       "case": "auto-ea14-western14-arial-on",
@@ -187,7 +187,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 3.5,
-      "wpsAddedAdvancePt": 3.479999999999997
+      "referenceAdvancePt": 3.479999999999997
     },
     {
       "case": "auto-ea14-western14-arial-on",
@@ -198,7 +198,7 @@
       "unitsPerEm": 2048,
       "averageWidth": 904,
       "expectedGapPt": 3.08984375,
-      "wpsAddedAdvancePt": 3.1200000000000045
+      "referenceAdvancePt": 3.1200000000000045
     },
     {
       "case": "auto-ea14-western14-arial-on",
@@ -209,7 +209,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 3.5,
-      "wpsAddedAdvancePt": 3.478999999999992
+      "referenceAdvancePt": 3.478999999999992
     },
     {
       "case": "auto-ea14-western14-arial-on",
@@ -220,7 +220,7 @@
       "unitsPerEm": 2048,
       "averageWidth": 904,
       "expectedGapPt": 3.08984375,
-      "wpsAddedAdvancePt": 3.1210000000000093
+      "referenceAdvancePt": 3.1210000000000093
     },
     {
       "case": "auto-ea14-western14-arial-on",
@@ -231,7 +231,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 3.5,
-      "wpsAddedAdvancePt": 3.4799999999999898
+      "referenceAdvancePt": 3.4799999999999898
     },
     {
       "case": "auto-ea14-western14-arial-on",
@@ -242,7 +242,7 @@
       "unitsPerEm": 2048,
       "averageWidth": 904,
       "expectedGapPt": 3.08984375,
-      "wpsAddedAdvancePt": 3.1200000000000045
+      "referenceAdvancePt": 3.1200000000000045
     },
     {
       "case": "auto-ea14-western14-arial-on",
@@ -253,7 +253,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 3.5,
-      "wpsAddedAdvancePt": 3.480000000000004
+      "referenceAdvancePt": 3.480000000000004
     },
     {
       "case": "auto-ea14-western14-arial-on",
@@ -264,7 +264,7 @@
       "unitsPerEm": 2048,
       "averageWidth": 904,
       "expectedGapPt": 3.08984375,
-      "wpsAddedAdvancePt": 3.1200000000000045
+      "referenceAdvancePt": 3.1200000000000045
     },
     {
       "case": "auto-ea14-western14-simsun-on",
@@ -275,7 +275,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 3.5,
-      "wpsAddedAdvancePt": 3.479999999999997
+      "referenceAdvancePt": 3.479999999999997
     },
     {
       "case": "auto-ea14-western14-simsun-on",
@@ -286,7 +286,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 3.5,
-      "wpsAddedAdvancePt": 3.601000000000006
+      "referenceAdvancePt": 3.601000000000006
     },
     {
       "case": "auto-ea14-western14-simsun-on",
@@ -297,7 +297,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 3.5,
-      "wpsAddedAdvancePt": 3.3589999999999947
+      "referenceAdvancePt": 3.3589999999999947
     },
     {
       "case": "auto-ea14-western14-simsun-on",
@@ -308,7 +308,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 3.5,
-      "wpsAddedAdvancePt": 3.600999999999999
+      "referenceAdvancePt": 3.600999999999999
     },
     {
       "case": "auto-ea14-western14-simsun-on",
@@ -319,7 +319,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 3.5,
-      "wpsAddedAdvancePt": 3.478999999999999
+      "referenceAdvancePt": 3.478999999999999
     },
     {
       "case": "auto-ea14-western14-simsun-on",
@@ -330,7 +330,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 3.5,
-      "wpsAddedAdvancePt": 3.4799999999999898
+      "referenceAdvancePt": 3.4799999999999898
     },
     {
       "case": "auto-ea14-western14-simsun-on",
@@ -341,7 +341,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 3.5,
-      "wpsAddedAdvancePt": 3.4810000000000088
+      "referenceAdvancePt": 3.4810000000000088
     },
     {
       "case": "auto-ea14-western14-simsun-on",
@@ -352,7 +352,7 @@
       "unitsPerEm": 256,
       "averageWidth": 128,
       "expectedGapPt": 3.5,
-      "wpsAddedAdvancePt": 3.4780000000000086
+      "referenceAdvancePt": 3.4780000000000086
     }
   ]
 }
