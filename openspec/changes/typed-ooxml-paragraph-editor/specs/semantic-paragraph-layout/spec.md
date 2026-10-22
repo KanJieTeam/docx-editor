@@ -338,3 +338,20 @@ The editor SHALL replace host font resources without replacing its document sess
 - **WHEN** the current replacement resolver fails
 - **THEN** the editor reports the failure with its cause and keeps bounded fallback measurement
 - **AND** it does not restore fonts that the host removed
+
+### Requirement: Bounded close-open demand fitting
+
+The layout engine SHALL share a measured ink gap across a qualified East Asian fullwidth closing-opening pair only when the line needs compression. Each cell SHALL retain its remaining half-width limit after earlier derived compression.
+
+#### Scenario: A qualified pair supplies two bounded bearings
+
+- GIVEN contiguous same-face East Asian punctuation with finite safe ink bounds and enabled source punctuation compression
+- WHEN a protected candidate exceeds the remaining line width
+- THEN the pair may use both remaining bearings within one measured ink gap
+- AND source text, ranges, and authored properties remain unchanged
+
+#### Scenario: An unqualified pair supplies no new seam
+
+- GIVEN disabled source punctuation kerning, missing East Asian defaults, incompatible styles, unresolved faces, or discontinuous ranges
+- WHEN a small deficit could fit one opening bearing
+- THEN the new pair path adds no compression seam

@@ -9,7 +9,10 @@ import { isCjk, type CjkParagraphBreaks } from './cjk-paragraph-breaks.ts';
 import { canHangCjkPunctuation } from './cjk-spacing.ts';
 import { formatRevisionOf } from './revision-projection.ts';
 import { withoutTrailingSpaces } from './trailing-spaces.ts';
-import { withLayoutDerivedSpacing } from './layout-derived-spacing.ts';
+import {
+  withLayoutDerivedSpacing,
+  layoutDerivedSpacingStyleForEditing,
+} from './layout-derived-spacing.ts';
 
 const OPENING = /^[〈《「『【〔〖〘〚（［｛]$/u;
 const CLOSING = /^[、。〉》」』】〕〗〙〛），．］｝]$/u;
@@ -150,7 +153,8 @@ function fitCjkOptically(
   candidates: readonly StyleSpanRecord[],
   available: number,
   measurer: TextMeasurer,
-  baselinePieces: readonly FieldAwarePiece[]
+  baselinePieces: readonly FieldAwarePiece[],
+  allowCloseOpenPairs: boolean
 ): CjkOpticalFit | undefined {
   const width = candidates.reduce((sum, candidate) => sum + candidate.box.width, 0);
   let deficit = line.width + width - available;
@@ -194,7 +198,10 @@ function fitCjkOptically(
     const after = current.span.text;
     let cell: Cell;
     let left: boolean;
-    if (OPENING.test(after) && isCjk(before.codePointAt(0)!) && !PUNCTUATION.test(before)) {
+    if (allowCloseOpenPairs && CLOSING.test(before) && OPENING.test(after)) {
+      cell = current;
+      left = true;
+    } else if (OPENING.test(after) && isCjk(before.codePointAt(0)!) && !PUNCTUATION.test(before)) {
       cell = current;
       left = true;
     } else if (
@@ -220,6 +227,82 @@ function fitCjkOptically(
         gap
       )
     );
+    // A qualified close/open pair owns two bearings but only one measured ink gap.
+    // Bound each cell independently, then share that gap; never count it twice.
+    if (
+      allowCloseOpenPairs &&
+      left &&
+      CLOSING.test(before) &&
+      OPENING.test(after) &&
+      previous.span.fontSlot === 'eastAsia' &&
+      current.span.fontSlot === 'eastAsia' &&
+      previous.span.range.paragraphId === current.span.range.paragraphId &&
+      previous.span.range.end === current.span.range.start
+    ) {
+      const a = layoutDerivedSpacingStyleForEditing(
+        styleForFontSlot(previous.span.style, previous.span.fontSlot)
+      );
+      const b = layoutDerivedSpacingStyleForEditing(
+        styleForFontSlot(current.span.style, current.span.fontSlot)
+      );
+      if (
+        a.characterSpacingPt === 0 &&
+        b.characterSpacingPt === 0 &&
+        a.horizontalScalePercent === 100 &&
+        b.horizontalScalePercent === 100 &&
+        a.shaping === undefined &&
+        b.shaping === undefined &&
+        measurer.hasResolvedFont?.(a) === true &&
+        measurer.hasResolvedFont?.(b) === true &&
+        a.fontSizePt > 0 &&
+        Number.isFinite(a.fontSizePt) &&
+        a.fontFamily === b.fontFamily &&
+        a.fontSizePt === b.fontSizePt &&
+        a.bold === b.bold &&
+        a.italic === b.italic &&
+        a.verticalAlign === 'baseline' &&
+        b.verticalAlign === 'baseline' &&
+        a.baselineShiftPt === 0 &&
+        b.baselineShiftPt === 0
+      ) {
+        const closingCapacity = Math.max(
+          0,
+          Math.min(
+            previous.natural / 2 -
+              Math.max(
+                previous.alreadyReduced,
+                (a.characterSpacingPt - previous.span.style.characterSpacingPt) *
+                  previous.span.text.length
+              ),
+            previous.span.box.width - previous.reduction
+          )
+        );
+        const openingCapacity = Math.max(
+          0,
+          Math.min(
+            capacity,
+            current.natural / 2 -
+              Math.max(
+                current.alreadyReduced,
+                (b.characterSpacingPt - current.span.style.characterSpacingPt) *
+                  current.span.text.length
+              )
+          )
+        );
+        const sum = closingCapacity + openingCapacity;
+        const shared = Math.max(0, Math.min(gap, sum));
+        if (sum > TOLERANCE && shared > TOLERANCE) {
+          const ratio = shared / sum;
+          if (closingCapacity * ratio > TOLERANCE)
+            seams.push({ cell: previous, capacity: closingCapacity * ratio, left: false });
+          if (openingCapacity * ratio > TOLERANCE)
+            seams.push({ cell: current, capacity: openingCapacity * ratio, left: true });
+          continue;
+        }
+      }
+    }
+    // This pair had no seam in the baseline. Failed qualification cannot add one.
+    if (allowCloseOpenPairs && CLOSING.test(before) && OPENING.test(after)) continue;
     if (capacity > TOLERANCE) seams.push({ cell, capacity, left });
   }
   if (deficit > seams.reduce((sum, seam) => sum + seam.capacity, 0) + TOLERANCE) return undefined;
@@ -281,7 +364,8 @@ export function createCjkOpticalFitter(
   breaks: CjkParagraphBreaks | null,
   measurer: TextMeasurer,
   overflowPunctuation: boolean,
-  allowFullwidth = true
+  allowFullwidth = true,
+  allowCloseOpenPairs = false
 ) {
   const queued = new Map<number, CjkOpticalFit>();
   return (
@@ -384,7 +468,14 @@ export function createCjkOpticalFitter(
       )
     )
       return undefined;
-    const fitted = fitCjkOptically(line, candidates, available, measurer, pieces);
+    const fitted = fitCjkOptically(
+      line,
+      candidates,
+      available,
+      measurer,
+      pieces,
+      allowCloseOpenPairs
+    );
     if (!fitted) return undefined;
     let first: CjkOpticalFit | undefined;
     let offset = 0;

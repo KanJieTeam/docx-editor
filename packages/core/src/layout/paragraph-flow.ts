@@ -256,7 +256,10 @@ export function breakParagraph(
     cjkBreaks,
     measurer,
     typography.overflowPunctuation,
-    typography.overflowFullwidthPunctuation !== false
+    typography.overflowFullwidthPunctuation !== false,
+    opticalParagraph &&
+      typography.settings?.punctuationKerning !== false &&
+      typography.settings?.sourceEastAsianFont === true
   );
   const layoutEquation = createEquationLayouter(measurer, flow?.equationCacheToken);
   const equationLayoutOf = (piece: FieldAwarePiece) =>
