@@ -1,6 +1,7 @@
 import { shiftInlineDrawingRecord, type InlineDrawingRecord } from './drawing-layout.ts';
 import type { StyleSpanRecord } from './semantic-records.ts';
 import { DEFAULT_RUN_STYLE } from './run-style.ts';
+import { scriptGlyphStyleForEditing } from './layout-glyph-sizing.ts';
 
 /** A picture's one model unit in text: U+FFFC OBJECT REPLACEMENT CHARACTER. */
 export const PICTURE_CHAR = '\ufffc';
@@ -39,8 +40,9 @@ export function alignLineWithPictures(
     template !== undefined || placedDrawings.some((drawing) => drawing.bidiLevel !== undefined);
   const baseLevel = template?.style.shaping?.baseLevel ?? (paragraphRtl ? 1 : 0);
   const groupsByRun = template?.style.shaping?.runDirection !== undefined;
-  const { shaping: _shaping, ...plainStyle } =
-    template?.style ?? placedSpans[0]?.style ?? DEFAULT_RUN_STYLE;
+  const { shaping: _shaping, ...plainStyle } = scriptGlyphStyleForEditing(
+    template?.style ?? placedSpans[0]?.style ?? DEFAULT_RUN_STYLE
+  );
   const standIns = placedDrawings.map((drawing): StyleSpanRecord => {
     const level = drawing.bidiLevel ?? baseLevel;
     const direction = level % 2 ? ('rtl' as const) : ('ltr' as const);

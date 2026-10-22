@@ -9,8 +9,62 @@ import type { DocxEditorInstance } from '@docx-editor.dev/core/editor';
 import { DocxEditorRoot } from '../src/editor/DocxEditorRoot.tsx';
 import { DocxEditorViewport } from '../src/editor/DocxEditorViewport.tsx';
 import { DocxEditorContent } from '../src/editor/DocxEditorContent.tsx';
+import {
+  scriptGlyphDocument,
+  scriptGlyphFonts,
+  scriptGlyphGeometry,
+  settledScriptGlyphs,
+} from '../../core/src/editor/__tests__/script-glyph-fixture.ts';
 
 afterEach(cleanup);
+
+test('script mode changes remount with matching geometry; equal modes preserve the editor', async () => {
+  const instances: DocxEditorInstance[] = [];
+  const tree = (mode: FontShapingOptions['scriptGlyphSizing']) => (
+    <DocxEditorRoot
+      document={scriptGlyphDocument}
+      fonts={scriptGlyphFonts}
+      fontShaping={{ scriptGlyphSizing: mode }}
+      onReady={(editor) => instances.push(editor as DocxEditorInstance)}
+    >
+      <DocxEditorViewport>
+        <DocxEditorContent />
+      </DocxEditorViewport>
+    </DocxEditorRoot>
+  );
+  const view = render(tree(undefined));
+  try {
+    await act(async () => {
+      await settledScriptGlyphs(instances[0]!);
+    });
+    const first = instances[0]!;
+    const legacy = scriptGlyphGeometry(first);
+    expect(legacy.factor).toBe(0.65);
+    await act(async () => view.rerender(tree('legacy')));
+    expect(instances).toHaveLength(1);
+    await act(async () => view.rerender(tree('font-metrics')));
+    expect(instances).toHaveLength(2);
+    const metric = instances[1]!;
+    await act(async () => {
+      await settledScriptGlyphs(metric);
+    });
+    const actual = scriptGlyphGeometry(metric);
+    expect(actual.nominal).toBe(14);
+    expect(actual.factor).not.toBe(0.65);
+    expect(actual.width).not.toBe(legacy.width);
+    await act(async () => view.rerender(tree('font-metrics')));
+    expect(instances).toHaveLength(2);
+    expect(scriptGlyphGeometry(metric)).toEqual(actual);
+    await act(async () => view.rerender(tree('legacy')));
+    expect(instances).toHaveLength(3);
+    await act(async () => {
+      await settledScriptGlyphs(instances[2]!);
+    });
+    expect(scriptGlyphGeometry(instances[2]!)).toEqual(legacy);
+  } finally {
+    view.unmount();
+  }
+});
 
 test('equal font shaping values preserve edits and undo; changed values remount', async () => {
   const instances: DocxEditorInstance[] = [];

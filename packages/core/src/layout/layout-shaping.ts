@@ -25,6 +25,7 @@ import {
 } from './layout-shaper-policy.ts';
 import {
   fontShapingPolicy,
+  scriptGlyphSizingMode,
   withFontShapingPolicy,
   type FontShapingOptions,
 } from './font-shaping-policy.ts';
@@ -615,17 +616,47 @@ async function createLayoutShapingInternal(
   });
 }
 
+/** Reuse immutable font resources with a separate, pinned layout policy. @internal */
+export function withScriptGlyphSizing(
+  shaping: LayoutShapingOptions,
+  mode: 'legacy' | 'font-metrics'
+): LayoutShapingOptions {
+  if (mode === (shaping.scriptGlyphSizing ?? 'legacy')) return shaping;
+  const suffix = '|script-glyph-sizing:font-metrics:v1';
+  if (mode === 'legacy') {
+    if (!shaping.operation.shapingHash.endsWith(suffix)) {
+      throw new TypeError('Script glyph sizing view has no canonical shaping identity');
+    }
+    return Object.freeze({
+      ...shaping,
+      scriptGlyphSizing: undefined,
+      operation: Object.freeze({
+        ...shaping.operation,
+        shapingHash: shaping.operation.shapingHash.slice(0, -suffix.length),
+      }),
+    });
+  }
+  return Object.freeze({
+    ...shaping,
+    scriptGlyphSizing: mode,
+    operation: Object.freeze({
+      ...shaping.operation,
+      shapingHash: `${shaping.operation.shapingHash}${suffix}`,
+    }),
+  });
+}
+
 /** Build one shaped-layout environment without importing an editor or DOM lane. @public */
 export async function createLayoutShaping(
   configuration: LayoutFontConfiguration | PreparedLayoutFontConfiguration,
   instrumentation?: LayoutShapingInstrumentation,
   execution?: FontShapingOptions
 ): Promise<LayoutShapingOptions> {
-  return createLayoutShapingInternal(
-    configuration,
-    instrumentation,
-    undefined,
-    fontShapingPolicy(execution)
+  const mode = scriptGlyphSizingMode(execution);
+  const policy = fontShapingPolicy(execution);
+  return withScriptGlyphSizing(
+    await createLayoutShapingInternal(configuration, instrumentation, undefined, policy),
+    mode
   );
 }
 
@@ -635,14 +666,18 @@ export async function createLayoutShapingWithTextShaper(
   shaper: LayoutShapingOptions['shaper'],
   shaperPolicy: LayoutHarfBuzzShaperPolicy,
   instrumentation?: LayoutShapingInstrumentation,
-  documentLigatures = false
+  documentLigatures = false,
+  scriptGlyphSizing: 'legacy' | 'font-metrics' = 'legacy'
 ): Promise<LayoutShapingOptions> {
-  return createLayoutShapingInternal(
-    configuration,
-    instrumentation,
-    shaper,
-    shaperPolicy,
-    documentLigatures
+  return withScriptGlyphSizing(
+    await createLayoutShapingInternal(
+      configuration,
+      instrumentation,
+      shaper,
+      shaperPolicy,
+      documentLigatures
+    ),
+    scriptGlyphSizing
   );
 }
 

@@ -1,3 +1,4 @@
+import { projectScriptGlyphSizing } from './paragraph-script-glyph-sizing.ts';
 import { appendUnsupportedContent } from './unsupported-content-flow.ts';
 import { paragraphContinuationPieces } from './paragraph-continuation-pieces.ts';
 import { revisionMarkupHidesDrawing } from './revision-markup-projection.ts';
@@ -220,11 +221,10 @@ export function breakParagraph(
         : undefined
     );
   const paragraphRtl = flow?.paragraphRtl ?? paragraphIsRtl(paragraphProperties());
-  const allPieces = bidiPieces(
-    rawPieces,
-    paragraphRtl,
-    bidiSourceBoundaries(paragraph),
-    pageBreaksIgnored
+  const allPieces = projectScriptGlyphSizing(
+    bidiPieces(rawPieces, paragraphRtl, bidiSourceBoundaries(paragraph), pageBreaksIgnored),
+    paragraph.id,
+    measurer
   );
   const startOffset = Math.max(0, flow?.startOffset ?? 0);
   const carriesSlot = flow?.firstLineAfterLeadingBreaks === true;

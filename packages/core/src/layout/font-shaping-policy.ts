@@ -11,10 +11,21 @@ import {
   type TextShaper,
 } from './shaped-run.ts';
 
-/** Host-selected execution limits, separate from font admission limits. @public */
+/** Host-selected execution limits and immutable layout policy, separate from font admission. @public */
 export interface FontShapingOptions {
   /** Per-face shaping byte ceiling. Defaults to 16 MiB; the hard ceiling is 64 MiB. */
   readonly maxFontBytes?: number;
+  /** Ordinary source text can use admitted font script Y sizes. Defaults to legacy 65%. */
+  readonly scriptGlyphSizing?: 'legacy' | 'font-metrics';
+}
+
+export function scriptGlyphSizingMode(
+  options: FontShapingOptions | undefined
+): 'legacy' | 'font-metrics' {
+  const mode = options?.scriptGlyphSizing ?? 'legacy';
+  if (mode !== 'legacy' && mode !== 'font-metrics')
+    throw new RangeError('Invalid script glyph sizing mode');
+  return mode;
 }
 
 /** Sample one explicit host execution ceiling before asynchronous initialization. @internal */

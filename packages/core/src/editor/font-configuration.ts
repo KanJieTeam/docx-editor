@@ -15,7 +15,7 @@ import {
   type FontShapingOptions,
 } from '@docx-editor.dev/core/layout';
 
-import { fontShapingPolicy } from '../layout/font-shaping-policy.ts';
+import { fontShapingPolicy, scriptGlyphSizingMode } from '../layout/font-shaping-policy.ts';
 
 export type { LayoutShapingInstrumentation };
 
@@ -25,7 +25,12 @@ export function sampleFontShapingOptions(
 ): FontShapingOptions | undefined {
   return options === undefined
     ? undefined
-    : Object.freeze({ maxFontBytes: fontShapingPolicy(options).maxFontBytes });
+    : Object.freeze({
+        maxFontBytes: fontShapingPolicy(options).maxFontBytes,
+        ...(scriptGlyphSizingMode(options) === 'font-metrics'
+          ? { scriptGlyphSizing: 'font-metrics' as const }
+          : {}),
+      });
 }
 
 function publicRequest(request: FontFaceRequest): FontFaceRequest {

@@ -108,6 +108,7 @@ export interface FontRequest {
 // @public
 export interface FontShapingOptions {
     readonly maxFontBytes?: number;
+    readonly scriptGlyphSizing?: 'legacy' | 'font-metrics';
 }
 
 // @public

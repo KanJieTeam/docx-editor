@@ -1,4 +1,5 @@
 import type { ResolvedRunStyle } from './run-style.ts';
+import { scriptGlyphStyleForEditing } from './layout-glyph-sizing.ts';
 import { lineBandText } from './pending-line.ts';
 import type { StyleSpanRecord, TextMeasurer } from './semantic-records.ts';
 import { styleForFontSlot, type FontSlot } from './script-itemization.ts';
@@ -37,7 +38,10 @@ export function growScriptLineMetrics(
   let descent = line.height - line.baseline;
   for (const span of line.spans) {
     if (span.style.verticalAlign === 'baseline' || !TEXT_GLYPH.test(span.text)) continue;
-    const fullSize = { ...span.style, verticalAlign: markVerticalAlign };
+    const fullSize = {
+      ...scriptGlyphStyleForEditing(span.style),
+      verticalAlign: markVerticalAlign,
+    };
     const metrics = measurer.lineMetrics(
       styleForFontSlot(fullSize, span.fontSlot),
       lineBandText(span, span.text)

@@ -1,0 +1,18 @@
+{
+  "impact": "no-impact",
+  "fields": [],
+  "before": "Script glyphs use the legacy 65% factor.",
+  "after": "Hosts can select exact-face script Y sizes for qualified ordinary source text. The default remains unchanged.",
+  "reason": "Only local layout projections and font-backed export geometry change. Authored run sizes, canonical operations, shared snapshots, awareness, and room format stay unchanged.",
+  "tests": [
+    "packages/core/src/layout/__tests__/script-glyph-sizing.test.ts",
+    "packages/core/src/export/__tests__/font-shaping-api.test.ts",
+    "packages/docx-to-pdf/test/script-sizing.test.ts",
+    "packages/docx-to-markdown/test/markdown-inline.test.ts",
+    "packages/react/test/font-shaping-lifecycle.test.tsx",
+    "packages/vue/test/font-shaping-lifecycle.test.ts",
+    "packages/pro/src/collaboration/__tests__/script-glyph-sizing.test.ts"
+  ],
+  "changeset": "font-derived-script-glyph-sizing",
+  "migration": null
+}

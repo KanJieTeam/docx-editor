@@ -2687,6 +2687,7 @@ export interface FontResolverMark {
 // @public
 export interface FontShapingOptions {
     readonly maxFontBytes?: number;
+    readonly scriptGlyphSizing?: 'legacy' | 'font-metrics';
 }
 
 // @public

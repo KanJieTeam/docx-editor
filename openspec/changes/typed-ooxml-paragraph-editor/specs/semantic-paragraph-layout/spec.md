@@ -338,3 +338,44 @@ The editor SHALL replace host font resources without replacing its document sess
 - **WHEN** the current replacement resolver fails
 - **THEN** the editor reports the failure with its cause and keeps bounded fallback measurement
 - **AND** it does not restore fonts that the host removed
+
+### Requirement: Explicit font-derived script glyph sizing
+
+The engine SHALL retain the legacy 65% script factor unless the host selects `font-metrics`. Qualified ordinary source text SHALL use bounded `OS/2` Y sizes from its exact admitted face. Measurement, caret advances, ink, surface paint, and export SHALL use one immutable factor. Authored run sizes, baseline offsets, and nominal script line boxes SHALL remain unchanged.
+
+#### Scenario: A source piece cannot qualify
+
+- **WHEN** a complete shaped piece needs fallback faces, contains missing glyphs, or lacks supported script metrics
+- **THEN** the complete piece retains the legacy factor
+- **AND** generated text retains the legacy factor without qualification
+
+#### Scenario: Qualified source text splits across lines
+
+- **WHEN** a complete ordinary source piece qualifies through one admitted face
+- **THEN** its line splits and caret prefixes retain the same face-bound factor
+- **AND** serialized source run properties keep their authored size and script alignment
+
+#### Scenario: A prefix violates its qualified face proof
+
+- **WHEN** a registered face-preserving shaper changes face or emits a missing glyph for a qualified prefix
+- **THEN** measurement refuses that geometry instead of silently choosing another factor
+- **AND** the engine does not claim automatic surface recovery from this custom-shaper inconsistency
+
+#### Scenario: Local policies differ between collaboration peers
+
+- **WHEN** peers use different local script glyph policies for the same shared document
+- **THEN** the policies affect local geometry only and never enter canonical operations or collaboration payloads
+
+#### Scenario: A host changes its selected mode
+
+- **WHEN** a host creates a shaping operation
+- **THEN** the operation samples its script glyph policy before asynchronous initialization
+- **AND** React and Vue preserve the editor for equal effective modes, including omitted versus explicit `legacy`
+- **AND** a changed effective mode creates another editor instead of changing published geometry in place
+
+#### Scenario: An independent PDF session selects font-derived sizing
+
+- **WHEN** a PDF session opens with an explicit script glyph policy
+- **THEN** its layout and output shaping share that policy and one admitted font snapshot
+- **AND** output shaping refuses a different face rather than combining new font resources with existing geometry
+- **AND** strict PDF export reports unsupported output instead of silently substituting another face

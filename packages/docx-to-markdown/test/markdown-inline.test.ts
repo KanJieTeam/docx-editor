@@ -1,6 +1,19 @@
 import { expect, test } from 'bun:test';
 import type { StyleSpanRecord } from '@docx-editor.dev/core/layout';
 import { escapeText, MarkdownInlineWriter } from '../src/markdown-inline.ts';
+import { readFileSync } from 'node:fs';
+import { readOoxmlPart } from '@docx-editor.dev/core/store';
+import {
+  acquireSharedExportShaping,
+  type ExportSemanticLayout,
+} from '@docx-editor.dev/core/export';
+import {
+  layoutSemanticDocument,
+  prepareLayoutFontConfiguration,
+  sha256FontBytes,
+  linesOf,
+} from '@docx-editor.dev/core/layout';
+import { exportMarkdownLayout } from '../src/markdown.ts';
 
 function styledToken(text: string, start: number, style: Partial<StyleSpanRecord['style']>) {
   return {
@@ -121,4 +134,51 @@ test('still escapes hyphens that could be interpreted as Markdown punctuation', 
   expect(escapeText('- list item')).toBe('\\- list item');
   expect(escapeText('a - b')).toBe('a \\- b');
   expect(escapeText('---')).toBe('\\-\\-\\-');
+});
+
+test('real derived script carriers do not change Markdown or leak font proofs', async () => {
+  const bytes = new Uint8Array(
+    readFileSync(
+      new URL('../../core/src/layout/__tests__/fixtures/fonts/DejaVuSans.ttf', import.meta.url)
+    )
+  );
+  const prepared = prepareLayoutFontConfiguration({
+    epoch: 1,
+    maxFontBytes: 2_000_000,
+    sources: [
+      {
+        request: { family: 'DejaVu Sans', weight: 400, style: 'normal' },
+        id: 'markdown-script',
+        bytes,
+        hash: sha256FontBytes(bytes),
+        faceIndex: 0,
+      },
+    ],
+    defaultFont: { family: 'DejaVu Sans', sizeHalfPoints: 28 },
+  });
+  const read = readOoxmlPart(
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="DejaVu Sans" w:hAnsi="DejaVu Sans"/><w:sz w:val="28"/><w:vertAlign w:val="subscript"/></w:rPr><w:t>123</w:t></w:r></w:p></w:body></w:document>',
+    { name: '/word/document.xml', contentType: 'app/xml' }
+  );
+  if (!read.ok) throw new Error(read.reason);
+  const render = async (mode: 'legacy' | 'font-metrics') => {
+    const view = await acquireSharedExportShaping(prepared, undefined, { scriptGlyphSizing: mode });
+    const layout = layoutSemanticDocument(read.part, 1, {
+      measurer: view.createMeasurer(),
+      producer: view.producer,
+    });
+    return { layout, result: exportMarkdownLayout(layout as ExportSemanticLayout) };
+  };
+  const nominal = await render('legacy');
+  const derived = await render('font-metrics');
+  const carrier = linesOf(derived.layout)[0]!.spans[0]!.style.layoutGlyphSizing;
+  expect(carrier).toBeDefined();
+  expect(linesOf(derived.layout)[0]!.spans[0]!.style.fontSizePt).toBe(14);
+  expect(derived.result).toEqual(nominal.result);
+  expect(derived.result.markdown).toBe('123');
+  expect(derived.result.warnings).toEqual([]);
+  const exported = JSON.stringify(derived.result);
+  expect(exported).not.toContain(carrier!.fontHash);
+  expect(exported).not.toContain(carrier!.proof);
+  expect(exported).not.toContain('layoutGlyphSizing');
 });

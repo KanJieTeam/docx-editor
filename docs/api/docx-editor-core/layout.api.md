@@ -1246,6 +1246,7 @@ export interface FontResourceSnapshotOptions {
 // @public
 export interface FontShapingOptions {
     readonly maxFontBytes?: number;
+    readonly scriptGlyphSizing?: 'legacy' | 'font-metrics';
 }
 
 // @public
@@ -1712,6 +1713,8 @@ export interface LayoutEnvironmentShapedMeasurerOptions {
     readonly environment: LayoutShapingOptions['environment'];
     readonly fallback: TextMeasurer;
     readonly resolveFont: (style: ResolvedRunStyle) => ResolvedFont | null;
+    // (undocumented)
+    readonly scriptGlyphSizing?: 'legacy' | 'font-metrics';
     readonly shaper: TextShaper;
 }
 
@@ -1767,6 +1770,33 @@ export interface LayoutFontSubstitution {
     };
     // (undocumented)
     readonly to: FontRequest;
+}
+
+// @public
+export interface LayoutGlyphSizing {
+    // (undocumented)
+    readonly bold: boolean;
+    // (undocumented)
+    readonly faceIndex: number;
+    // (undocumented)
+    readonly factor: number;
+    // (undocumented)
+    readonly fontFamily: string | null;
+    // (undocumented)
+    readonly fontHash: string;
+    // (undocumented)
+    readonly fontRequest: string;
+    // (undocumented)
+    readonly italic: boolean;
+    // (undocumented)
+    readonly nominalSizePt: number;
+    readonly proof: string;
+    readonly scope: string;
+    readonly styleKey: string;
+    // (undocumented)
+    readonly version: 1;
+    // (undocumented)
+    readonly verticalAlign: VerticalAlign;
 }
 
 // @public
@@ -1889,6 +1919,8 @@ export interface LayoutShapingOptions {
     readonly ligatureCaretPolicy: 'cluster-edges-only';
     // (undocumented)
     readonly operation: OperationSnapshot;
+    // (undocumented)
+    readonly scriptGlyphSizing?: 'legacy' | 'font-metrics';
     // (undocumented)
     readonly shaper: TextShaper;
 }
@@ -3087,6 +3119,7 @@ export interface ResolvedRunStyle {
         readonly fontSizePt: number;
         readonly italic: boolean;
     };
+    readonly layoutGlyphSizing?: LayoutGlyphSizing;
     readonly ligatures?: {
         readonly contextual: boolean;
         readonly discretionary: boolean;
@@ -4072,6 +4105,8 @@ export interface ShapedMeasurerOptions {
     readonly roundingMode?: FixedPointRoundingMode;
     readonly script?: string;
     // (undocumented)
+    readonly scriptGlyphSizing?: 'legacy' | 'font-metrics';
+    // (undocumented)
     readonly shaper: TextShaper;
     // (undocumented)
     readonly shapingLibrary: VersionedShapingLibrary;
@@ -4697,6 +4732,7 @@ export interface TextMeasurer {
         height: number;
     };
     measure(text: string, style: ResolvedRunStyle): number;
+    scriptGlyphSizing?(text: string, style: ResolvedRunStyle, scope: string): LayoutGlyphSizing | undefined;
     strikeoutMetrics?(style: ResolvedRunStyle): StrikeoutStrokePt | undefined;
     textOutline?(text: string, style: ResolvedRunStyle): TextOutline | undefined;
 }

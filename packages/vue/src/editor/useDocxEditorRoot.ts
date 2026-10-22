@@ -374,6 +374,7 @@ export function useDocxEditorRootOwner(
       [
         () => toValue(props).document,
         () => toValue(props).fontShaping?.maxFontBytes,
+        () => toValue(props).fontShaping?.scriptGlyphSizing ?? 'legacy',
         () => toValue(props).imageDecodePort,
       ],
       createEditor,

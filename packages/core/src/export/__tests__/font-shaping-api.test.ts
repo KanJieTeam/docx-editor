@@ -57,7 +57,7 @@ function shape(shaping: LayoutShapingOptions) {
     }),
   });
 }
-function documentBytes() {
+function documentBytes(script = false, text = 'office AV') {
   const w = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
   const rel = 'http://schemas.openxmlformats.org/package/2006/relationships';
   const r = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -69,7 +69,7 @@ function documentBytes() {
       `<Relationships xmlns="${rel}"><Relationship Id="doc" Type="${r}/officeDocument" Target="word/document.xml"/></Relationships>`
     ),
     'word/document.xml': strToU8(
-      `<w:document xmlns:w="${w}"><w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="${family}" w:hAnsi="${family}"/><w:sz w:val="24"/></w:rPr><w:t>office AV</w:t></w:r></w:p></w:body></w:document>`
+      `<w:document xmlns:w="${w}"><w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="${family}" w:hAnsi="${family}"/><w:sz w:val="24"/>${script ? '<w:vertAlign w:val="subscript"/>' : ''}</w:rPr><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`
     ),
   });
 }
@@ -174,4 +174,60 @@ test('an explicit execution allowance cannot enlarge a stricter font admission b
     code: 'overLimit',
     message: 'Font source public-execution-face exceeds the per-font byte ceiling',
   });
+});
+
+test('document sessions pin script sizing before resolution and qualify primary text through a fallback chain', async () => {
+  const input = documentBytes(true, '123');
+  const original = input.slice();
+  const options = { scriptGlyphSizing: 'font-metrics' as 'legacy' | 'font-metrics' };
+  const pending = openFontBackedDocumentForExport(input, {
+    fonts: configuration(bytes),
+    glyphFallbacks: [request],
+    fontShaping: options,
+  });
+  options.scriptGlyphSizing = 'legacy';
+  const opened = await pending;
+  expect(opened.ok).toBe(true);
+  if (!opened.ok) throw new Error(opened.reason);
+  try {
+    const layout = await opened.session.layout();
+    const spans = layout.pages
+      .flatMap((page) => page.fragments)
+      .flatMap((fragment) =>
+        fragment.kind === 'paragraph' ? fragment.lines.flatMap((line) => line.spans) : []
+      );
+    const text = spans.find((span) => span.text === '123')!;
+    expect(text).toBeDefined();
+    expect(text.style.fontSizePt).toBe(12);
+    expect(text.style.layoutGlyphSizing?.factor).toBe(1433 / 2048);
+    const shaped = opened.session.shapeLaidOutText(text);
+    expect(shaped).not.toBeNull();
+    expect(shaped!.font.hash).toBe(text.style.layoutGlyphSizing!.fontHash);
+    expect(shaped!.font.faceIndex).toBe(text.style.layoutGlyphSizing!.faceIndex);
+  } finally {
+    opened.session.dispose();
+  }
+  expect(input).toEqual(original);
+});
+
+test('document sessions retain legacy sizing for a primary piece with a missing glyph', async () => {
+  const opened = await openFontBackedDocumentForExport(documentBytes(true, '12\u{10ffff}'), {
+    fonts: configuration(bytes),
+    glyphFallbacks: [request],
+    fontShaping: { scriptGlyphSizing: 'font-metrics' },
+  });
+  expect(opened.ok).toBe(true);
+  if (!opened.ok) throw new Error(opened.reason);
+  try {
+    const layout = await opened.session.layout();
+    const spans = layout.pages
+      .flatMap((page) => page.fragments)
+      .flatMap((fragment) =>
+        fragment.kind === 'paragraph' ? fragment.lines.flatMap((line) => line.spans) : []
+      );
+    expect(spans.map((span) => span.text).join('')).toBe('12\u{10ffff}');
+    expect(spans.every((span) => span.style.layoutGlyphSizing === undefined)).toBe(true);
+  } finally {
+    opened.session.dispose();
+  }
 });

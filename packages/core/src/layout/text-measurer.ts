@@ -27,6 +27,12 @@ export interface TextOutline {
  * Layout never reads the DOM, so this is the only way width and height enter it.
  */
 export interface TextMeasurer {
+  /** Optional whole-source-piece qualification. Absent preserves the legacy script size. */
+  scriptGlyphSizing?(
+    text: string,
+    style: ResolvedRunStyle,
+    scope: string
+  ): import('./layout-glyph-sizing.ts').LayoutGlyphSizing | undefined;
   /** Advance width of `text` in the resolved style. */
   measure(text: string, style: ResolvedRunStyle): number;
   /**

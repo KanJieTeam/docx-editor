@@ -1,3 +1,4 @@
+import { scriptGlyphStyleForEditing } from '../layout/layout-glyph-sizing.ts';
 import { revisionMarkupStyleForEditing } from '../layout/revision-markup-style.ts';
 import { layoutDerivedSpacingStyleForEditing } from '../layout/layout-derived-spacing.ts';
 import {
@@ -348,7 +349,9 @@ function selectionSpans(
   // named no story, and the body's order is wrong for every caret outside it — which is the
   // exact defect the parameter above exists to prevent, left standing in its own fallback.
   return spans.map((span) => {
-    const style = layoutDerivedSpacingStyleForEditing(revisionMarkupStyleForEditing(span.style));
+    const style = scriptGlyphStyleForEditing(
+      layoutDerivedSpacingStyleForEditing(revisionMarkupStyleForEditing(span.style))
+    );
     return style === span.style ? span : { ...span, style };
   });
 }

@@ -1,3 +1,8 @@
+import {
+  layoutGlyphSizingEqual,
+  layoutGlyphSizingOf,
+  type LayoutGlyphSizing,
+} from './layout-glyph-sizing.ts';
 import { revisionMarkupSourcesEqual } from './revision-markup-style.ts';
 import { layoutDerivedSpacingSourcesEqual } from './layout-derived-spacing.ts';
 // The accepted run property boundary, resolved for layout (task 7.2).
@@ -90,6 +95,8 @@ export interface ResolvedRunStyle {
   };
   /** Points. `w:sz` is half-points, so 22 becomes 11. */
   readonly fontSizePt: number;
+  /** Immutable layout projection metadata. Never authored or serialized as run properties. */
+  readonly layoutGlyphSizing?: LayoutGlyphSizing;
   /** RRGGBB, or null for the inherited/automatic colour. */
   readonly color: string | null;
   readonly bold: boolean;
@@ -538,6 +545,7 @@ export function measureDisplayText(
 /** Whether two resolved styles are identical, for span merging and cache keys. */
 export function runStylesEqual(a: ResolvedRunStyle, b: ResolvedRunStyle): boolean {
   return (
+    layoutGlyphSizingEqual(a, b) &&
     revisionMarkupSourcesEqual(a, b) &&
     layoutDerivedSpacingSourcesEqual(a, b) &&
     a.shaping?.script === b.shaping?.script &&
@@ -610,10 +618,12 @@ export function baselineShiftPtOf(style: ResolvedRunStyle): number {
  *
  * The 65% script scale follows the common Word font metrics (Arial, Calibri, Times New
  * Roman) and improves the saved Word reference at 10pt and 11pt. It is a uniform policy;
- * per-face script metrics and Word's output-device rounding are not modeled here.
+ * A qualified layout projection can opt into its face's script Y size.
+ * Output-device rounding remains the exporter's responsibility.
  * Layout, surface paint, and exporters must apply the same factor to avoid caret drift.
  * @public
  */
 export function glyphSizeFactorOf(style: ResolvedRunStyle): number {
-  return style.verticalAlign === 'baseline' ? 1 : 0.65;
+  const derived = layoutGlyphSizingOf(style);
+  return style.verticalAlign === 'baseline' ? 1 : (derived?.factor ?? 0.65);
 }

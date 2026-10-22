@@ -88,6 +88,7 @@ const MARKDOWN_SEMANTIC_POLICY_RATCHETS = Object.freeze({
     complexLane: 'layout-only',
     shaping: 'layout-only',
     fontSizePt: 'layout-only',
+    layoutGlyphSizing: 'layout-only',
     color: 'explicitly-omitted',
     bold: 'represented',
     italic: 'represented',

@@ -410,6 +410,8 @@ export type {
   SemanticPosition,
   SemanticSelection,
   TextMeasurer,
+  LayoutGlyphSizing,
+  VerticalAlign,
 } from '@docx-editor.dev/core/layout';
 // Same reason: `PaginatedSurfaceOptions.fieldShading` is typed by it.
 export type { FieldShadingMode } from '../output/semantic-paint.ts';

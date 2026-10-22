@@ -1,3 +1,4 @@
+import { projectScriptGlyphSizing } from './paragraph-script-glyph-sizing.ts';
 import { cachedAutofitCellWidths, widenedCellInsets } from './table-autofit-cell-cache.ts';
 import { rowForWidenedMeasurement } from './legacy-table-side-rules.ts';
 import { autofitReuseScope } from './autofit-context-reuse.ts';
@@ -272,11 +273,15 @@ export function paragraphContentWidthsPt(
   );
   // The bidi pass gives each piece the shaping and joining context line breaking measures with;
   // an unshaped complex-script word measures far wider than it paints.
-  const pieces = bidiPieces(
-    projected,
-    paragraphIsRtl(layoutInputs.props),
-    bidiSourceBoundaries(paragraph),
-    true
+  const pieces = projectScriptGlyphSizing(
+    bidiPieces(
+      projected,
+      paragraphIsRtl(layoutInputs.props),
+      bidiSourceBoundaries(paragraph),
+      true
+    ),
+    paragraph.id,
+    measurer
   );
   const { left, right, firstLine, hanging } = layoutInputs.indent;
   const tabs = withDefaultTabInterval(layoutInputs.tabStops, context.defaultTabStopPt);

@@ -75,7 +75,7 @@ import {
 
 /**
  * Props for `DocxEditor.Root`. `document` and `imageDecodePort` identity changes remount the
- * editor. Changing `fontShaping.maxFontBytes` also remounts. Later `fonts`, `author`, `locale`,
+ * editor. Changing either `fontShaping` value also remounts. Later `fonts`, `author`, `locale`,
  * `mode`, `translate`, `zoom`, and `zoomMode` changes use instance setters, so edits, selection
  * and undo history survive them. `modules` is sampled at mount only.
  *
@@ -295,6 +295,7 @@ export function DocxEditorRoot(props: DocxEditorRootProps) {
   const propsRef = useRef(props);
   propsRef.current = props;
   const fontShapingMaxFontBytes = fontShaping?.maxFontBytes;
+  const scriptGlyphSizing = fontShaping?.scriptGlyphSizing ?? 'legacy';
 
   const [editor, setEditor] = useState<DocxEditorInstance | null>(null);
   /** The `fieldResults` the current instance was created with. */
@@ -372,7 +373,14 @@ export function DocxEditorRoot(props: DocxEditorRootProps) {
       // Functional update: a StrictMode re-run's second instance must not be clobbered.
       setEditor((current) => (current === instance ? null : current));
     };
-  }, [doc, fontShapingMaxFontBytes, imageDecodePort, revisionStyleRegistry, unsupportedRegistry]);
+  }, [
+    doc,
+    fontShapingMaxFontBytes,
+    scriptGlyphSizing,
+    imageDecodePort,
+    revisionStyleRegistry,
+    unsupportedRegistry,
+  ]);
 
   // A new `fonts` value replaces the instance's fonts in place. The instance a remount just
   // created already has them, so only a change after creation reaches `setFonts`.

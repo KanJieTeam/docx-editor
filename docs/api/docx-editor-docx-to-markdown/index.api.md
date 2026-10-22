@@ -274,6 +274,7 @@ export interface FontRequest {
 // @public
 export interface FontShapingOptions {
     readonly maxFontBytes?: number;
+    readonly scriptGlyphSizing?: 'legacy' | 'font-metrics';
 }
 
 // @public
@@ -453,6 +454,33 @@ export interface LayoutBox {
     readonly x: number;
     // (undocumented)
     readonly y: number;
+}
+
+// @public
+export interface LayoutGlyphSizing {
+    // (undocumented)
+    readonly bold: boolean;
+    // (undocumented)
+    readonly faceIndex: number;
+    // (undocumented)
+    readonly factor: number;
+    // (undocumented)
+    readonly fontFamily: string | null;
+    // (undocumented)
+    readonly fontHash: string;
+    // (undocumented)
+    readonly fontRequest: string;
+    // (undocumented)
+    readonly italic: boolean;
+    // (undocumented)
+    readonly nominalSizePt: number;
+    readonly proof: string;
+    readonly scope: string;
+    readonly styleKey: string;
+    // (undocumented)
+    readonly version: 1;
+    // (undocumented)
+    readonly verticalAlign: VerticalAlign;
 }
 
 // @public
@@ -989,6 +1017,7 @@ export interface TextMeasurer {
         height: number;
     };
     measure(text: string, style: ResolvedRunStyle): number;
+    scriptGlyphSizing?(text: string, style: ResolvedRunStyle, scope: string): LayoutGlyphSizing | undefined;
     strikeoutMetrics?(style: ResolvedRunStyle): StrikeoutStrokePt | undefined;
     textOutline?(text: string, style: ResolvedRunStyle): TextOutline | undefined;
 }
@@ -1015,5 +1044,8 @@ export interface VectorShapeProjection {
         y: number;
     }>[])[];
 }
+
+// @public
+export type VerticalAlign = 'baseline' | 'superscript' | 'subscript';
 
 ```

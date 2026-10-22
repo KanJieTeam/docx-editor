@@ -22,9 +22,10 @@ const coordinate = (value: number) => {
 export function shapedRunOutline(
   run: ShapedRun,
   pointSize: number,
-  fixedPointScale: number
+  fixedPointScale: number,
+  glyphScale = 1
 ): TextOutline | undefined {
-  if (!(pointSize > 0) || !(fixedPointScale > 0)) return undefined;
+  if (!(pointSize > 0) || !(fixedPointScale > 0) || !(glyphScale > 0)) return undefined;
   const parts: string[] = [];
   let length = 0;
   let left = Infinity,
@@ -38,9 +39,9 @@ export function shapedRunOutline(
     if (!path) continue;
     if (!(units > 0) || !path.startsWith('M') || /[^MLQCZ0-9eE+.,\s-]/u.test(path))
       return undefined;
-    const scale = (pointSize * (glyph.drawScale ?? 1)) / units;
-    const originX = (glyph.originX + glyph.offsetX) / fixedPointScale;
-    const originY = (glyph.originY + glyph.offsetY) / fixedPointScale;
+    const scale = (pointSize * glyphScale * (glyph.drawScale ?? 1)) / units;
+    const originX = ((glyph.originX + glyph.offsetX) * glyphScale) / fixedPointScale;
+    const originY = ((glyph.originY + glyph.offsetY) * glyphScale) / fixedPointScale;
     for (const command of path.matchAll(/([MLQCZ])([^MLQCZ]*)/gu)) {
       const letter = command[1]!;
       const values = command[2]!

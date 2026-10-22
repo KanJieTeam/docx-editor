@@ -1,6 +1,7 @@
 // Exact shaped glyphs for laid-out spans, using the same policy as measurement.
 
 import type { ResolvedFont } from '../layout/font-resource.ts';
+import { scriptFaceMatches } from '../layout/layout-glyph-sizing.ts';
 import { displayText } from '../layout/run-style.ts';
 import { isOptionalHyphenSpan, paintedSpanText } from '../layout/optional-hyphen-break.ts';
 import { styleForFontSlot } from '../layout/script-itemization.ts';
@@ -107,6 +108,7 @@ export function bindExportLaidOutText(
         return null;
       }
       const run = shapeLayoutStyleRun(shaping.shaper, shaping.environment, font, faceStyle, text);
+      if (!scriptFaceMatches(faceStyle, font, run)) return null;
       return Object.freeze({
         run,
         font: describeAdmittedFontIdentity(run.fontSpans[0]?.font ?? font),

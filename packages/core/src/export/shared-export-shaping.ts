@@ -26,11 +26,13 @@ import {
 } from '../layout/layout-shaper-policy.ts';
 import {
   fontShapingPolicy,
+  scriptGlyphSizingMode,
   withFontShapingPolicy,
   type FontShapingOptions,
 } from '../layout/font-shaping-policy.ts';
 import {
   configurationOfPreparedLayoutFonts,
+  withScriptGlyphSizing,
   createLayoutShapingWithTextShaper,
   isPreparedLayoutFontConfiguration,
   sharedShapingFingerprintOfPreparedLayoutFonts,
@@ -60,6 +62,7 @@ export interface SessionExportShaping extends SharedExportShaping, ExportLaidOut
 }
 
 interface SharedExportShapingSubstrate {
+  readonly shaping: LayoutShapingOptions;
   createMeasurer(): TextMeasurer;
   readonly shapeLaidOutText: ExportLaidOutTextApi['shapeLaidOutText'];
   readonly shapingHash: string;
@@ -116,14 +119,24 @@ export function acquireProcessWideExportShaper(): Promise<TextShaper> {
   return pending;
 }
 
-function shapedMeasurer(shaping: LayoutShapingOptions): TextMeasurer {
+function shapedMeasurer(
+  shaping: LayoutShapingOptions,
+  primaryShaping: LayoutShapingOptions = shaping
+): TextMeasurer {
   const resolved = createShapingFontResolutionCache();
-  return createLayoutShapedMeasurer(shaping, {
+  const measurer = createLayoutShapedMeasurer(shaping, {
     resolveFont(style) {
       return resolveShapingFontFromStyle(shaping, resolved, style);
     },
     fallback: createFixedMeasurer(),
   });
+  if (primaryShaping === shaping || primaryShaping.scriptGlyphSizing !== 'font-metrics')
+    return measurer;
+  // Qualify through the face-preserving primary shaper. The fallback wrapper can change faces,
+  // so it cannot make this promise. Measurement and output still check every qualified run
+  // against the pinned face and refuse a later fallback instead of changing its glyph factor.
+  const primary = shapedMeasurer(primaryShaping);
+  return { ...measurer, scriptGlyphSizing: primary.scriptGlyphSizing };
 }
 
 /**
@@ -144,20 +157,20 @@ export async function createSessionExportShaping(
   if (!isPreparedLayoutFontConfiguration(prepared)) {
     throw new TypeError('Session exporter shaping requires a prepared font handle');
   }
+  const mode = scriptGlyphSizingMode(execution);
   const policy = fontShapingPolicy(execution, EXPORT_HARFBUZZ_SHAPER_POLICY);
   const shaper = await acquireNativeProcessWideExportShaper();
-  const shaping = withExportGlyphFallbacks(
-    await createLayoutShapingWithTextShaper(
-      prepared,
-      shaper,
-      policy,
-      instrumentation,
-      documentLigatures
-    ),
-    glyphFallbacks
+  const primaryShaping = await createLayoutShapingWithTextShaper(
+    prepared,
+    shaper,
+    policy,
+    instrumentation,
+    documentLigatures,
+    mode
   );
+  const shaping = withExportGlyphFallbacks(primaryShaping, glyphFallbacks);
   return Object.freeze({
-    createMeasurer: () => shapedMeasurer(shaping),
+    createMeasurer: () => shapedMeasurer(shaping, primaryShaping),
     resolveFont: (request: FontRequest) => shaping.fonts.resolve(request),
     shapeLaidOutText: bindExportLaidOutText(shaping),
     producer: [
@@ -188,10 +201,13 @@ export function acquireSharedExportShaping(
   if (!isPreparedLayoutFontConfiguration(prepared)) {
     return Promise.reject(new TypeError('Shared exporter shaping requires a prepared font handle'));
   }
+  const mode = scriptGlyphSizingMode(execution);
   const policy = fontShapingPolicy(execution, EXPORT_HARFBUZZ_SHAPER_POLICY);
   const policyKey = layoutShaperExecutionPolicyFingerprint(policy);
+  const viewKey =
+    mode === 'legacy' ? policyKey : `${policyKey}|script-glyph-sizing:font-metrics:v1`;
   let views = sharedShapingViews.get(prepared);
-  const existingView = views?.get(policyKey);
+  const existingView = views?.get(viewKey);
   if (existingView) return existingView;
   // A host epoch invalidates that host's operation caches, but cannot change an already owned
   // immutable byte/configuration snapshot. Key the process-wide native substrate by the latter:
@@ -235,6 +251,7 @@ export function acquireSharedExportShaping(
         throw error;
       }
       return Object.freeze({
+        shaping,
         createMeasurer: () => shapedMeasurer(shaping),
         shapeLaidOutText: bindExportLaidOutText(shaping),
         shapingHash: shaping.operation.shapingHash,
@@ -250,25 +267,26 @@ export function acquireSharedExportShaping(
   // Keep the host operation fingerprint (including epoch) on the cache-facing view. Only the
   // hidden immutable native substrate is deduplicated by content.
   const extensionFingerprint = prepared.fingerprint;
-  const pending = substrate.then(
-    (shared): SharedExportShapingCapabilities =>
-      Object.freeze({
-        createMeasurer: shared.createMeasurer,
-        shapeLaidOutText: shared.shapeLaidOutText,
-        producer: [
-          'node-export',
-          extensionFingerprint,
-          shared.shapingHash,
-          `producer:${shared.producerVersion}`,
-          `fallback:${FIXED_MEASURER_FINGERPRINT}`,
-        ].join('|'),
+  const pending = substrate.then((shared): SharedExportShapingCapabilities => {
+    const shaping = withScriptGlyphSizing(shared.shaping, mode);
+    return Object.freeze({
+      createMeasurer: mode === 'legacy' ? shared.createMeasurer : () => shapedMeasurer(shaping),
+      shapeLaidOutText:
+        mode === 'legacy' ? shared.shapeLaidOutText : bindExportLaidOutText(shaping),
+      producer: [
+        'node-export',
         extensionFingerprint,
-      })
-  );
+        shaping.operation.shapingHash,
+        `producer:${shared.producerVersion}`,
+        `fallback:${FIXED_MEASURER_FINGERPRINT}`,
+      ].join('|'),
+      extensionFingerprint,
+    });
+  });
   if (!views) sharedShapingViews.set(prepared, (views = new Map()));
-  views.set(policyKey, pending);
+  views.set(viewKey, pending);
   void pending.catch(() => {
-    if (views?.get(policyKey) === pending) views.delete(policyKey);
+    if (views?.get(viewKey) === pending) views.delete(viewKey);
   });
   return pending;
 }

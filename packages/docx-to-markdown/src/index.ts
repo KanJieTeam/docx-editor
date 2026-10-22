@@ -123,12 +123,14 @@ export type {
   ImageWrapTarget,
   InlineDrawingRecord,
   LayoutBox,
+  LayoutGlyphSizing,
   RevisionAttribution,
   RevisionDisplayMode,
   SourceCrop,
   TextboxStoryLayout,
   TextMeasurer,
   VectorShapeProjection,
+  VerticalAlign,
 } from '@docx-editor.dev/core/layout';
 export type {
   HeadlessDocumentRejection,

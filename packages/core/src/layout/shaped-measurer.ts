@@ -1,3 +1,13 @@
+import { sfntScriptSizeEm, type ScriptSizeEm } from './sfnt-script-size.ts';
+import {
+  isSingleScriptFace,
+  layoutGlyphSizingOf,
+  scriptFaceMatches,
+  scriptGlyphStyleKey,
+  scriptFontRequestKey,
+  ScriptGlyphSizingError,
+} from './layout-glyph-sizing.ts';
+import { sha256FontBytes, trustedFontBytes } from './font-resource.ts';
 import { isRunKerningEnabled } from './run-kerning.ts';
 import { runLigatureFeatureKey } from './run-ligatures.ts';
 import { createShapedLineMetrics } from './shaped-line-metrics.ts';
@@ -57,6 +67,7 @@ export type { LayoutShapingEnvironment } from './layout-run-shape.ts';
 export interface LayoutShapingOptions {
   readonly fonts: FontResourceSnapshot;
   readonly shaper: TextShaper;
+  readonly scriptGlyphSizing?: 'legacy' | 'font-metrics';
   readonly defaultFont: {
     readonly family: string;
     readonly sizeHalfPoints: number;
@@ -74,6 +85,7 @@ export interface LayoutShapingOptions {
  */
 export interface ShapedMeasurerOptions {
   readonly shaper: TextShaper;
+  readonly scriptGlyphSizing?: 'legacy' | 'font-metrics';
   /**
    * The font a run should be measured with.
    *
@@ -101,6 +113,7 @@ export interface ShapedMeasurerOptions {
 export interface LayoutEnvironmentShapedMeasurerOptions {
   /** Shaper from the same admitted layout operation. */
   readonly shaper: TextShaper;
+  readonly scriptGlyphSizing?: 'legacy' | 'font-metrics';
   /** Resolve a run to an admitted face, or null to use the bounded fallback. */
   readonly resolveFont: (style: ResolvedRunStyle) => ResolvedFont | null;
   /** Bounded measurement fallback when no admitted face resolves. */
@@ -216,9 +229,18 @@ export function createShapedMeasurer(
     // A stored `null` ("no font resolves") comes back as null, not undefined, so the
     // negative answer is cached too.
     const cached = fontsByStyle.get(style);
-    if (cached !== undefined) return cached;
-    const font = resolveFont(style);
-    fontsByStyle.set(style, font);
+    const font = cached === undefined ? resolveFont(style) : cached;
+    if (style.layoutGlyphSizing) {
+      const proof = layoutGlyphSizingOf(style)!;
+      if (
+        !font ||
+        font.hash !== proof.fontHash ||
+        font.faceIndex !== proof.faceIndex ||
+        scriptFontRequestKey(font) !== proof.fontRequest
+      )
+        throw new ScriptGlyphSizingError();
+    }
+    if (cached === undefined) fontsByStyle.set(style, font);
     return font;
   };
 
@@ -253,13 +275,19 @@ export function createShapedMeasurer(
   };
   const wordSpacingAdvance = (text: string, style: ResolvedRunStyle): number =>
     style.shaping?.wordSpacingPt ? countAsciiSpaces(text) * style.shaping.wordSpacingPt : 0;
-  const fallbackWidth = (text: string, style: ResolvedRunStyle): number =>
-    fallback.measure(text, withoutWordSpacing(style)) + wordSpacingAdvance(text, style);
+  const assertFallbackAllowed = (style: ResolvedRunStyle): void => {
+    if (layoutGlyphSizingOf(style)) throw new ScriptGlyphSizingError();
+  };
+  const fallbackWidth = (text: string, style: ResolvedRunStyle): number => {
+    assertFallbackAllowed(style);
+    return fallback.measure(text, withoutWordSpacing(style)) + wordSpacingAdvance(text, style);
+  };
 
   const fallbackAdvances = (
     text: string,
     style: ResolvedRunStyle
   ): readonly number[] | undefined => {
+    assertFallbackAllowed(style);
     const naturalWidth = Math.max(0, fallback.measure(text, withoutWordSpacing(style)));
     const source =
       fallback.caretAdvances?.(text, withoutWordSpacing(style)) ??
@@ -284,7 +312,56 @@ export function createShapedMeasurer(
   // Static face numbers, so one read per face serves every size: the em fractions scale.
   const strikeoutByFont = new WeakMap<ResolvedFont, StrikeoutStrokeEm | null>();
 
+  const scriptSizes = new WeakMap<ResolvedFont, ScriptSizeEm | null>();
+  const scriptGlyphSizing: TextMeasurer['scriptGlyphSizing'] =
+    options.scriptGlyphSizing === 'font-metrics'
+      ? (text, style, scope) => {
+          if (
+            !text ||
+            !facePreserving ||
+            style.verticalAlign === 'baseline' ||
+            style.caps ||
+            style.smallCaps
+          )
+            return undefined;
+          const font = resolveFontCached(style);
+          if (!font || font.substitution) return undefined;
+          try {
+            const run = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
+            if (!scriptFaceMatches(style, font, run)) throw new ScriptGlyphSizingError();
+            if (!isSingleScriptFace(run, font)) return undefined;
+            let sizes = scriptSizes.get(font);
+            if (sizes === undefined) {
+              sizes = sfntScriptSizeEm(trustedFontBytes(font), font.faceIndex);
+              scriptSizes.set(font, sizes);
+            }
+            const factor = sizes?.[style.verticalAlign];
+            if (factor === null || factor === undefined) return undefined;
+            return Object.freeze({
+              version: 1 as const,
+              factor,
+              fontHash: font.hash,
+              faceIndex: font.faceIndex,
+              fontRequest: scriptFontRequestKey(font),
+              fontFamily: style.fontFamily,
+              bold: style.bold,
+              italic: style.italic,
+              nominalSizePt: style.fontSizePt,
+              verticalAlign: style.verticalAlign,
+              styleKey: scriptGlyphStyleKey(style),
+              proof: sha256FontBytes(
+                new TextEncoder().encode(JSON.stringify([text, scriptGlyphStyleKey(style)]))
+              ),
+              scope,
+            });
+          } catch {
+            return undefined;
+          }
+        }
+      : undefined;
+
   return {
+    ...(scriptGlyphSizing ? { scriptGlyphSizing } : {}),
     hasResolvedFont(style) {
       return resolveFontCached(style) !== null;
     },
@@ -317,7 +394,16 @@ export function createShapedMeasurer(
               : [style.shaping.script, style.shaping.direction, text]
           )}`
         : `0:${text}`;
-      const widthKey = `${isRunKerningEnabled(style) ? 1 : 0}:${runLigatureFeatureKey(style)}:${shapingKey}`;
+      const proof = layoutGlyphSizingOf(style);
+      if (
+        proof &&
+        (font.hash !== proof.fontHash ||
+          font.faceIndex !== proof.faceIndex ||
+          proof.fontRequest !== scriptFontRequestKey(font))
+      )
+        throw new ScriptGlyphSizingError();
+      const proofKey = proof ? `script-v1:${proof.fontHash}:${proof.faceIndex}:` : '';
+      const widthKey = `${proofKey}${isRunKerningEnabled(style) ? 1 : 0}:${runLigatureFeatureKey(style)}:${shapingKey}`;
       let advance = byText.get(widthKey);
       if (advance === undefined) {
         let total = 0;
@@ -330,10 +416,12 @@ export function createShapedMeasurer(
             return fallbackWidth(text, style);
           }
           const shaped = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
+          if (!scriptFaceMatches(style, font, shaped)) throw new ScriptGlyphSizingError();
           // Missing-glyph advances do not describe the browser's fallback ink.
           if (shaped.glyphs.some((glyph) => glyph.id === 0)) return fallbackWidth(text, style);
           for (const glyph of shaped.glyphs) total += glyph.advanceX;
-        } catch {
+        } catch (error) {
+          if (error instanceof ScriptGlyphSizingError) throw error;
           // Shaping refuses malformed or oversized input by design. Falling back keeps a
           // hostile font from taking the document down with it.
           return fallbackWidth(text, style);
@@ -359,7 +447,10 @@ export function createShapedMeasurer(
       )
         return undefined;
       const font = resolveFontCached(style);
-      if (!font) return fallback.inkBounds?.(text, style);
+      if (!font) {
+        assertFallbackAllowed(style);
+        return fallback.inkBounds?.(text, style);
+      }
       try {
         if (
           style.smallCaps &&
@@ -367,30 +458,40 @@ export function createShapedMeasurer(
         )
           return fallback.inkBounds?.(text, style);
         const run = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
+        if (!scriptFaceMatches(style, font, run)) throw new ScriptGlyphSizingError();
         return shapedClusterInkBounds(
           run,
           layoutRunHalfPointsOf(style) / 2,
           baseEnvironment.fixedPointScale,
           (glyphSizeFactorOf(style) * style.horizontalScalePercent) / 100
         );
-      } catch {
+      } catch (error) {
+        if (error instanceof ScriptGlyphSizingError) throw error;
         return undefined;
       }
     },
     textOutline(text, style) {
       const font = resolveFontCached(style);
-      if (!font) return fallback.textOutline?.(text, style);
+      if (!font) {
+        assertFallbackAllowed(style);
+        return fallback.textOutline?.(text, style);
+      }
       try {
         const run = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
-        return (
-          shapedRunOutline(
-            run,
-            // Base size, like the run's positions; text art never sets a script size.
-            layoutRunHalfPointsOf(style) / 2,
-            baseEnvironment.fixedPointScale
-          ) ?? fallback.textOutline?.(text, style)
+        if (!scriptFaceMatches(style, font, run)) throw new ScriptGlyphSizingError();
+        const outline = shapedRunOutline(
+          run,
+          // Text art stays nominal. Qualified source text scales outlines and origins together.
+          layoutRunHalfPointsOf(style) / 2,
+          baseEnvironment.fixedPointScale,
+          layoutGlyphSizingOf(style)?.factor ?? 1
         );
-      } catch {
+        return (
+          outline ?? (layoutGlyphSizingOf(style) ? undefined : fallback.textOutline?.(text, style))
+        );
+      } catch (error) {
+        if (error instanceof ScriptGlyphSizingError) throw error;
+        assertFallbackAllowed(style);
         return fallback.textOutline?.(text, style);
       }
     },
@@ -404,6 +505,7 @@ export function createShapedMeasurer(
         )
           return fallbackAdvances(text, style);
         const run = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
+        if (!scriptFaceMatches(style, font, run)) throw new ScriptGlyphSizingError();
         if (run.glyphs.some((glyph) => glyph.id === 0)) return fallbackAdvances(text, style);
         return (
           shapedCaretAdvances(
@@ -424,7 +526,8 @@ export function createShapedMeasurer(
               wordSpacingAdvance(text, style)
           )
         );
-      } catch {
+      } catch (error) {
+        if (error instanceof ScriptGlyphSizingError) throw error;
         return fallbackAdvances(text, style);
       }
     },
@@ -446,6 +549,7 @@ export function createShapedMeasurer(
         // Width and paint can select a fallback face. The same face must set the
         // line's ascent/descent, otherwise tall fallback glyphs overlap later lines.
         const run = shapeLayoutStyleRun(shaper, baseEnvironment, font, style, text);
+        if (!scriptFaceMatches(style, font, run)) throw new ScriptGlyphSizingError();
         let baseline = 0;
         let descent = 0;
         for (const span of run.fontSpans) {
@@ -454,7 +558,8 @@ export function createShapedMeasurer(
           descent = Math.max(descent, metrics.height - metrics.baseline);
         }
         if (baseline + descent > 0) return { height: baseline + descent, baseline };
-      } catch {
+      } catch (error) {
+        if (error instanceof ScriptGlyphSizingError) throw error;
         // Font/shaping failures retain the bounded primary-face fallback.
       }
       return faceLineMetrics(font, style);
@@ -476,5 +581,6 @@ export function createLayoutShapedMeasurer(
     ...options,
     shaper: shaping.shaper,
     environment: shaping.environment,
+    scriptGlyphSizing: shaping.scriptGlyphSizing,
   });
 }

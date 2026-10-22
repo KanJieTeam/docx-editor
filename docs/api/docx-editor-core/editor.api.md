@@ -1798,6 +1798,7 @@ export interface FontResolverMark {
 // @public
 export interface FontShapingOptions {
     readonly maxFontBytes?: number;
+    readonly scriptGlyphSizing?: 'legacy' | 'font-metrics';
 }
 
 // @public
@@ -2241,6 +2242,33 @@ export function isTableChromeSlot(slot: ChromeSlotId): slot is TableChromeSlotId
 
 // @public
 export function isTextNode(value: unknown): value is Text;
+
+// @public
+export interface LayoutGlyphSizing {
+    // (undocumented)
+    readonly bold: boolean;
+    // (undocumented)
+    readonly faceIndex: number;
+    // (undocumented)
+    readonly factor: number;
+    // (undocumented)
+    readonly fontFamily: string | null;
+    // (undocumented)
+    readonly fontHash: string;
+    // (undocumented)
+    readonly fontRequest: string;
+    // (undocumented)
+    readonly italic: boolean;
+    // (undocumented)
+    readonly nominalSizePt: number;
+    readonly proof: string;
+    readonly scope: string;
+    readonly styleKey: string;
+    // (undocumented)
+    readonly version: 1;
+    // (undocumented)
+    readonly verticalAlign: VerticalAlign;
+}
 
 // @public
 export function layoutPointsToCssPixels(points: number, paintScale: number): number;
@@ -4002,6 +4030,7 @@ export interface TextMeasurer {
         height: number;
     };
     measure(text: string, style: ResolvedRunStyle): number;
+    scriptGlyphSizing?(text: string, style: ResolvedRunStyle, scope: string): LayoutGlyphSizing | undefined;
     strikeoutMetrics?(style: ResolvedRunStyle): StrikeoutStrokePt | undefined;
     textOutline?(text: string, style: ResolvedRunStyle): TextOutline | undefined;
 }
@@ -4316,6 +4345,9 @@ export function validateThemeModifier(value: unknown): value is number;
 
 // @public
 export type VectorImageMime = 'image/svg+xml';
+
+// @public
+export type VerticalAlign = 'baseline' | 'superscript' | 'subscript';
 
 // @public
 export function watchHighlights(editor: Editor, name: string, source: HighlightSource, options?: WatchHighlightsOptions): HighlightWatch;

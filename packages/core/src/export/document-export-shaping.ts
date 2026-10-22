@@ -20,7 +20,11 @@ import {
 } from '../layout/font-resolver.ts';
 import { prepareOwnedLayoutFontConfiguration } from '../layout/layout-shaping.ts';
 import { EXPORT_HARFBUZZ_SHAPER_POLICY } from '../layout/layout-shaper-policy.ts';
-import { fontShapingPolicy, type FontShapingOptions } from '../layout/font-shaping-policy.ts';
+import {
+  fontShapingPolicy,
+  scriptGlyphSizingMode,
+  type FontShapingOptions,
+} from '../layout/font-shaping-policy.ts';
 import { HARD_MAX_AGGREGATE_FONT_BYTES, type FontRequest } from '../layout/font-resource.ts';
 import {
   complexSymbolFieldFonts,
@@ -380,6 +384,7 @@ export async function acquireDocumentExportShaping(
   options: DocumentExportShapingOptions = {}
 ): Promise<DocumentExportShaping | undefined> {
   const executionPolicy = fontShapingPolicy(options.fontShaping, EXPORT_HARFBUZZ_SHAPER_POLICY);
+  const scriptGlyphSizing = scriptGlyphSizingMode(options.fontShaping);
   if ((options.glyphFallbacks?.length ?? 0) > 16)
     throw new RangeError('At most 16 glyph fallback faces are supported');
   const timeoutMs = normalizedTimeout(options.timeoutMs);
@@ -449,7 +454,7 @@ export async function acquireDocumentExportShaping(
           undefined,
           options.glyphFallbacks,
           options.documentLigatures,
-          { maxFontBytes: executionPolicy.maxFontBytes }
+          { maxFontBytes: executionPolicy.maxFontBytes, scriptGlyphSizing }
         );
         throwIfAborted(controller.signal);
         const report = fontResolutionReport(
