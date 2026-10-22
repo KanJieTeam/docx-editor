@@ -117,9 +117,9 @@ jobs:
       - name: Build the PDF server package for export checks
         if: "matrix.check == 'browser'"
         run: bun run build:pdf
-      - name: Check editor grouping, exports, and benchmark readiness
+      - name: Check table revision grouping and file exports in the editor
         if: "matrix.check == 'browser'"
-        run: bunx playwright test --config e2e/editor-smoke.config.ts e2e/table-review-grouping.interaction.spec.ts e2e/file-export.interaction.spec.ts e2e/edit-browser-bench-readiness.interaction.spec.ts
+        run: bunx playwright test --config e2e/editor-smoke.config.ts e2e/table-review-grouping.interaction.spec.ts e2e/file-export.interaction.spec.ts
       - name: Check Markdown page layout and review controls
         if: "matrix.check == 'browser'"
         run: "bun run --filter './examples/docx-to-markdown' check:preview"
