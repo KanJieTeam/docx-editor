@@ -374,3 +374,15 @@ The editor SHALL replace host font resources without replacing its document sess
 - **WHEN** the current replacement resolver fails
 - **THEN** the editor reports the failure with its cause and keeps bounded fallback measurement
 - **AND** it does not restore fonts that the host removed
+
+#### Scenario: Directional spacing uses the authored font
+
+- **WHEN** supported East Asian text precedes Latin letters or ASCII digits
+- **THEN** the boundary advance equals one quarter of the East Asian run's authored font size
+- **AND** a substitute font's average width cannot change that advance
+
+#### Scenario: Reverse spacing has no authored metric
+
+- **WHEN** Latin letters or ASCII digits precede East Asian text and the authored font metric is unavailable
+- **THEN** the boundary adds no reverse advance
+- **AND** layout does not use a substitute font's average width or change source text

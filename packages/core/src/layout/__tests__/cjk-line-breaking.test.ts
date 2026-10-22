@@ -308,15 +308,15 @@ describe('Latin behaviour is unchanged', () => {
       '天地玄黄ABCD宇',
       '宙洪荒日月盈',
     ]);
-    // Ten fixed advances consume the whole measure; two default DE gaps cannot fit too.
-    expect(automatic[0]!.width).toBeCloseTo(9 * 6 + 2 * (11 * 0.2), 8);
+    // The fixed measurer has no authored reverse metric. Only the 11/4 forward gap applies.
+    expect(automatic[0]!.width).toBeCloseTo(9 * 6 + 11 / 4, 8);
     const latin = automatic[0]!.spans.find((span) => span.text === 'ABCD')!;
     expect(latin.range).toEqual({ paragraphId: 'p', start: 4, end: 8 });
     expect(latin.box.width).toBeCloseTo(24, 8);
     expect(automatic[0]!.spans[0]!.box.x).toBeCloseTo(0, 8);
-    expect(latin.box.x - automatic[0]!.spans[0]!.box.x).toBeCloseTo(4 * 6 + 2.2, 8);
+    expect(latin.box.x - automatic[0]!.spans[0]!.box.x).toBeCloseTo(4 * 6 + 11 / 4, 8);
     const following = automatic[0]!.spans.find((span) => span.range.start === 8)!;
-    expect(following.box.x - latin.box.x - latin.box.width).toBeCloseTo(2.2, 8);
+    expect(following.box.x - latin.box.x - latin.box.width).toBeCloseTo(0, 8);
     for (const line of automatic) {
       expect(line.width).toBeLessThanOrEqual(60);
       for (const span of line.spans)

@@ -88,7 +88,8 @@ test('automatic inter-script spacing follows two-peer edits, carets, history, an
       expect(first.map((line) => line.text).join('')).toBe(expected);
       const gaps = first.flatMap((line) => line.gaps).filter((value) => value > 0.001);
       expect(gaps).toHaveLength(automaticGaps);
-      for (const gap of gaps) expect(gap).toBeCloseTo(2.2, 8);
+      // No fonts are admitted here. Only the fixed forward quarter-em gap applies.
+      for (const gap of gaps) expect(gap).toBeCloseTo(2.75, 8);
       for (const line of first)
         for (const span of line.spans) {
           expect(span.text).toBe(expected.slice(span.range.start, span.range.end));
@@ -101,7 +102,7 @@ test('automatic inter-script spacing follows two-peer edits, carets, history, an
       expect(right.editor.surface!.session).toBe(rightSession);
     };
     // Warm both layout caches before the first shared change.
-    await shared('1汉2', 2);
+    await shared('1汉2', 1);
     pair.pause();
     select(left.editor, 0);
     select(right.editor, 3);
@@ -109,11 +110,11 @@ test('automatic inter-script spacing follows two-peer edits, carets, history, an
     expect(right.editor.exec({ type: 'insertText', text: 'B' }).ok).toBe(true);
     flush();
     pair.resume();
-    await shared('A1汉2B', 2);
+    await shared('A1汉2B', 1);
     expect(left.editor.exec({ type: 'undo' }).ok).toBe(true);
-    await shared('1汉2B', 2);
+    await shared('1汉2B', 1);
     expect(left.editor.exec({ type: 'redo' }).ok).toBe(true);
-    await shared('A1汉2B', 2);
+    await shared('A1汉2B', 1);
     select(right.editor, 2);
     applyAwarenessUpdate(
       pair.alice.awareness,
@@ -135,7 +136,7 @@ test('automatic inter-script spacing follows two-peer edits, carets, history, an
     await shared('AX2B', 0);
     select(left.editor, 2);
     expect(left.editor.exec({ type: 'insertText', text: '汉' }).ok).toBe(true);
-    await shared('AX汉2B', 2);
+    await shared('AX汉2B', 1);
     const saved = new Uint8Array(await left.editor.save());
     const container = document.createElement('div');
     document.body.append(container);

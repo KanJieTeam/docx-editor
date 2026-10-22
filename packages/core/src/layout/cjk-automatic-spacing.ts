@@ -1,3 +1,4 @@
+import { authoredCjkGapMetric } from './cjk-auto-spacing-metric-port.ts';
 import type { TextMeasurer } from './text-measurer.ts';
 // OOXML inter-script advances. Source text and UTF-16 model offsets never change.
 // autoSpaceDN/DE inherit through the ordinary paragraph cascade and default to true.
@@ -97,7 +98,7 @@ export function automaticTextGap(
   before: TextBoundary,
   after: TextBoundary,
   policy: CjkParagraphTypography,
-  measurer?: Pick<TextMeasurer, 'automaticTextSpacingGap'>
+  measurer?: TextMeasurer
 ): number {
   if (!ordinaryText(before) || !ordinaryText(after)) return 0;
   const left = script(lastBase(before.text));
@@ -112,16 +113,16 @@ export function automaticTextGap(
         : true
   )
     return 0;
-  if (measurer?.automaticTextSpacingGap) {
-    const gap = measurer.automaticTextSpacingGap(before.style);
-    return gap !== undefined && Number.isFinite(gap) && gap >= 0 && gap <= before.style.fontSizePt
-      ? gap
-      : 0;
+  if (left === 'eastAsian') {
+    const size = before.style.fontSizePt;
+    return Number.isFinite(size) && size > 0 ? size / 4 : 0;
   }
-  // A relative inter-script advance, never a document-specific point correction.
-  // Twenty percent is also used by Writer's inter-script spacing implementation.
-  const em = Math.min(before.style.fontSizePt, after.style.fontSizePt);
-  return Number.isFinite(em) && em > 0 ? em / 5 : 0;
+  // Only the authored Latin/digit face owns the reverse boundary metric.
+  // An absent authored face cannot borrow a substitute file's average width.
+  const gap = authoredCjkGapMetric(measurer, before.style);
+  return gap !== undefined && Number.isFinite(gap) && gap >= 0 && gap <= before.style.fontSizePt
+    ? gap
+    : 0;
 }
 
 interface SourceTextBoundary extends TextBoundary {
@@ -134,7 +135,7 @@ export function automaticTextSpacingAdvance(
   before: SourceTextBoundary | undefined,
   current: SourceTextBoundary,
   policy: CjkParagraphTypography,
-  measurer?: Pick<TextMeasurer, 'automaticTextSpacingGap'>
+  measurer?: TextMeasurer
 ): number {
   let gap = before?.end === current.start ? automaticTextGap(before, current, policy, measurer) : 0;
   let previousBase = '';
@@ -160,7 +161,7 @@ export function automaticLineTextGap(
   text: string,
   faceStyle: ResolvedRunStyle,
   policy: CjkParagraphTypography,
-  measurer?: Pick<TextMeasurer, 'automaticTextSpacingGap'>
+  measurer?: TextMeasurer
 ): number {
   const previous = line.spans.at(-1);
   if (

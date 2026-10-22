@@ -105,6 +105,8 @@ export function createResolvedCjkAutoSpacingGapMetric(
     if (
       !resolved ||
       typeof resolved !== 'object' ||
+      resolved.substitution !== null ||
+      resolved.family.trim().toLowerCase() !== style.fontFamily?.trim().toLowerCase() ||
       typeof resolved.hash !== 'string' ||
       !/^sha256:[0-9a-f]{64}$/u.test(resolved.hash) ||
       !Number.isSafeInteger(resolved.faceIndex) ||

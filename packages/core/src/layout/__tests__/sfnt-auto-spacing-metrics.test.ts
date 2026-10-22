@@ -118,3 +118,40 @@ test('metadata fixture predictions retain all32 independent WPS gap observations
     expect(Math.abs(gap - row.wpsAddedAdvancePt)).toBeLessThanOrEqual(observations.tolerancePt);
   }
 });
+
+test('the authored-family metric rejects substitute bytes and unrelated direct families', () => {
+  const bytes = autoSpacingSfntFixture(980, 1000);
+  const original = { family: 'Authored face', weight: 400, style: 'normal' as const };
+  const replacement = { ...original, family: 'Substitute face' };
+  const snapshot = createFontResourceSnapshot({
+    epoch: 1,
+    maxFontBytes: 128 * 1024,
+    resources: [
+      { request: replacement, id: 'substitute', bytes, hash: sha256FontBytes(bytes), faceIndex: 0 },
+    ],
+    substitutions: [{ from: original, to: replacement }],
+    validateFont: () => ({ valid: true }),
+  });
+  const substituted = snapshot.resolve(original),
+    direct = snapshot.resolve(replacement);
+  if (substituted instanceof FontResolutionError || direct instanceof FontResolutionError)
+    throw Error('fixture admission failed');
+  let reads = 0;
+  const reader = (value: Uint8Array, index: number) => {
+    reads++;
+    return readCjkAutoSpacingFontMetrics(value, index);
+  };
+  const requested = { ...style(), fontFamily: original.family };
+  expect(
+    createResolvedCjkAutoSpacingGapMetric(() => substituted, reader)!(requested)
+  ).toBeUndefined();
+  expect(createResolvedCjkAutoSpacingGapMetric(() => direct, reader)!(requested)).toBeUndefined();
+  expect(reads).toBe(0);
+  expect(
+    createResolvedCjkAutoSpacingGapMetric(() => direct, reader)!({
+      ...requested,
+      fontFamily: replacement.family,
+    })
+  ).toBeCloseTo(6.86, 12);
+  expect(reads).toBe(1);
+});

@@ -1,3 +1,4 @@
+import { withAuthoredCjkGapMetric } from '../cjk-auto-spacing-metric-port.ts';
 import { expect, test } from 'bun:test';
 import { readOoxmlPart, serializeOoxmlPart } from '@docx-editor.dev/core/store';
 import {
@@ -17,7 +18,11 @@ import { anchorLineStartsByModelOffset } from '../anchor-line-probe.ts';
 import { breakParagraph } from '../paragraph-flow.ts';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
-const measurer = createFixedMeasurer(6, 14);
+// This deterministic fixture explicitly supplies an authored reverse metric.
+const measurer = withAuthoredCjkGapMetric(
+  createFixedMeasurer(6, 14),
+  (style) => style.fontSizePt / 4
+);
 const geometry = (width = 160) => ({
   width: width + 20,
   height: 500,
@@ -61,7 +66,7 @@ function geometryRows(value: ReturnType<typeof layout>) {
 
 test('automatic number spacing defaults on and changes real advance only', () => {
   const value = layout(run('1汉'));
-  expect(gap(value)).toBeCloseTo(2.2, 8);
+  expect(gap(value)).toBeCloseTo(2.75, 8);
   const spans = line(value).spans;
   expect(spans.map((s) => s.text).join('')).toBe('1汉');
   expect(spans.map((s) => [s.range.start, s.range.end])).toEqual([
@@ -72,11 +77,11 @@ test('automatic number spacing defaults on and changes real advance only', () =>
 });
 
 test('automatic Latin spacing defaults on independently of number spacing', () => {
-  expect(gap(layout(run('A汉')))).toBeCloseTo(2.2, 8);
+  expect(gap(layout(run('A汉')))).toBeCloseTo(2.75, 8);
   expect(gap(layout(run('1汉'), '<w:autoSpaceDN w:val="0"/>'))).toBeCloseTo(0, 8);
-  expect(gap(layout(run('A汉'), '<w:autoSpaceDN w:val="0"/>'))).toBeCloseTo(2.2, 8);
+  expect(gap(layout(run('A汉'), '<w:autoSpaceDN w:val="0"/>'))).toBeCloseTo(2.75, 8);
   expect(gap(layout(run('A汉'), '<w:autoSpaceDE w:val="false"/>'))).toBeCloseTo(0, 8);
-  expect(gap(layout(run('1汉'), '<w:autoSpaceDE w:val="false"/>'))).toBeCloseTo(2.2, 8);
+  expect(gap(layout(run('1汉'), '<w:autoSpaceDE w:val="false"/>'))).toBeCloseTo(2.75, 8);
 });
 
 test('source run seams do not add or lose automatic advances', () => {
@@ -85,7 +90,7 @@ test('source run seams do not add or lose automatic advances', () => {
   expect(geometryRows(b)).toEqual(geometryRows(a));
   expect(
     line(a).spans.at(-1)!.box.x + line(a).spans.at(-1)!.box.width - line(a).spans[0]!.box.x
-  ).toBeCloseTo(22.4, 8);
+  ).toBeCloseTo(23.5, 8);
 });
 
 test('automatic spacing participates in line fit without leading or trailing gaps', () => {
@@ -122,7 +127,7 @@ test('an inherited false remains false and a direct true overrides it', () => {
     { measurer, geometry: geometry(), styleCascade: cascade }
   );
   expect(gap(first)).toBeCloseTo(0, 8);
-  expect(gap(second)).toBeCloseTo(2.2, 8);
+  expect(gap(second)).toBeCloseTo(2.75, 8);
 });
 
 test('docDefaults false reaches paragraphs without a direct style', () => {
@@ -176,7 +181,7 @@ test('math, projections, fullwidth forms and complex scripts do not acquire auto
 });
 
 test('a combining sequence stays one source cluster at a Latin boundary', () => {
-  expect(gap(layout(run('a\u0301汉')))).toBeCloseTo(2.2, 8);
+  expect(gap(layout(run('a\u0301汉')))).toBeCloseTo(2.75, 8);
   expect(line(layout(run('a\u0301汉'))).spans.map((s) => [s.range.start, s.range.end])).toEqual([
     [0, 2],
     [2, 3],
@@ -192,7 +197,7 @@ test('paint and caret use the published automatic gap without a source space', (
   paintSemanticLayout(host, value, { scale: 1 });
   const painted = [...host.querySelectorAll<HTMLElement>('.docx-line [data-start]')];
   expect(painted.map((s) => s.textContent).join('')).toBe('1汉');
-  expect(parseFloat(painted[1]!.style.marginLeft)).toBeCloseTo(2.2, 8);
+  expect(parseFloat(painted[1]!.style.marginLeft)).toBeCloseTo(2.75, 8);
 });
 
 test('layout and paint leave the original OOXML serialization unchanged', () => {
@@ -227,21 +232,22 @@ test('typography changes invalidate a warm layout without a document edit', () =
     geometry: geometry(),
     styleCascade: buildStyleCascadeTable(styles.root),
   });
-  expect(gap(first)).toBeCloseTo(2.2, 8);
+  expect(gap(first)).toBeCloseTo(2.75, 8);
   expect(gap(second)).toBeCloseTo(0, 8);
   expect(second.revision).toBe(first.revision);
   expect(second.pages).not.toBe(first.pages);
 });
 
 test('justification keeps automatic advances separate from float wrap passages', () => {
-  const value = layout(run('汉1汉汉'), '<w:jc w:val="both"/>', 23);
+  // Three 6pt glyphs plus two 2.75pt fixture gaps need 23.5pt before justification.
+  const value = layout(run('汉1汉汉'), '<w:jc w:val="both"/>', 24);
   const first = line(value);
   expect(first.spans.map((s) => s.text).join('')).toBe('汉1汉');
   expect(first.spans.every((s) => s.wrapAdvanceBefore === undefined)).toBe(true);
   expect(value.pages[0]!.contentBox.x).toBe(10);
-  expect(first.box.width).toBe(23);
+  expect(first.box.width).toBe(24);
   expect(first.spans.at(-1)!.box.x + first.spans.at(-1)!.box.width - first.box.x).toBeCloseTo(
-    23,
+    24,
     8
   );
   for (const span of first.spans) {

@@ -97,8 +97,8 @@ describe('CJK follow-up: protected groups across every run seam', () => {
       for (const line of lines) expect(line.width).toBeLessThanOrEqual(24);
       expect(textLines([parts.join('')], 24, '<w:autoSpaceDE w:val="0"/>')).toEqual([...expected]);
       const automatic = layout(parts, 24);
-      const defaultExpected =
-        parts[0] === '（' ? [...expected] : ['A\u0301BC', 'DEFG', 'HIJ', '中'];
+      // No authored Latin metric is admitted, so the reverse seam adds no gap.
+      const defaultExpected = [...expected];
       expect(automatic.map((line) => line.spans.map((span) => span.text).join(''))).toEqual(
         defaultExpected
       );
@@ -116,10 +116,10 @@ describe('CJK follow-up: protected groups across every run seam', () => {
       ).toBe(parts.join(''));
       expect(automatic.at(-1)!.spans.at(-1)!.range.end).toBe(parts.join('').length);
       if (parts[0] !== '（') {
-        // HIJ中 is 24pt before the 2.2pt inter-script gap; the last glyph must wrap.
+        // HIJ中 is exactly 24pt. The absent authored metric adds no reverse gap.
         expect(lines.at(-1)!.width).toBeCloseTo(24, 8);
-        expect(automatic.at(-2)!.width).toBeCloseTo(18, 8);
-        expect(automatic.at(-1)!.width).toBeCloseTo(6, 8);
+        expect(automatic.at(-2)!.width).toBeCloseTo(24, 8);
+        expect(automatic.at(-1)!.width).toBeCloseTo(24, 8);
         expect(automatic.at(-1)!.spans[0]!.box.x).toBeCloseTo(0, 8);
       }
     }

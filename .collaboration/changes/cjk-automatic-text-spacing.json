@@ -2,8 +2,8 @@
   "impact": "compatible",
   "fields": [],
   "before": "East Asian and Latin-letter or digit boundaries use their natural text advances.",
-  "after": "Supported boundaries use automatic advances from resolved font metrics unless paragraph properties disable them.",
-  "reason": "Only derived layout changes. Shared nodes, canonical UTF-16 offsets, operations, and package serialization remain unchanged. The optional measurer hook adds no document operations.",
+  "after": "Supported East Asian-to-Latin or digit boundaries use one quarter of the East Asian font size. Reverse boundaries use only the authored font metric unless paragraph properties disable them.",
+  "reason": "Only derived layout changes. Shared nodes, canonical UTF-16 offsets, operations, and package serialization remain unchanged. The metric port is internal and session-local. No public measurer method or document operation is added.",
   "tests": [
     "packages/core/src/layout/__tests__/automatic-spacing-metadata.test.ts",
     "packages/core/src/layout/__tests__/flow-checkpoint-guard.test.ts",

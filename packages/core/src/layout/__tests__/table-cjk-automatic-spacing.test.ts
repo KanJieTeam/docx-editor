@@ -1,3 +1,4 @@
+import { withAuthoredCjkGapMetric } from '../cjk-auto-spacing-metric-port.ts';
 import { expect, test } from 'bun:test';
 import { readOoxmlPart, serializeOoxmlPart, type OoxmlElement } from '@docx-editor.dev/core/store';
 import {
@@ -9,7 +10,11 @@ import { paragraphContentWidthsPt } from '../table-autofit-widths.ts';
 import type { TableFragmentRecord } from '../semantic-records.ts';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
-const measurer = createFixedMeasurer(6, 14);
+// This deterministic fixture explicitly supplies an authored reverse metric.
+const measurer = withAuthoredCjkGapMetric(
+  createFixedMeasurer(6, 14),
+  (style) => style.fontSizePt / 4
+);
 const run = (text: string, size = 24, props = '') =>
   `<w:r><w:rPr><w:sz w:val="${size}"/>${props}</w:rPr><w:t xml:space="preserve">${text}</w:t></w:r>`;
 function part(body: string, styles = false) {
@@ -45,7 +50,7 @@ const natural = (size: number, length = 1) => ((6 * size) / 11) * length;
 
 test('automatic table cell widths include both CJK Latin advances at 12pt', () => {
   const result = widths(run('甲A乙'));
-  expect(result.min).toBeCloseTo(natural(12, 3) + 4.8, 8);
+  expect(result.min).toBeCloseTo(natural(12, 3) + 6, 8);
   expect(result.max).toBeCloseTo(result.min, 8);
 });
 
@@ -58,9 +63,9 @@ test('automatic cell advances are identical across source run boundaries', () =>
   }
 });
 
-test('mixed-size cell advances use the same smaller adjacent em as line layout', () => {
+test('mixed-size cell advances use the same directional policy as line layout', () => {
   const result = widths(run('甲', 24) + run('A', 40) + run('乙', 20));
-  expect(result.min).toBeCloseTo(natural(12) + natural(20) + natural(10) + 2.4 + 2, 8);
+  expect(result.min).toBeCloseTo(natural(12) + natural(20) + natural(10) + 3 + 5, 8);
   expect(result.max).toBeCloseTo(result.min, 8);
 });
 
@@ -70,7 +75,7 @@ test('cell spacing inherits disabled flags and honors a direct override independ
   const disabled = widths(run('甲A1乙'), '<w:pStyle w:val="Child"/>', styles);
   const enabled = widths(run('甲A1乙'), '<w:pStyle w:val="Child"/><w:autoSpaceDE/>', styles);
   expect(disabled.min).toBeCloseTo(natural(12, 4), 8);
-  expect(enabled.min).toBeCloseTo(disabled.min + 2.4, 8);
+  expect(enabled.min).toBeCloseTo(disabled.min + 3, 8);
   expect(disabled.max).toBeCloseTo(disabled.min, 8);
 });
 
@@ -88,7 +93,7 @@ test('manual tracking and authored spaces do not acquire automatic cell advances
 
 test('a cell hard break does not carry a leading automatic advance to its next line', () => {
   const result = widths(run('甲') + '<w:r><w:br/></w:r>' + run('A乙'));
-  expect(result.min).toBeCloseTo(natural(12, 2) + 2.4, 8);
+  expect(result.min).toBeCloseTo(natural(12, 2) + 3, 8);
   expect(result.max).toBeCloseTo(result.min, 8);
 });
 
@@ -125,12 +130,15 @@ test('hidden source runs and paragraph defaults preserve the same cell spacing b
 });
 
 test('AutoFit preserves a whole shaped Latin token while pricing adjacent automatic advances', () => {
-  const shaped = {
-    ...measurer,
-    measure: (text: string, style: Parameters<typeof measurer.measure>[1]) =>
-      measurer.measure(text, style) - (text.includes('AV') ? 2 : 0),
-  };
+  const shaped = withAuthoredCjkGapMetric(
+    {
+      ...measurer,
+      measure: (text: string, style: Parameters<typeof measurer.measure>[1]) =>
+        measurer.measure(text, style) - (text.includes('AV') ? 2 : 0),
+    },
+    (style) => style.fontSizePt / 4
+  );
   const result = widths(run('甲AV乙'), '', '', shaped);
-  expect(result.min).toBeCloseTo(natural(12, 4) - 2 + 4.8, 8);
+  expect(result.min).toBeCloseTo(natural(12, 4) - 2 + 6, 8);
   expect(result.max).toBeCloseTo(result.min, 8);
 });

@@ -1,3 +1,4 @@
+import { withAuthoredCjkGapMetric, authoredCjkGapMetric } from '../cjk-auto-spacing-metric-port.ts';
 import { expect, test } from 'bun:test';
 import { readOoxmlPart, serializeOoxmlPart, type OoxmlElement } from '../../store/index.ts';
 import {
@@ -37,10 +38,10 @@ const widthMeasurer: TextMeasurer = {
     text.length * value.characterSpacingPt,
   lineMetrics: () => ({ height: 18.2, baseline: 14 }),
 };
-const metricMeasurer: TextMeasurer = {
-  ...widthMeasurer,
-  automaticTextSpacingGap: (value) => value.fontSizePt / 4,
-};
+const metricMeasurer = withAuthoredCjkGapMetric(
+  { ...widthMeasurer },
+  (value) => value.fontSizePt / 4
+);
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 function source(text = '甲1乙') {
   const value = readOoxmlPart(
@@ -51,20 +52,19 @@ function source(text = '甲1乙') {
   return value.part;
 }
 
-test('optional metric uses the preceding face size for each direction', () => {
+test('forward gaps use the East Asian size and reverse gaps use the authored metric', () => {
   expect(automaticTextGap(boundary('甲', 20), boundary('A', 10), policy, metricMeasurer)).toBe(5);
   expect(automaticTextGap(boundary('A', 10), boundary('乙', 20), policy, metricMeasurer)).toBe(2.5);
-  expect(automaticTextGap(boundary('甲', 20), boundary('A', 10), policy)).toBe(2);
+  expect(automaticTextGap(boundary('甲', 20), boundary('A', 10), policy)).toBe(5);
+  expect(automaticTextGap(boundary('A', 10), boundary('乙', 20), policy)).toBe(0);
 });
 
 test('disabled source flags and explicit spaces do not request font metrics', () => {
   let calls = 0;
-  const measurer = {
-    automaticTextSpacingGap: () => {
-      calls++;
-      return 3.5;
-    },
-  };
+  const measurer = withAuthoredCjkGapMetric({ ...widthMeasurer }, () => {
+    calls++;
+    return 3.5;
+  });
   expect(
     automaticTextGap(boundary('甲'), boundary('1'), { ...policy, autoSpaceDN: false }, measurer)
   ).toBe(0);
@@ -78,9 +78,12 @@ test('disabled source flags and explicit spaces do not request font metrics', ()
 test('unavailable invalid and oversized custom metrics add no invented gap', () => {
   for (const gap of [undefined, NaN, -1, Infinity, 14.1])
     expect(
-      automaticTextGap(boundary('甲'), boundary('1'), policy, {
-        automaticTextSpacingGap: () => gap,
-      })
+      automaticTextGap(
+        boundary('1'),
+        boundary('甲'),
+        policy,
+        withAuthoredCjkGapMetric({ ...widthMeasurer }, () => gap)
+      )
     ).toBe(0);
 });
 
@@ -139,13 +142,10 @@ function intrinsicProbe(
     (child) => child.kind === 'paragraph'
   ) as OoxmlElement;
   const requests: { family: string | null; size: number }[] = [];
-  const measurer: TextMeasurer = {
-    ...widthMeasurer,
-    automaticTextSpacingGap(value) {
-      requests.push({ family: value.fontFamily, size: value.fontSizePt });
-      return metric(value);
-    },
-  };
+  const measurer = withAuthoredCjkGapMetric({ ...widthMeasurer }, (value) => {
+    requests.push({ family: value.fontFamily, size: value.fontSizePt });
+    return metric(value);
+  });
   const widths = paragraphContentWidthsPt(paragraph, {
     context: { measurer },
     view: {
@@ -167,10 +167,7 @@ test('AutoFit minimum and maximum consume both metric boundaries', () => {
   // The three glyphs need 35pt. The two supplied boundary advances need 7pt.
   expect(probe.widths.min).toBeCloseTo(42, 10);
   expect(probe.widths.max).toBeCloseTo(42, 10);
-  expect(probe.requests).toEqual([
-    { family: 'Fixture face', size: 14 },
-    { family: 'Fixture face', size: 14 },
-  ]);
+  expect(probe.requests).toEqual([{ family: 'Fixture face', size: 14 }]);
 });
 
 test('AutoFit source run seams preserve both metric advances and requests', () => {
@@ -181,10 +178,7 @@ test('AutoFit source run seams preserve both metric advances and requests', () =
     expect(joined.widths.max).toBeCloseTo(42, 10);
     expect(split.widths.min).toBeCloseTo(42, 10);
     expect(split.widths.max).toBeCloseTo(42, 10);
-    expect(joined.requests).toEqual([
-      { family: 'Fixture face', size: 14 },
-      { family: 'Fixture face', size: 14 },
-    ]);
+    expect(joined.requests).toEqual([{ family: 'Fixture face', size: 14 }]);
     expect(split.requests).toEqual(joined.requests);
   }
 });
@@ -205,10 +199,7 @@ test('AutoFit metrics belong to each preceding face and size', () => {
   // Glyph advances are 20 + 5 + 12pt. Only the first two faces own boundaries.
   expect(probe.widths.min).toBeCloseTo(43.25, 10);
   expect(probe.widths.max).toBeCloseTo(43.25, 10);
-  expect(probe.requests).toEqual([
-    { family: 'Wide face', size: 20 },
-    { family: 'Narrow face', size: 10 },
-  ]);
+  expect(probe.requests).toEqual([{ family: 'Narrow face', size: 10 }]);
 });
 
 test('AutoFit DN and DE source flags suppress only their metric requests', () => {
@@ -229,13 +220,8 @@ test('AutoFit DN and DE source flags suppress only their metric requests', () =>
   expect(all.requests).toEqual([
     { family: 'Fixture face', size: 14 },
     { family: 'Fixture face', size: 14 },
-    { family: 'Fixture face', size: 14 },
-    { family: 'Fixture face', size: 14 },
   ]);
-  expect(noDN.requests).toEqual([
-    { family: 'Fixture face', size: 14 },
-    { family: 'Fixture face', size: 14 },
-  ]);
+  expect(noDN.requests).toEqual([{ family: 'Fixture face', size: 14 }]);
   expect(noDE.requests).toEqual(noDN.requests);
   expect(neither.requests).toEqual([]);
 });
@@ -270,9 +256,26 @@ test('shaped measurer shares font resolution with the metric without shaping ext
   });
   const value = style();
   expect(measurer.hasResolvedFont!(value)).toBe(true);
-  expect(measurer.automaticTextSpacingGap!(value)).toBe(3.5);
-  expect(measurer.automaticTextSpacingGap!({ ...value, fontSizePt: 20 })).toBe(5);
+  expect(authoredCjkGapMetric(measurer, value)).toBe(3.5);
+  expect(authoredCjkGapMetric(measurer, { ...value, fontSizePt: 20 })).toBe(5);
   expect(resolves).toBe(2);
   expect(shapes).toBe(0);
   expect(createResolvedCjkAutoSpacingGapMetric(() => font)!(value)).toBe(3.5);
+});
+
+test('a substitute average cannot enlarge the forward quarter-em boundary', () => {
+  let calls = 0;
+  const substituted = withAuthoredCjkGapMetric({ ...widthMeasurer }, () => {
+    calls++;
+    return 9.8;
+  });
+  expect(automaticTextGap(boundary('甲', 20), boundary('A', 10), policy, substituted)).toBe(5);
+  expect(calls).toBe(0);
+  expect(automaticTextGap(boundary('A', 10), boundary('乙', 20), policy, metricMeasurer)).toBe(2.5);
+});
+
+test('ordinary custom measurers have no implicit reverse font metric', () => {
+  expect(automaticTextGap(boundary('A', 10), boundary('乙', 20), policy, widthMeasurer)).toBe(0);
+  expect(automaticTextGap(boundary('1', 20), boundary('乙', 10), policy, widthMeasurer)).toBe(0);
+  expect(automaticTextGap(boundary('甲', 20), boundary('1', 10), policy, widthMeasurer)).toBe(5);
 });

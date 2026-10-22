@@ -27,12 +27,6 @@ export interface TextOutline {
  * Layout never reads the DOM, so this is the only way width and height enter it.
  */
 export interface TextMeasurer {
-  /**
-   * Optional derived inter-script gap from the preceding resolved face, in points.
-   * This metric never replaces glyph advances. Undefined refuses a derived gap.
-   * Measurers without this hook retain the default proportional spacing policy.
-   */
-  automaticTextSpacingGap?(style: ResolvedRunStyle): number | undefined;
   /** Advance width of `text` in the resolved style. */
   measure(text: string, style: ResolvedRunStyle): number;
   /**
