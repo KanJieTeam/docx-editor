@@ -134,6 +134,9 @@ export async function loadHarness(
   await page.waitForFunction(() => !!window.__DOCX_EDITOR_E2E__?.ready());
   await page.waitForFunction(() => window.__DOCX_EDITOR_E2E__?.fontMeasurer() === 'shaped');
   await page.waitForSelector('.docx-page[data-materialized="true"]', { timeout: 60_000 });
+  // First pages accept input while the remaining opening slices still publish pages.
+  // Measure the full document after its existing opening indicator is removed.
+  await page.waitForSelector('.docx-opening-indicator', { state: 'detached', timeout: 60_000 });
   if (measurementProbe) await installMeasurementProbe(page);
 }
 
