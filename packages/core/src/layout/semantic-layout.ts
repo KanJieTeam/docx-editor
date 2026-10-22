@@ -1616,6 +1616,7 @@ function* layoutBlocksPass(
         displayMode,
         ...(authorFilter ? { revisionAuthorFilter: authorFilter } : {}),
         ...inlineDrawingFlow(options.inlineDrawingLayout, hostedStory),
+        ...(!entry.frame ? { deferInlineDrawingHorizontalClip: true } : {}),
         contentLeft: 0,
         contentRight:
           columnCount > 1 ? columnWidth() : entry.indent.left + available + entry.indent.right,
@@ -2663,11 +2664,12 @@ function* layoutBlocksPass(
       }));
       // Word aligns inside the passage a float leaves the line, not the page margins.
       const measure = lineAlignmentMeasure(pendingLine, columnX, lineIndent, lineAvailableWidth);
-      // Use page width: column-zero width would erase drawings in later columns.
+      // Use physical paper horizontally, retaining the body vertical clip.
+      const paperClip = pageContentClip();
       const pageClip = Object.freeze({
-        x: 0,
+        x: paperClip.x,
         y: 0,
-        width: contentWidthForReflow,
+        width: paperClip.width,
         height: contentHeight(),
       });
       const placedDrawings = pendingLine.drawings.map((drawing) =>
