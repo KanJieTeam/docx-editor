@@ -1,0 +1,164 @@
+name: API snapshot evidence
+
+on:
+  push:
+    branches: [chore/api-snapshot-evidence-20261023]
+    paths: [.github/workflows/api-snapshot-evidence.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-snapshot-evidence-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    if: github.repository == 'KanJieTeam/docx-editor'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODE_OPTIONS: --max-old-space-size=2048
+      SOURCE_COMMIT: 366ae2c0a4f408913f697a8d29af085a9604a6e1
+      EVIDENCE: .api-snapshot-evidence
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.4'
+      - name: Verify exact source and record input hashes
+        id: source
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          out = pathlib.Path(os.environ['EVIDENCE'])
+          out.mkdir()
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          source = os.environ['SOURCE_COMMIT']
+          workflow = '.github/workflows/api-snapshot-evidence.yml'
+          head = git('rev-parse', 'HEAD').decode().strip()
+          assert os.environ['GITHUB_REPOSITORY'] == 'KanJieTeam/docx-editor'
+          assert os.environ['GITHUB_REF'] == 'refs/heads/chore/api-snapshot-evidence-20261023'
+          assert git('show', '-s', '--format=%P', 'HEAD').decode().strip() == source
+          assert git('diff', '--name-status', source, 'HEAD').decode().splitlines() == ['A\t' + workflow]
+          git('diff', '--exit-code', 'HEAD')
+          inputs = []
+          for name in git('ls-files', '-z').decode().split('\0'):
+              if not name:
+                  continue
+              data = pathlib.Path(name).read_bytes()
+              inputs.append(dict(path=name, bytes=len(data), sha256=hashlib.sha256(data).hexdigest()))
+          manifest = dict(sourceCommit=source, sourceTree=git('rev-parse', source+'^{tree}').decode().strip(),
+                          evidenceCommit=head, evidenceTree=git('rev-parse', 'HEAD^{tree}').decode().strip(),
+                          repository=os.environ['GITHUB_REPOSITORY'], runId=os.environ['GITHUB_RUN_ID'],
+                          runAttempt=os.environ['GITHUB_RUN_ATTEMPT'], inputs=inputs,
+                          sourceDifferenceOnlyWorkflow=True, gitVersion=git('--version').decode().strip())
+          (out/'source-manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
+          (out/'evidence-branch.patch').write_bytes(git('diff', '--binary', source, 'HEAD'))
+          PY
+          node --version | tee "$EVIDENCE/node-version.log"
+          bun --version | tee "$EVIDENCE/bun-version.log"
+      - name: Install exact lock dependencies
+        id: install
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile 2>&1 | tee "$EVIDENCE/install.log"
+      - name: Build own i18n
+        id: i18n
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun run --filter '@docx-editor.dev/i18n' build 2>&1 | tee "$EVIDENCE/i18n-build.log"
+      - name: Build complete Core declarations
+        id: declarations
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-core-declarations.mjs 2>&1 | tee "$EVIDENCE/core-declarations.log"
+      - name: Generate official Core API reports
+        id: generate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/api-extractor.mjs --package '@docx-editor.dev/core' --local 2>&1 | tee "$EVIDENCE/api-local.log"
+      - name: Check official Core API reports
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/api-extractor.mjs --package '@docx-editor.dev/core' 2>&1 | tee "$EVIDENCE/api-check.log"
+      - name: Record complete generated output and diff
+        if: always()
+        env:
+          SOURCE_OUTCOME: ${{ steps.source.outcome }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          I18N_OUTCOME: ${{ steps.i18n.outcome }}
+          DECLARATIONS_OUTCOME: ${{ steps.declarations.outcome }}
+          GENERATE_OUTCOME: ${{ steps.generate.outcome }}
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, shutil, subprocess
+          out = pathlib.Path(os.environ['EVIDENCE'])
+          out.mkdir(exist_ok=True)
+          outcomes = {k: os.environ[k+'_OUTCOME'] for k in ['SOURCE','INSTALL','I18N','DECLARATIONS','GENERATE','CHECK']}
+          generated = all(value == 'success' for value in outcomes.values())
+          errors = []
+          if outcomes['SOURCE'] == 'success':
+              manifest = json.loads(pathlib.Path('packages/core/package.json').read_text())
+              entries = [(key, value['types']) for key, value in manifest['exports'].items()
+                         if isinstance(value, dict) and isinstance(value.get('types'), str)]
+              if len(entries) != 15:
+                  errors.append('Expected all 15 published Core declaration entries.')
+              for key, target in entries:
+                  if not pathlib.Path('packages/core', target).is_file():
+                      errors.append('Missing declaration entry: '+key)
+              reports = pathlib.Path('docs/api/docx-editor-core')
+              expected = {('index' if key == '.' else key[2:].replace('/','-'))+'.api.md' for key, _ in entries}
+              if {p.name for p in reports.glob('*.api.md')} != expected:
+                  errors.append('Core reports do not cover exactly the 15 published entries.')
+              for source in sorted(reports.glob('*.api.md')):
+                  target = out/'reports'/source.name
+                  target.parent.mkdir(exist_ok=True)
+                  shutil.copyfile(source, target)
+              for source in sorted(pathlib.Path('packages/core/dist').rglob('*.d.ts')):
+                  target = out/'declarations'/source.relative_to('packages/core/dist')
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(source, target)
+              diff = subprocess.check_output(['git','diff','--binary','HEAD'])
+              (out/'generated.patch').write_bytes(diff)
+              changed = subprocess.check_output(['git','diff','--name-only','HEAD']).decode().splitlines()
+              if generated and changed != ['docs/api/docx-editor-core/layout.api.md']:
+                  errors.append('Generated changes exceed the single expected layout API report: '+repr(changed))
+          files = []
+          for file in sorted(out.rglob('*')):
+              if file.is_file():
+                  data = file.read_bytes()
+                  files.append(dict(path=str(file.relative_to(out)),bytes=len(data),sha256=hashlib.sha256(data).hexdigest()))
+          result = dict(sourceCommit=os.environ['SOURCE_COMMIT'], evidenceCommit=os.environ['GITHUB_SHA'],
+                        runId=os.environ['GITHUB_RUN_ID'], runAttempt=os.environ['GITHUB_RUN_ATTEMPT'],
+                        outcomes=outcomes, qualified=generated and not errors, errors=errors, files=files,
+                        handwrittenSnapshot=False, borrowedDist=False)
+          (out/'output-manifest.json').write_text(json.dumps(result,indent=2)+'\n')
+          if generated and errors:
+              raise SystemExit('Generated output guard failed: '+'; '.join(errors))
+          PY
+      - name: Upload public generation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: api-snapshot-366ae2c0-${{ github.sha }}
+          path: .api-snapshot-evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
