@@ -14,7 +14,7 @@ import { clippedExactRow, overheightRowError } from './table-exact-row-clip.ts';
 // story loop keeps ownership of the cursor and this module keeps the row rules.
 
 import { positionedTableOriginX } from './table-origin.ts';
-import { withoutFloatingTableZones } from './table-float-overlap.ts';
+import { tableTerminalDeps } from './table-exact-terminal-border.ts';
 import type { OoxmlElement } from '@docx-editor.dev/core/store';
 import {
   finalizeTableRows,
@@ -166,7 +166,7 @@ export function* paginateTableInFlowSteps(
     outOfFlow || structure.float
       ? null
       : planOutOfCellFloats(structure, table.id, tableLeft, flow.cursorY, flowDeps);
-  const tableDeps = floats?.deps ?? (outOfFlow ? withoutFloatingTableZones(flowDeps) : flowDeps);
+  const tableDeps = tableTerminalDeps(structure, flowDeps, floats?.deps, outOfFlow);
   const headerRows: SemanticTableRow[] = [];
   for (const row of structure.rows) {
     if (row.isHeader) headerRows.push(row);

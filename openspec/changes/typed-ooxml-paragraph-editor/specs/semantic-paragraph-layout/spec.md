@@ -338,3 +338,38 @@ The editor SHALL replace host font resources without replacing its document sess
 - **WHEN** the current replacement resolver fails
 - **THEN** the editor reports the failure with its cause and keeps bounded fallback measurement
 - **AND** it does not restore fonts that the host removed
+
+### Requirement: Terminal exact-row outer rule extent
+
+Semantic layout SHALL reserve a supported terminal exact row's simple outer rule outside its authored content height. Admission, published row and cell boxes, painted borders, and following flow SHALL consume the same extra extent. Text layout, exact clipping, vertical alignment, canonical source text, and saved XML SHALL retain their authored behavior.
+
+#### Scenario: Outer rule preserves authored exact row pitch
+
+- **WHEN** supported exact rows have equal single outer rules
+- **THEN** the distance between the outer rule centers equals the authored exact row pitch
+- **AND** following text starts below the published terminal extent
+
+#### Scenario: Border room is insufficient
+
+- **WHEN** an authored exact row fits the remaining band but its complete outer rule does not
+- **THEN** pagination measures the complete terminal extent before committing the row
+- **AND** direct bounded placement retains authored content height and alignment without deducting an unapplied border budget
+
+### Requirement: Terminal-rule table eligibility
+
+Only bounded, top-level, unpositioned, collapsed tables with text-only horizontal projections and complete grid coverage SHALL qualify. Equal single top and bottom rules SHALL have integral-twip widths up to 12pt. Only the first authored row MAY span columns. A first-column vertical merge MAY cover exactly the first two rows and SHALL end before the terminal row.
+
+#### Scenario: Unsupported shapes keep existing geometry
+
+- **WHEN** a table has other merges, repeated headers, nested content, supported bottom-to-top cells, compound rules, cell spacing, or unequal or fractional-twip outer widths
+- **THEN** it retains its existing geometry
+
+### Requirement: Cached terminal-rule eligibility
+
+Eligibility scanning SHALL preserve canonical rows and their merge state. Repeated placement of an immutable table SHALL reuse its cached eligibility decision, including a refused decision.
+
+#### Scenario: Cached eligibility preserves source rows
+
+- **WHEN** a supported immutable table has a two-row first-column prefix merge
+- **THEN** eligibility scanning leaves the actual merge and canonical rows unchanged
+- **AND** repeated placement reuses only the structure's cached eligibility decision

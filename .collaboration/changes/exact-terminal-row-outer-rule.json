@@ -1,0 +1,13 @@
+{
+  "impact": "compatible",
+  "fields": [],
+  "before": "Supported exact terminal rows paint the outer rule inside the authored row pitch.",
+  "after": "Supported exact terminal rows reserve the outer rule outside the authored content height.",
+  "reason": "Only local layout and paint geometry change. Canonical XML, replicated operations, and saved rooms remain unchanged.",
+  "tests": [
+    "packages/core/src/layout/__tests__/table-exact-terminal-border.test.ts",
+    "packages/pro/src/collaboration/__tests__/document-exact-terminal-border.test.ts"
+  ],
+  "changeset": "exact-terminal-row-outer-rule",
+  "migration": null
+}

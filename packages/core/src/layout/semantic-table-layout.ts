@@ -4,6 +4,7 @@ import { reuseSingleLineAtWidth } from './paragraph-cache-width-reuse.ts';
 import { cellParagraphInputs, cellParagraphBreakInputs } from './cell-paragraph-inputs.ts';
 import { adjustedBreakIndex, paragraphKeeps } from './pagination-keeps.ts';
 import { firstRowContentDeps } from './table-fragment-content-insets.ts';
+import { exactTerminalBorderPt, fittingBorderPt } from './table-exact-terminal-border.ts';
 import { cellContextualSpacing, contextualCellNeighbours } from './contextual-paragraph-spacing.ts';
 import { emitNestedTable } from './nested-table-layout.ts';
 import { paragraphIsRtl } from './rtl-paragraph.ts';
@@ -196,6 +197,8 @@ export interface HostedStoryFlowDeps {
 }
 
 export interface TableFlowDeps {
+  /** Layout-only outer extent; the authored content and clip heights remain unchanged. */
+  readonly exactTerminalBorder?: { readonly row: SemanticTableRow; readonly widthPt: number };
   /** The current row already has the full page band (possibly below repeated headers). */
   readonly rowAtPageStart?: boolean;
   readonly paragraphLineUnitPt?: number;
@@ -1310,6 +1313,10 @@ export function layoutRowFragmentBounded(
   const heightRule = row.height;
   const exactHeightPt = heightRule.rule === 'exact' ? heightRule.valuePt : undefined;
   const atLeastHeightPt = heightRule.rule === 'atLeast' ? heightRule.valuePt : undefined;
+  const terminalBorderPt =
+    !isHeaderRepeat && !isContinuation && depth === 0 && cellSpacingPt === 0
+      ? exactTerminalBorderPt(row, deps)
+      : 0;
   // The same spacing opens a gap above each row's cells: content starts that much lower and
   // the table closes the gap below its last row. An exact row keeps its authored height.
   const rowGapPt = exactHeightPt === undefined ? cellSpacingGapPt(cellSpacingPt) : 0;
@@ -1513,10 +1520,12 @@ export function layoutRowFragmentBounded(
   // Exact: force the authored height (clamped to the page budget) and clip leftover content.
   // atLeast: a complete row fills its minimum, bounded by the available page band.
   let clipExact = false;
+  let appliedTerminalBorderPt = 0;
   if (exactHeightPt !== undefined) {
     const exactBottom = rowTop + exactHeightPt;
     if (exactBottom <= maxBottom + 0.001) {
-      rowBottom = exactBottom;
+      appliedTerminalBorderPt = fittingBorderPt(exactBottom, terminalBorderPt, maxBottom);
+      rowBottom = exactBottom + appliedTerminalBorderPt;
       clipExact = true;
     } else {
       // Exact taller than remaining band — keep content-sized clamp; pagination fails closed.
@@ -1561,7 +1570,12 @@ export function layoutRowFragmentBounded(
       const available =
         entry.cell.textDirection === 'btLr'
           ? entry.width - entry.insets.left - entry.insets.right - contentHeight
-          : cellAlignmentRoom(rowHeight, entry.insets.top, entry.insets.bottom, contentHeight);
+          : cellAlignmentRoom(
+              rowHeight - appliedTerminalBorderPt,
+              entry.insets.top,
+              entry.insets.bottom,
+              contentHeight
+            );
       if (available > 0)
         blocks = shiftBlocks(blocks, cellAlignmentShift(entry.cell.vAlign, available));
     }
