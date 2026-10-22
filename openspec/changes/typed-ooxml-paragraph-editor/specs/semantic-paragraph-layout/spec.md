@@ -340,10 +340,10 @@ Semantic layout SHALL resolve `w:autoSpaceDE` and `w:autoSpaceDN` through the pa
 - **WHEN** two editors converge after edits remove the only East Asian character from a warm paragraph
 - **THEN** both editors remove the obsolete automatic advances and retain shared text, history, and saved source offsets
 
-#### Scenario: Resolved font owns the derived gap
+#### Scenario: Reverse gap uses the authored face metric
 
-- **WHEN** a supported boundary uses a shaped measurer with an admitted preceding face
-- **THEN** the gap derives from that face's average character width and size
+- **WHEN** Latin letters or ASCII digits precede supported East Asian text and the shaped measurer resolves the authored Latin face without substitution
+- **THEN** the boundary advance equals half of that face's average character width per em, scaled to the run's font size
 - **AND** glyph advances, source text, and canonical offsets remain unchanged
 
 #### Scenario: Custom metric refuses a boundary
@@ -351,6 +351,24 @@ Semantic layout SHALL resolve `w:autoSpaceDE` and `w:autoSpaceDN` through the pa
 - **WHEN** the automatic-spacing hook returns an unavailable or invalid metric
 - **THEN** the boundary receives no invented gap
 - **AND** measurers without the hook add no reverse advance
+
+#### Scenario: Directional spacing uses the authored font
+
+- **WHEN** supported East Asian text precedes Latin letters or ASCII digits
+- **THEN** the boundary advance equals one quarter of the East Asian run's authored font size
+- **AND** a substitute font's average width cannot change that advance
+
+#### Scenario: Reverse spacing has no authored metric
+
+- **WHEN** Latin letters or ASCII digits precede East Asian text and the authored font metric is unavailable
+- **THEN** the boundary adds no reverse advance
+- **AND** layout does not use a substitute font's average width or change source text
+
+#### Scenario: A group that cannot break keeps its advance
+
+- **WHEN** East Asian text and a Latin letter or ASCII digit share one font and no line break is allowed between them
+- **THEN** line layout draws the same boundary advance that table AutoFit counts
+- **AND** the caret after the boundary sits after the advance
 
 ### Requirement: Host font resource replacement
 
@@ -374,15 +392,3 @@ The editor SHALL replace host font resources without replacing its document sess
 - **WHEN** the current replacement resolver fails
 - **THEN** the editor reports the failure with its cause and keeps bounded fallback measurement
 - **AND** it does not restore fonts that the host removed
-
-#### Scenario: Directional spacing uses the authored font
-
-- **WHEN** supported East Asian text precedes Latin letters or ASCII digits
-- **THEN** the boundary advance equals one quarter of the East Asian run's authored font size
-- **AND** a substitute font's average width cannot change that advance
-
-#### Scenario: Reverse spacing has no authored metric
-
-- **WHEN** Latin letters or ASCII digits precede East Asian text and the authored font metric is unavailable
-- **THEN** the boundary adds no reverse advance
-- **AND** layout does not use a substitute font's average width or change source text

@@ -280,3 +280,93 @@ test('anchor line prediction and placement include the same boundary advances', 
   expect(prediction.get(1)).toBe(1);
   expect(prediction.get(2)).toBe(2);
 });
+
+test('a reverse advance inside a group uses the drawn font slot face', () => {
+  // A hinted pinyin letter draws in the East Asian face, which alone supplies the metric.
+  const slotMeasurer = withAuthoredCjkGapMetric(createFixedMeasurer(6, 14), (style) =>
+    style.fontFamily === 'SimSun' ? 3 : undefined
+  );
+  const fonts =
+    '<w:rFonts w:ascii="Unrecorded Latin" w:hAnsi="Unrecorded Latin" w:eastAsia="SimSun" w:hint="eastAsia"/>';
+  const value = layoutSemanticDocument(doc(run('ā中', fonts + '<w:lang w:eastAsia="zh-CN"/>')), 0, {
+    measurer: slotMeasurer,
+    geometry: geometry(),
+    styleCascade: {
+      ...buildStyleCascadeTable(null),
+      typography: {
+        strict: false,
+        compression: 'doNotCompress',
+        before: { 'zh-cn': '中' },
+        after: {},
+      },
+    },
+  });
+  const [letter, ideograph] = line(value).spans;
+  expect([letter!.text, ideograph!.text]).toEqual(['ā', '中']);
+  expect(ideograph!.box.x - letter!.box.x - letter!.box.width).toBeCloseTo(3, 8);
+});
+
+test('a group that cannot break carries to the next line with its advance', () => {
+  const value = layoutSemanticDocument(
+    doc(run('前文3ヵ月後に', '<w:lang w:eastAsia="ja-JP"/>')),
+    0,
+    {
+      measurer,
+      geometry: geometry(20),
+      styleCascade: {
+        ...buildStyleCascadeTable(null),
+        typography: { strict: true, compression: 'doNotCompress', before: {}, after: {} },
+      },
+    }
+  );
+  const lines = value.pages[0]!.fragments[0]!.lines;
+  expect(lines.map((l) => l.spans.map((s) => s.text).join(''))).toEqual(['前文', '3ヵ', '月後に']);
+  const [digit, kana] = lines[1]!.spans;
+  expect(kana!.box.x - digit!.box.x - digit!.box.width).toBeCloseTo(2.75, 8);
+});
+
+test('line layout draws the advance inside a group that cannot break', () => {
+  const cases = [
+    {
+      text: '甲A乙',
+      lang: '<w:lang w:eastAsia="zh-CN"/>',
+      typography: {
+        strict: false,
+        compression: 'doNotCompress' as const,
+        before: { 'zh-cn': 'A乙' },
+        after: { 'zh-cn': '甲A' },
+      },
+      spans: ['甲', 'A', '乙'],
+      narrow: ['甲', 'A', '乙'],
+    },
+    {
+      text: '3ヵ月',
+      lang: '<w:lang w:eastAsia="ja-JP"/>',
+      typography: { strict: true, compression: 'doNotCompress' as const, before: {}, after: {} },
+      spans: ['3', 'ヵ月'],
+      narrow: ['3', 'ヵ'],
+    },
+  ];
+  for (const { text, lang, typography, spans, narrow } of cases) {
+    for (const width of [160, 14]) {
+      const value = layoutSemanticDocument(doc(run(text, lang)), 0, {
+        measurer,
+        geometry: geometry(width),
+        styleCascade: { ...buildStyleCascadeTable(null), typography },
+      });
+      const placed = line(value).spans;
+      // The group stays on one line, and every script boundary carries its advance.
+      expect(placed.map((span) => span.text)).toEqual(width === 14 ? narrow : spans);
+      for (let index = 1; index < placed.length; index += 1) {
+        const previous = placed[index - 1]!;
+        expect(placed[index]!.box.x - previous.box.x - previous.box.width).toBeCloseTo(2.75, 8);
+        const caret = caretAt(
+          value,
+          { paragraphId: placed[index]!.range.paragraphId, offset: placed[index]!.range.start },
+          measurer
+        );
+        expect(caret!.x).toBeCloseTo(placed[index]!.box.x, 8);
+      }
+    }
+  }
+});

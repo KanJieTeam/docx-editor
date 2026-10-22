@@ -64,7 +64,11 @@ import {
   type LineLocalAdvances,
 } from './cjk-spacing.ts';
 import { resolveCjkTypography } from './cjk-typography.ts';
-import { automaticLineTextGap, automaticTextSpan } from './cjk-automatic-spacing.ts';
+import {
+  automaticLineTextGap,
+  automaticTextSpan,
+  splitAtAutomaticSpacing,
+} from './cjk-automatic-spacing.ts';
 import {
   EMPTY_TAB_STOPS,
   tabAdvanceWidth,
@@ -236,8 +240,12 @@ export function breakParagraph(
   const firstLineOffset = slotOpen ? (flow?.firstLineOffset ?? 0) : 0;
   const markerBaselineFloor = slotOpen ? (flow?.firstLineMinimumBaseline ?? 0) : 0;
   const markerAscent = slotOpen ? Math.max(0, flow?.firstLineMarkerAscent ?? 0) : 0;
-  const visiblePieces = paragraphContinuationPieces(allPieces, startOffset, flow?.showFieldCodes);
   const typography = flow?.typography ?? resolveCjkTypography(paragraphProperties());
+  const visiblePieces = splitAtAutomaticSpacing(
+    paragraphContinuationPieces(allPieces, startOffset, flow?.showFieldCodes),
+    typography,
+    measurer
+  );
   const { preserveColonAdvances } = advances;
   const pieces = compressCjkPieces(visiblePieces, typography, measurer, advances, available);
   const seamNaturalWidths = cjkSeamNaturalWidths(pieces, visiblePieces, measurer);

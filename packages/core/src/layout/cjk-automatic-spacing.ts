@@ -151,6 +151,82 @@ export function automaticTextSpacingAdvance(
   return gap;
 }
 
+const EAST_ASIAN_TEXT =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}\p{Script=Yi}]/u;
+const LATIN_OR_DIGIT_TEXT = /[0-9\p{Script=Latin}]/u;
+
+/**
+ * Split literal pieces where an automatic advance falls inside them. Line layout prices an
+ * advance only at a span seam, so text that cannot break between its East Asian and Latin
+ * sides (one font, kinsoku before small kana) would otherwise draw without the advance that
+ * table AutoFit counts. Pieces with no such boundary are returned as they are.
+ */
+export function splitAtAutomaticSpacing(
+  pieces: FieldAwarePiece[],
+  policy: CjkParagraphTypography,
+  measurer?: TextMeasurer
+): FieldAwarePiece[] {
+  if (policy.autoSpaceDE === false && policy.autoSpaceDN === false) return pieces;
+  let out: FieldAwarePiece[] | null = null;
+  for (let index = 0; index < pieces.length; index += 1) {
+    const piece = pieces[index]!;
+    const cuts = automaticSpacingCuts(piece, policy, measurer);
+    if (cuts.length === 0) {
+      out?.push(piece);
+      continue;
+    }
+    out ??= pieces.slice(0, index);
+    let from = 0;
+    for (const to of [...cuts, piece.text.length]) {
+      out.push({
+        ...piece,
+        text: piece.text.slice(from, to),
+        start: piece.start + from,
+        end: piece.start + to,
+      });
+      from = to;
+    }
+  }
+  return out ?? pieces;
+}
+
+function automaticSpacingCuts(
+  piece: FieldAwarePiece,
+  policy: CjkParagraphTypography,
+  measurer?: TextMeasurer
+): number[] {
+  const literal = piece.end - piece.start === piece.text.length;
+  if (
+    !literal ||
+    piece.text.length < 2 ||
+    !EAST_ASIAN_TEXT.test(piece.text) ||
+    !LATIN_OR_DIGIT_TEXT.test(piece.text) ||
+    !ordinaryText(piece)
+  )
+    return [];
+  // The piece passed the source checks above; price each boundary in the drawn face, as line
+  // layout and AutoFit do.
+  const style = styleForFontSlot(piece.style, piece.fontSlot);
+  const cuts: number[] = [];
+  let previousBase = '';
+  let offset = 0;
+  for (const character of piece.text) {
+    if (
+      previousBase !== '' &&
+      automaticTextGap(
+        { text: previousBase, style },
+        { text: character, style },
+        policy,
+        measurer
+      ) > 0
+    )
+      cuts.push(offset);
+    if (!/^\p{M}$/u.test(character)) previousBase = character;
+    offset += character.length;
+  }
+  return cuts;
+}
+
 /** Re-read the destination line after wrapping. A new line has no leading advance. */
 export function automaticLineTextGap(
   line: { readonly spans: readonly StyleSpanRecord[]; readonly width: number },

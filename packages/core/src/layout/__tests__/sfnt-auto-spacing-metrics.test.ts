@@ -56,7 +56,7 @@ test('SFNT reader rejects invalid face indices and collection versions', () => {
   expect(readCjkAutoSpacingFontMetrics(data, 0)).toBeUndefined();
 });
 
-test('SFNT table directory obeys the existing4096-record limit', () => {
+test('SFNT table directory obeys the existing 4096-record limit', () => {
   expect(
     readCjkAutoSpacingFontMetrics(autoSpacingSfntFixture(128, 256, 4096), 0)?.averageAdvanceEm
   ).toBe(0.5);
