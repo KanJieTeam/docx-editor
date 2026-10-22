@@ -162,10 +162,10 @@ function intrinsicProbe(
 const intrinsicRun = (text: string, size = 14, family = 'Fixture face') =>
   `<w:r><w:rPr><w:rFonts w:ascii="${family}" w:hAnsi="${family}" w:eastAsia="${family}"/><w:sz w:val="${size * 2}"/></w:rPr><w:t>${text}</w:t></w:r>`;
 
-test('AutoFit minimum and maximum consume both metric boundaries', () => {
+test('AutoFit legal minimum excludes boundary gaps while maximum retains both advances', () => {
   const probe = intrinsicProbe(intrinsicRun('甲1乙'));
-  // The three glyphs need 35pt. The two supplied boundary advances need 7pt.
-  expect(probe.widths.min).toBeCloseTo(42, 10);
+  // Legal cuts leave a 14pt ideograph as the minimum. The unwrapped 35pt text keeps 7pt of gaps.
+  expect(probe.widths.min).toBeCloseTo(14, 10);
   expect(probe.widths.max).toBeCloseTo(42, 10);
   expect(probe.requests).toEqual([{ family: 'Fixture face', size: 14 }]);
 });
@@ -174,9 +174,9 @@ test('AutoFit source run seams preserve both metric advances and requests', () =
   for (const middle of ['A', '1']) {
     const joined = intrinsicProbe(intrinsicRun(`甲${middle}乙`));
     const split = intrinsicProbe(intrinsicRun('甲') + intrinsicRun(middle) + intrinsicRun('乙'));
-    expect(joined.widths.min).toBeCloseTo(42, 10);
+    expect(joined.widths.min).toBeCloseTo(14, 10);
     expect(joined.widths.max).toBeCloseTo(42, 10);
-    expect(split.widths.min).toBeCloseTo(42, 10);
+    expect(split.widths.min).toBeCloseTo(14, 10);
     expect(split.widths.max).toBeCloseTo(42, 10);
     expect(joined.requests).toEqual([{ family: 'Fixture face', size: 14 }]);
     expect(split.requests).toEqual(joined.requests);
@@ -196,8 +196,8 @@ test('AutoFit metrics belong to each preceding face and size', () => {
     '',
     (value) => suppliedGaps.get(value.fontFamily ?? '')
   );
-  // Glyph advances are 20 + 5 + 12pt. Only the first two faces own boundaries.
-  expect(probe.widths.min).toBeCloseTo(43.25, 10);
+  // The 20pt ideograph sets the minimum. The 37pt maximum adds 5pt forward and 1.25pt reverse.
+  expect(probe.widths.min).toBeCloseTo(20, 10);
   expect(probe.widths.max).toBeCloseTo(43.25, 10);
   expect(probe.requests).toEqual([{ family: 'Narrow face', size: 10 }]);
 });
@@ -208,14 +208,14 @@ test('AutoFit DN and DE source flags suppress only their metric requests', () =>
   const noDN = intrinsicProbe(body, '<w:autoSpaceDN w:val="0"/>');
   const noDE = intrinsicProbe(body, '<w:autoSpaceDE w:val="0"/>');
   const neither = intrinsicProbe(body, '<w:autoSpaceDN w:val="0"/><w:autoSpaceDE w:val="0"/>');
-  // Glyph advances are 56pt. Each enabled script kind contributes two 3.5pt gaps.
-  expect(all.widths.min).toBeCloseTo(70, 10);
+  // Each legal minimum is one 14pt ideograph. The 56pt maximum adds 7pt per enabled kind.
+  expect(all.widths.min).toBeCloseTo(14, 10);
   expect(all.widths.max).toBeCloseTo(70, 10);
-  expect(noDN.widths.min).toBeCloseTo(63, 10);
+  expect(noDN.widths.min).toBeCloseTo(14, 10);
   expect(noDN.widths.max).toBeCloseTo(63, 10);
-  expect(noDE.widths.min).toBeCloseTo(63, 10);
+  expect(noDE.widths.min).toBeCloseTo(14, 10);
   expect(noDE.widths.max).toBeCloseTo(63, 10);
-  expect(neither.widths.min).toBeCloseTo(56, 10);
+  expect(neither.widths.min).toBeCloseTo(14, 10);
   expect(neither.widths.max).toBeCloseTo(56, 10);
   expect(all.requests).toEqual([
     { family: 'Fixture face', size: 14 },

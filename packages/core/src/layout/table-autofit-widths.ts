@@ -12,6 +12,7 @@ import {
 import {
   MIN_COLUMN_PT,
   contentSizedWidths,
+  sameOrComputed,
   spanAdjustedMinimums,
   type SpanRequirement,
 } from './table-autofit-distribution.ts';
@@ -30,6 +31,12 @@ import {
   ZERO_WIDTH_SPACE,
 } from './cjk-line-break.ts';
 import { paragraphWordCuts } from './paragraph-word-cuts.ts';
+import {
+  automaticAutofitSpacing,
+  cjkAutofitBreaks,
+  measureUnwrappedAutofitText,
+  nextAutofitTabStop,
+} from './autofit-unwrapped-text.ts';
 import { measureInlineDrawing, type InlineDrawingLayoutContext } from './drawing-layout.ts';
 import { createEquationLayouter } from './equation-layout.ts';
 import type { DocumentProperties } from '@docx-editor.dev/core/store';
@@ -55,7 +62,6 @@ import {
 import { cellContentInsets } from './table-cell-geometry.ts';
 import { preferredSpreadWidths } from './table-autofit-spread.ts';
 import type { PreferredWidth } from './table-widths.ts';
-import { automaticTextSpacingAdvance } from './cjk-automatic-spacing.ts';
 import { resolveCjkTypography } from './cjk-typography.ts';
 import { withoutLineEndWhitespace } from './trailing-spaces.ts';
 
@@ -281,19 +287,16 @@ export function paragraphContentWidthsPt(
     true
   );
   const typography = resolveCjkTypography(layoutInputs.props);
-  let previousText: Parameters<typeof automaticTextSpacingAdvance>[0];
+  const automaticSpacing = automaticAutofitSpacing(typography, measurer);
+  let previousText: Parameters<typeof automaticSpacing>[3];
+  const cjkBreaks = cjkAutofitBreaks(pieces, layoutInputs, measurer, styleCascade);
   const { left, right, firstLine, hanging } = layoutInputs.indent;
   const tabs = withDefaultTabInterval(layoutInputs.tabStops, context.defaultTabStopPt);
   // Tab stops count from the leading indent, which is the right one in right-to-left text.
   // The line breaker clamps a negative leading indent at the content edge.
   const leading = Math.max(0, paragraphIsRtl(layoutInputs.props) ? right : left);
   // Where a tab at `at` lands: the next stop the paragraph states, else the default grid.
-  const nextTabStop = (at: number): number => {
-    for (const stop of tabs.stops)
-      if (!stop.numberingOnly && stop.positionPt > at + 1e-6) return stop.positionPt;
-    const interval = tabs.defaultIntervalPt;
-    return (Math.floor(at / interval + 1e-6) + 1) * interval;
-  };
+  const nextTabStop = (at: number): number => nextAutofitTabStop(tabs, at);
   // Where each line starts: the first one shifted by its first-line indent or hanging. A list
   // item's hanging slot belongs to its marker; its text starts back at the left indent.
   const listItem = context.listItems?.get(paragraph.id);
@@ -382,36 +385,44 @@ export function paragraphContentWidthsPt(
       lead = 0;
       continue;
     }
+    const boundaries =
+      cjkBreaks?.boundaries(piece) ??
+      wordCuts?.boundaries(piece) ??
+      wordBoundaries(piece.text, false);
+    const spacing = automaticSpacing(piece, boundaries, style, previousText);
+    const unwrapped = measureUnwrappedAutofitText(
+      piece.text,
+      wordCuts?.boundaries(piece),
+      measure,
+      line + leading + (onFirstLine ? firstShift : 0),
+      nextTabStop,
+      spacing.extraAdvance
+    );
+    advance(unwrapped.width, unwrapped.trailing);
+    if (cjkBreaks?.opens(piece)) close();
     let from = 0;
-    for (const to of wordCuts?.boundaries(piece) ?? wordBoundaries(piece.text, false)) {
-      const start = piece.start + from;
+    for (const to of boundaries) {
       const candidate = piece.text.slice(from, to);
       from = to;
       if (candidate.length === 0) continue;
       if (candidate === '\t') {
         previousText = undefined;
         // A tab uses up the first-line indent, and spaces after it no longer open the line.
-        const at = line + leading + (onFirstLine ? firstShift : 0);
-        advance(Math.max(0, nextTabStop(at) - at));
         close();
         first = false;
         lineStart = false;
         lead = 0;
         continue;
       }
-      // Measured as line breaking measures it, so the advance comes from the same cache;
-      // the trailing spaces it hangs are priced on their own.
       const ink = withoutLineEndWhitespace(candidate);
-      const current = { ...piece, start, text: candidate, style, end: piece.start + to };
-      const gap = automaticTextSpacingAdvance(previousText, current, typography, measurer);
-      previousText = current;
-      segment += gap;
-      const full = measure(candidate);
-      advance(full + gap, ink.length === candidate.length ? 0 : full - (ink ? measure(ink) : 0));
+      // A minimum cut omits only its leading gap; internal gaps and token shaping remain.
+      const continues = segment > 0;
+      segment += spacing.minimum(to - candidate.length, continues);
       if (lineStart && ink.length === 0) {
         lead += measure(candidate);
         continue;
       }
+      segment -= cjkBreaks?.shared(piece, to - candidate.length, to, continues) ?? 0;
       if (lineStart && ink.length > 0) {
         segment += lead;
         lineStart = false;
@@ -430,6 +441,7 @@ export function paragraphContentWidthsPt(
         close();
       else dashPending = BREAK_AFTER_DASH.has(candidate.at(-1)!);
     }
+    previousText = spacing.previousText;
   }
   close();
   endLine();
@@ -984,16 +996,4 @@ export function autofitColumnWidthsPt(
   const widths = sameOrComputed(structure, gaps > 0 ? columnsAroundCells(cells, gaps) : cells);
   byStructure.set(structure, { contentWidthPt, widths });
   return widths;
-}
-
-/** Widths that match the resolved ones come back by identity, so the shared base stays. */
-function sameOrComputed(
-  structure: SemanticTableStructure,
-  computed: readonly number[]
-): readonly number[] {
-  return computed.every(
-    (width, column) => Math.abs(width - structure.columnWidthsPt[column]!) <= WIDTH_EPSILON_PT
-  )
-    ? structure.columnWidthsPt
-    : computed;
 }
