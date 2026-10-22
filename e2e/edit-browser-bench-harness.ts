@@ -133,7 +133,23 @@ export async function loadHarness(
   await page.goto(editBrowserBenchUrl(fixture), { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => !!window.__DOCX_EDITOR_E2E__?.ready());
   await page.waitForFunction(() => window.__DOCX_EDITOR_E2E__?.fontMeasurer() === 'shaped');
-  await page.waitForSelector('.docx-page[data-materialized="true"]', { timeout: 60_000 });
+  // A materialized first page can precede the remaining pagination during progressive open.
+  // Keep the existing preparation budget, and start measurement after the complete layout.
+  await page.waitForFunction(
+    () => {
+      const materialized = document.querySelector('.docx-page[data-materialized="true"]');
+      if (!materialized) return false;
+      const bounds = materialized.getBoundingClientRect();
+      return (
+        getComputedStyle(materialized).visibility === 'visible' &&
+        bounds.width > 0 &&
+        bounds.height > 0 &&
+        !document.querySelector('[data-docx-opening-preview], [data-docx-layout-pending]')
+      );
+    },
+    undefined,
+    { timeout: 60_000 }
+  );
   if (measurementProbe) await installMeasurementProbe(page);
 }
 
