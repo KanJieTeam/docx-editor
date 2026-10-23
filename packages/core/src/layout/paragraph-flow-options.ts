@@ -15,6 +15,8 @@ import type { LayoutBox } from './semantic-records.ts';
 export interface ParagraphFlowOptions {
   readonly paragraphRtl?: boolean;
   readonly justifySpaceShrink?: boolean;
+  /** Justified paragraphs may compress East Asian punctuation to fit a line; others keep natural widths. */
+  readonly cjkPunctuationFit?: boolean;
   readonly typography?: CjkParagraphTypography;
   readonly lineSpacing?: ParagraphLineSpacing;
   /** First-line offset from the paragraph indent: `w:firstLine` right, `w:hanging` left. */
@@ -97,6 +99,8 @@ export interface ParagraphFlowOptions {
   readonly contentLeft?: number;
   /** Right edge of the containing text column in paragraph-relative coordinates. */
   readonly contentRight?: number;
+  /** @internal Body paint receives its horizontal paper clip after placement. */
+  readonly deferInlineDrawingHorizontalClip?: boolean;
   /**
    * Horizontal origin of the active column within page-content coordinates.
    * Line x offsets are column-local; exclusion zones are page-wide.

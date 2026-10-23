@@ -80,6 +80,12 @@ Control properties hold default formatting when their run properties contain onl
 
 <FeatureMatrix category="paragraphs" />
 
+#### Automatic inter-script spacing
+
+Paragraphs use automatic spacing between East Asian text and Latin letters or ASCII digits by default. `w:autoSpaceDE` and `w:autoSpaceDN` control the two boundary types through the paragraph style cascade. An authored false disables the corresponding spacing. Source text and UTF-16 offsets remain unchanged. Line fitting, table widths, caret positions, and paint use the same advance across source run boundaries.
+
+East Asian text adds one quarter of its authored font size before Latin letters or ASCII digits. The reverse boundary uses the authored Latin font's average-width metric. A substitute font cannot supply that metric. An unavailable authored metric adds no reverse gap. Explicit character spacing, scaled or shifted text, equations, projected fields, and right-to-left runs keep their existing advances. Vertical Japanese layout and all legacy Word compatibility rules remain outside this subset.
+
 #### Tabs and paragraph keeps
 
 In left-to-right text, an opening word wraps within the space after leading left-aligned tabs. The tabs retain their advances and do not add a blank line. This applies to ordinary text without floating objects beside it, including table cells.
@@ -172,6 +178,12 @@ A floating table at the top level of a header or footer sits outside the story f
 
 When you compare a multipage table, check the space between each repeated header and its first body row. The table pagination note lists the shared-border measurement limits. Keep the original document when you report a spacing issue.
 
+### Text columns
+
+A multi-column section balances its final page before a continuous section follows. Earlier pages retain their column distribution.
+
+If settings enable `w:noColumnBalance` in a document saved in compatibility mode 14 or earlier, or with no declared mode, the section fills each column before the next. In compatibility mode 15 and later, the option has no effect and the section still balances. An absent flag or an explicit off value retains balancing. The following continuous section starts below the tallest column, even when balancing is disabled.
+
 ### Images and drawings
 
 <FeatureMatrix category="images" />
@@ -208,7 +220,7 @@ The matrix defines support status. Check these limits when a document contains d
 
 | Feature | Rendering | Editing | Round-trip |
 | --- | --- | --- | --- |
-| Anchored text boxes | Insert → Text Box creates a rectangular body text box. Supports typing, paragraph editing, text formatting, plain-text paste, undo, deletion, dragging, and resizing. Edits synchronize during collaboration, with remote cursors and text selections. Clicking inside shows the caret and frame handles. Content stays inside the authored extent. Header/footer text boxes and boxes with tables remain read-only. Linked chains, autofit, and rotation can clip or use placeholders. | Body text boxes | Preserved |
+| Anchored text boxes | Insert → Text Box creates a rectangular body text box. Supports typing, paragraph editing, text formatting, plain-text paste, undo, deletion, dragging, and resizing. Edits synchronize during collaboration, with remote cursors and text selections. Clicking inside shows the caret and frame handles. Content stays inside the authored extent. Text boxes in headers and footers support the same text editing, dragging, resizing, and deletion. Boxes with tables remain read-only. Linked chains, autofit, and rotation can clip or use placeholders. | Body, header, and footer text boxes | Preserved |
 | Drawing shapes | Renders solid rectangles, ellipses, lines, bounded polygons, and groups, with outlines drawn at full width. A group can include one unrotated picture below its shapes. Other shapes use a placeholder. Unsupported shapes in alternative content are hidden, and floating ones keep their wrap area. | No | Preserved |
 | WMF and EMF | Rasterizes supported files. Other files keep their extent with a placeholder. | No | Full |
 
@@ -332,7 +344,7 @@ Run language uses `w:lang` elements and attributes in the WordprocessingML names
 
 Colons can compress before opening brackets, bounded by the following bracket's available bearing. With measured glyph bounds, colons also compress before closing punctuation. This pair rule halves the colon's advance, including authored character spacing. Other centered punctuation, authored spaces, outlined text, decorated text, and tracked changes retain their advances. Colons with highlight or shading retain their advances.
 
-If wrapping separates a compressed colon from its opening bracket, the paragraph uses natural colon advances. Narrow plain left-to-right (LTR) East Asian paragraphs can use measured punctuation bearings to fit the next glyph and protected punctuation. Fitting uses measured glyph bounds and preserves source positions. Mixed Latin text, fields, decorations, revisions, and right-to-left (RTL) text retain conservative fitting. So do gaps beside floating objects and measurers without ink bounds.
+If wrapping separates a compressed colon from its opening bracket, the paragraph uses natural colon advances. Only justified paragraphs compress punctuation to fit a line. Left-aligned, centered, and right-aligned paragraphs wrap instead. Adjacent full-width punctuation pairs still compress at every alignment. Narrow plain left-to-right (LTR) justified East Asian paragraphs can use measured punctuation bearings to fit the next glyph and protected punctuation. Fitting uses measured glyph bounds and preserves source positions. Later Latin text does not disable fitting on an earlier qualified East Asian line. Supported mixed lines can share the measured external ink bearing of a complete Latin word, digit group, or ASCII symbol group with adjacent East Asian punctuation. Only the East Asian punctuation loses advance; Latin words, ligatures, digits, and curly quotes without the East Asian font hint retain their measured widths and source ranges. In runs with `w:hint="eastAsia"`, a curly quote can lose part of its measured bearing on its outer side when that side faces an East Asian character, on a line that also contains East Asian punctuation. A closing quote that ends a fitted group after an East Asian character can also lose its trailing bearing. A colon before an opening quote can lose part of its own bearing. A side that faces other punctuation or a Latin word keeps its bearing. This local path requires resolved faces, punctuation kerning that the document settings allow, an East Asian document-default face, and no authored character spacing or horizontal scaling. A word boundary needs its complete shaped outline; absent or invalid outlines cannot use the advance box as a substitute. Unknown scripts, fields, decorations, revisions, right-to-left (RTL) text, and complex shaping retain conservative fitting. So do gaps beside floating objects and measurers without ink bounds.
 
 Kana uses deterministic advance reductions.
 

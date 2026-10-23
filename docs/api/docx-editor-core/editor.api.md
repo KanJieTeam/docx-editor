@@ -3127,6 +3127,9 @@ export function reportAutomationException(editor: object, error: unknown, tracke
 export function reportAutomationRefusal(editor: object, code: EditDiagnosticCode, tracked: boolean, cause?: string): void;
 
 // @public
+export function reportAutomationReviewSkip(editor: object, code: ReviewDiagnosticCode, operation?: ReviewOperation, cause?: string): void;
+
+// @public
 export function resizePreservesAspect(handle: ImageResizeHandle, aspectLocked: boolean, shiftKey: boolean, textbox?: boolean): boolean;
 
 // @public
@@ -3208,6 +3211,9 @@ export interface ReviewAuthorInfo {
 }
 
 // @public
+export type ReviewDiagnosticCode = 'review.revision-unsupported' | 'review.incomplete-group' | 'review.retained-structure' | 'review.locked-content' | 'review.bound-content' | 'review.stale-revision';
+
+// @public
 export type ReviewDisplayMode = RevisionDisplayMode | 'simple-markup';
 
 // @public
@@ -3240,6 +3246,9 @@ export interface ReviewModuleContribution {
     readonly pane?: ReviewPaneOptions;
     readonly revisionItemsOfParagraph: (part: OoxmlPart, paragraphId: string) => readonly ReviewRevisionItem[];
 }
+
+// @public
+export type ReviewOperation = 'accept' | 'reject' | 'reassign';
 
 // @internal
 export function reviewPaneEntitledZoom(mode: ZoomMode | undefined, zoom: number, overflow?: ReviewPaneOverflow): number | null;
@@ -3560,6 +3569,7 @@ export interface SelectedDrawingOverlayTarget {
     // (undocumented)
     readonly position: DrawingPositionInput | null;
     readonly textbox?: boolean;
+    readonly textEditable?: boolean;
     // (undocumented)
     readonly transform: DrawingTransform;
     // (undocumented)
@@ -3577,13 +3587,9 @@ export function selectedDrawingOverlayTargetOf(surface: PaginatedSurface | null)
 
 // @public
 export interface SelectedImageState {
-    // (undocumented)
     readonly canChangeWrap: boolean;
-    // (undocumented)
     readonly canCrop: boolean;
-    // (undocumented)
     readonly canMove: boolean;
-    // (undocumented)
     readonly canResize: boolean;
     readonly crop: ImageCropPercent;
     // (undocumented)
@@ -3704,6 +3710,12 @@ export interface SplitCellLimits {
     // (undocumented)
     readonly maxRows: number;
 }
+
+// @public
+export function storyLabelTop(storyRect: {
+    readonly bottom: number;
+    readonly top: number;
+}, sheetTop: number | undefined, barHeight: number, clearance: number): number;
 
 // @public
 export type SupportedImageMime = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/bmp' | 'image/webp';
@@ -3963,6 +3975,14 @@ export const TEXT_FORM_FORMATS: {
     readonly number: readonly ['', '0', '0.00', '#,##0', '#,##0.00', '0%', '0.00%'];
     readonly regular: readonly ['', 'Uppercase', 'Lowercase', 'First capital', 'Title case'];
 };
+
+// @public
+export function textboxFrameReason(target: {
+    readonly canMove: boolean;
+    readonly canResize: boolean;
+    readonly textEditable?: boolean;
+    readonly textbox?: boolean;
+}, editingMode: string): 'imageOverlay.textLocked' | 'imageOverlay.locked' | null;
 
 // @public
 export interface TextFormFieldChromeHandlers {

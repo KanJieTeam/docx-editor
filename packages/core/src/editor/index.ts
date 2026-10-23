@@ -54,6 +54,8 @@ export {
   type EditorWindow,
   type OpenEditorWindowOptions,
 } from './editor-window.ts';
+export { storyLabelTop } from './story-label-placement.ts';
+export { textboxFrameReason } from './textbox-overlay-frame.ts';
 export {
   editorHostDocument,
   editorHostElement,
@@ -268,7 +270,12 @@ export {
   type EditorPreviewFork,
   type EditorPreviewRefusal,
 } from './editor-preview.ts';
-export { reportAutomationException, reportAutomationRefusal } from './editor-diagnostics.ts';
+export {
+  reportAutomationException,
+  reportAutomationRefusal,
+  reportAutomationReviewSkip,
+} from './editor-diagnostics.ts';
+export type { ReviewDiagnosticCode, ReviewOperation } from '../automation/diagnostic-vocabulary.ts';
 // The capability seam: what `createDocxEditor({ modules })` accepts and what a
 // capability package (the pro review module) implements.
 export {
