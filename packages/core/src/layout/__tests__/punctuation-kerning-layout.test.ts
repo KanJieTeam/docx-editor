@@ -22,7 +22,9 @@ describe('real DOCX fixture punctuation layout', () => {
             const result = loadFixture({ compatibility, compression, kern, noPunctuation });
             expect(result.lines).toHaveLength(1);
             expect(result.lines[0]!.spans.map((span) => span.text).join('')).toBe(sample);
-            expect(result.width).toBe(kern === 2 && !noPunctuation ? 276 : 360);
+            // Fifteen 24pt advances, less three unchanged closing-closing half seams.
+            // Four closing-opening seams stay natural in this left-aligned source.
+            expect(result.width).toBe(kern === 2 && !noPunctuation ? 324 : 360);
             expect(
               [...result.view.currentPackage().parts].map(([name, part]) => [
                 name,
@@ -36,9 +38,10 @@ describe('real DOCX fixture punctuation layout', () => {
     (pair) => {
       const text = '国' + pair + '国国';
       for (let split = 1; split < text.length; split++) {
-        expect(loadFixture({ text, split, kern: 2 }).width).toBe(108);
+        const naturalPair = pair === '」「' || pair === '】【';
+        expect(loadFixture({ text, split, kern: 2 }).width).toBe(naturalPair ? 120 : 108);
         expect(loadFixture({ text, split, kern: 2, secondKern: 60 }).width).toBe(
-          split <= 2 ? 120 : 108
+          naturalPair || split <= 2 ? 120 : 108
         );
       }
     }
@@ -54,22 +57,22 @@ describe('real DOCX fixture punctuation layout', () => {
     'Meiryo',
     'Batang',
     'Malgun Gothic',
-  ])('East Asian default face %s turns on pair compression', (face) => {
-    expect(loadFixture({ text: '国」「国国', kern: 2, face, defaultFace: face }).width).toBe(108);
+  ])('East Asian default face %s gates the unchanged closing-closing pair', (face) => {
+    expect(loadFixture({ text: '国」』国国', kern: 2, face, defaultFace: face }).width).toBe(108);
     // The run's own face does not matter; the document default decides.
-    expect(loadFixture({ text: '国」「国国', kern: 2, defaultFace: face }).width).toBe(108);
+    expect(loadFixture({ text: '国」』国国', kern: 2, defaultFace: face }).width).toBe(108);
   });
 
   test.each(['Arial', 'Times New Roman', 'A Source Face'])(
     'default face %s without an East Asian font table charset keeps natural advances',
     (face) => {
-      expect(loadFixture({ text: '国」「国国', kern: 2, defaultFace: face }).width).toBe(120);
+      expect(loadFixture({ text: '国」』国国', kern: 2, defaultFace: face }).width).toBe(120);
     }
   );
 
   test('an unknown default face counts as East Asian through its font table charset', () => {
     const entry = (name: string, charset: string) => ({
-      text: '国」「国国',
+      text: '国」』国国',
       kern: 2,
       defaultFace: name,
       fontTableEntry: { name, charset },
@@ -83,15 +86,15 @@ describe('real DOCX fixture punctuation layout', () => {
 
   test('open+close, Korean, absent source defaults and inactive runs keep natural advances', () => {
     expect(loadFixture({ text: '国（）国国', kern: 2 }).width).toBe(120);
-    expect(loadFixture({ text: '国」「国国', kern: 2, language: 'ko-KR' }).width).toBe(120);
-    expect(loadFixture({ text: '国」「国国', kern: 2, defaultFace: null }).width).toBe(120);
-    expect(loadFixture({ text: '国」「国国', kern: 2, split: 2, secondKern: 0 }).width).toBe(120);
+    expect(loadFixture({ text: '国」』国国', kern: 2, language: 'ko-KR' }).width).toBe(120);
+    expect(loadFixture({ text: '国」』国国', kern: 2, defaultFace: null }).width).toBe(120);
+    expect(loadFixture({ text: '国」』国国', kern: 2, split: 2, secondKern: 0 }).width).toBe(120);
   });
 
-  test('bold, italic, split faces and finite authored tracking retain the pair rule', () => {
+  test('bold, italic, split faces and finite tracking retain the unchanged closing-closing rule', () => {
     for (const tracking of [-4, 0, 4]) {
       const result = loadFixture({
-        text: '国」「国国',
+        text: '国」』国国',
         kern: 2,
         tracking,
         bold: true,
@@ -104,10 +107,10 @@ describe('real DOCX fixture punctuation layout', () => {
         true
       );
     }
-    const decorated = loadFixture({ text: '国」「国国', kern: 2, underlineElsewhere: true });
+    const decorated = loadFixture({ text: '国」』国国', kern: 2, underlineElsewhere: true });
     const spans = decorated.lines[0]!.spans;
     const pairSpans = spans.filter((span) => span.range.end <= 5);
-    expect(pairSpans.map((span) => span.text).join('')).toBe('国」「国国');
+    expect(pairSpans.map((span) => span.text).join('')).toBe('国」』国国');
     expect(pairSpans.reduce((width, span) => width + span.box.width, 0)).toBe(108);
     const underlined = spans.find((span) => span.range.start === 5 && span.range.end === 6)!;
     expect(underlined.text).toBe('字');
@@ -130,8 +133,8 @@ describe('real DOCX fixture punctuation layout', () => {
 
   test('disabled false values and raw package save/reopen retain source properties', () => {
     for (const noPunctuation of ['0', 'false', 'off'])
-      expect(loadFixture({ text: '国」「国国', kern: 2, noPunctuation }).width).toBe(108);
-    const result = loadFixture({ text: '国」「国国', kern: 2, tracking: -4 });
+      expect(loadFixture({ text: '国」』国国', kern: 2, noPunctuation }).width).toBe(108);
+    const result = loadFixture({ text: '国」』国国', kern: 2, tracking: -4 });
     const saved = readOoxmlPackage(writeOoxmlPackage(result.view.currentPackage()));
     expect(saved.ok).toBe(true);
     if (!saved.ok) throw new Error(saved.reason);
@@ -166,6 +169,6 @@ describe('real DOCX fixture punctuation layout', () => {
       semanticDigest(saved.package.parts.values())
         .stories.find((story) => story.partName === source.mainDocumentPart)!
         .paragraphs.map((paragraph) => paragraph.text)
-    ).toEqual(['\u56fd\u300d\u300c\u56fd\u56fd']);
+    ).toEqual(['\u56fd\u300d\u300f\u56fd\u56fd']);
   });
 });

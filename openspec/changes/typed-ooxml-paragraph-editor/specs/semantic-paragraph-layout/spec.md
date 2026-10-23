@@ -20,7 +20,7 @@ Every line and style span SHALL retain stable story/paragraph identity and canon
 
 ### Requirement: Accepted paragraph layout boundary
 
-Semantic layout SHALL resolve and represent the D8 run and paragraph property boundary, including authored whitespace, tabs, line hard breaks, and typed `w:br w:type="page"` and `w:br w:type="column"` breaks; `w:spacing` before/after with collapsed adjacent spacing; `w:contextualSpacing` in body flow; line spacing under all three `w:lineRule` values; and all six `w:pBdr` edges. Border resolution SHALL place `top` and `bottom` as flow height, publish `between` in place of `bottom` where a paragraph continues into an identically bordered neighbour, and publish `left`, `right`, and `bar` outside the text column without reflowing it. Section-aware pagination SHALL honour per-section page size and margins, equal- and unequal-width `w:cols` geometry with bounded gaps and separator rules, default/`nextPage` and `continuous` section breaks, `titlePage`, and per-section read-only header/footer furniture inheritance, including bounded allowlisted complex `PAGE`/`NUMPAGES` projection for page-furniture numbering. Content SHALL fill each section column before opening another physical sheet, and an explicit column break SHALL advance to the next column (or the next sheet after the final column). A multi-column section that ends in a continuous section break and whose content occupies a single open sheet SHALL balance that content across its columns; balancing the trailing sheet of a multi-sheet section remains outside this acceptance. A `continuous` boundary SHALL share the preceding sheet only when the section's geometry and furniture are identical and the sheet is still open, and SHALL otherwise start a new sheet rather than publish a mixed one. Hyperlinks, body fields (including inert generic `w:fldSimple`), comments, tracked changes, images, content controls, header/footer editing, notes, paragraph-border authoring, `w:between` in table-cell and header/footer flow, border `w:shadow` and `themeColor`, and `evenPage`/`oddPage`/`nextColumn` section semantics SHALL remain outside this layout acceptance.
+Semantic layout SHALL resolve and represent the D8 run and paragraph property boundary, including authored whitespace, tabs, line hard breaks, and typed `w:br w:type="page"` and `w:br w:type="column"` breaks; `w:spacing` before/after with collapsed adjacent spacing; `w:contextualSpacing` in body flow; line spacing under all three `w:lineRule` values; and all six `w:pBdr` edges. Border resolution SHALL place `top` and `bottom` as flow height, publish `between` in place of `bottom` where a paragraph continues into an identically bordered neighbour, and publish `left`, `right`, and `bar` outside the text column without reflowing it. Section-aware pagination SHALL honour per-section page size and margins, equal- and unequal-width `w:cols` geometry with bounded gaps and separator rules, default/`nextPage` and `continuous` section breaks, `titlePage`, and per-section read-only header/footer furniture inheritance, including bounded allowlisted complex `PAGE`/`NUMPAGES` projection for page-furniture numbering. Content SHALL fill each section column before opening another physical sheet, and an explicit column break SHALL advance to the next column (or the next sheet after the final column). A multi-column section that ends in a continuous section break SHALL balance its final open sheet across its columns, while preserving earlier sheets. In compatibility modes before 15, an enabled `w:compat/w:noColumnBalance` setting SHALL instead preserve natural fill-first column flow; compatibility mode 15 and later SHALL ignore it. An absent or explicitly disabled setting SHALL retain balancing. A following continuous section SHALL begin below the tallest in-flow column on the final sheet in either mode. A `continuous` boundary SHALL share the preceding sheet only when the section's geometry and furniture are identical and the sheet is still open, and SHALL otherwise start a new sheet rather than publish a mixed one. Hyperlinks, body fields (including inert generic `w:fldSimple`), comments, tracked changes, images, content controls, header/footer editing, notes, paragraph-border authoring, `w:between` in table-cell and header/footer flow, border `w:shadow` and `themeColor`, and `evenPage`/`oddPage`/`nextColumn` section semantics SHALL remain outside this layout acceptance.
 
 #### Scenario: Accepted properties affect layout and spans
 
@@ -121,6 +121,15 @@ Semantic layout SHALL resolve and represent the D8 run and paragraph property bo
 
 - **WHEN** a section declares equal or explicit unequal `w:cols` geometry and contains natural overflow or `w:br w:type="column"`
 - **THEN** layout uses each authored column width and gap, advances through columns before sheets, preserves paragraph identity across column fragments, and publishes separator geometry when `w:sep` is enabled
+
+#### Scenario: Authored compatibility settings disable column balancing
+
+- **WHEN** parsed settings contain an enabled `w:compat/w:noColumnBalance` option and the compatibility mode is before 15
+- **THEN** a multi-column section fills columns in source order without balancing
+- **AND** a following continuous section clears the tallest final-sheet column
+- **AND** an absent or explicitly disabled option retains balancing, and settings and document trees remain unchanged
+- **AND** warm layout matches a cold layout after the option changes
+- **AND** in compatibility mode 15 and later the option has no effect and the section balances
 
 #### Scenario: A continuous break balances the columns before it
 
@@ -316,6 +325,86 @@ Row and column insertion, deletion, and column resize commits SHALL publish `flo
 - **WHEN** a middle-table column resize converges without repagination before the following page
 - **THEN** preceding and following unchanged pages retain stable identities
 
+### Requirement: Automatic inter-script spacing
+
+Semantic layout SHALL resolve `w:autoSpaceDE` and `w:autoSpaceDN` through the paragraph cascade, with enabled defaults. It SHALL add bounded layout advances at supported East Asian and Latin-letter or ASCII-digit boundaries. It SHALL preserve source text and canonical UTF-16 offsets. Line fitting, paint, caret geometry, and anchor prediction SHALL use the same advances. Authored character spacing and unsupported run forms SHALL retain their existing behavior.
+
+#### Scenario: An inherited false overrides the enabled default
+
+- **WHEN** a paragraph inherits `w:autoSpaceDN` or `w:autoSpaceDE` with a false value
+- **THEN** that boundary type retains its original advance unless a direct true overrides the inherited value
+
+#### Scenario: A source run boundary separates scripts
+
+- **WHEN** supported adjacent text changes between East Asian and Latin letters or ASCII digits across source runs
+- **THEN** layout applies one boundary advance without adding a source character or changing source ranges
+
+#### Scenario: A boundary moves to another line
+
+- **WHEN** the additional advance prevents adjacent text from fitting on one line
+- **THEN** layout wraps the text and removes the boundary advance at the new line start
+
+#### Scenario: Shared edits remove a script boundary
+
+- **WHEN** two editors converge after edits remove the only East Asian character from a warm paragraph
+- **THEN** both editors remove the obsolete automatic advances and retain shared text, history, and saved source offsets
+
+#### Scenario: Reverse gap uses the authored face metric
+
+- **WHEN** Latin letters or ASCII digits precede supported East Asian text and the shaped measurer resolves the authored Latin face without substitution
+- **THEN** the boundary advance equals half of that face's average character width per em, scaled to the run's font size
+- **AND** glyph advances, source text, and canonical offsets remain unchanged
+
+#### Scenario: Custom metric refuses a boundary
+
+- **WHEN** the automatic-spacing hook returns an unavailable or invalid metric
+- **THEN** the boundary receives no invented gap
+- **AND** measurers without the hook add no reverse advance
+
+#### Scenario: Directional spacing uses the authored font
+
+- **WHEN** supported East Asian text precedes Latin letters or ASCII digits
+- **THEN** the boundary advance equals one quarter of the East Asian run's authored font size
+- **AND** a substitute font's average width cannot change that advance
+
+#### Scenario: Reverse spacing has no authored metric
+
+- **WHEN** Latin letters or ASCII digits precede East Asian text and the authored font metric is unavailable
+- **THEN** the boundary adds no reverse advance
+- **AND** layout does not use a substitute font's average width or change source text
+
+#### Scenario: A group that cannot break keeps its advance
+
+- **WHEN** East Asian text and a Latin letter or ASCII digit share one font and no line break is allowed between them
+- **THEN** line layout draws the same boundary advance that table AutoFit counts
+- **AND** the caret after the boundary sits after the advance
+
+### Requirement: East Asian punctuation fitting only on justified paragraphs
+
+The layout engine SHALL fit a line by compressing East Asian punctuation against measured glyph bounds only when the paragraph alignment is justified (`w:jc` `both`, `distribute`, `thaiDistribute`, or a kashida value). Paragraphs with any other alignment SHALL wrap instead of fitting. Adjacent full-width punctuation pairs retain their existing alignment policy, except for the measured closing-opening pairs specified below.
+
+#### Scenario: A left-aligned paragraph wraps instead of compressing
+
+- **GIVEN** document punctuation compression and a line that fits only when its punctuation compresses
+- **WHEN** the paragraph is left-aligned, centered, or right-aligned
+- **THEN** the line wraps instead of fitting
+- **AND** the same paragraph fits the line when it is justified
+
+### Requirement: East Asian punctuation fitting on mixed lines
+
+When document punctuation compression is on and the document defaults name an East Asian face, a line that also holds complete Latin words, digit groups, or ASCII symbol groups SHALL be able to fit by compressing adjacent East Asian punctuation against measured glyph ink. The Latin groups SHALL keep their natural advances and source ranges.
+
+#### Scenario: A mixed line fits by compressing punctuation
+
+- **WHEN** a qualified line holding East Asian punctuation and a complete Latin word overflows by less than the punctuation's measured spare ink
+- **THEN** the line fits by reducing only the East Asian punctuation advances
+- **AND** the Latin word keeps its natural width, and source text and offsets do not change
+
+#### Scenario: An unqualified run keeps conservative fitting
+
+- **WHEN** a run on a line that holds Latin groups has authored character spacing, horizontal scaling, complex shaping, or an unresolved face
+- **THEN** that line does not use measured-ink fitting
+
 ### Requirement: Host font resource replacement
 
 The editor SHALL replace host font resources without replacing its document session, content, selection, or undo history. Replacement SHALL invalidate font-dependent measurement, paragraph layout, and paint. Document protection and shared collaboration data SHALL remain unchanged.
@@ -339,19 +428,54 @@ The editor SHALL replace host font resources without replacing its document sess
 - **THEN** the editor reports the failure with its cause and keeps bounded fallback measurement
 - **AND** it does not restore fonts that the host removed
 
-### Requirement: Bounded close-open demand fitting
+### Requirement: Qualified East Asian curly bearings in existing punctuation windows
 
-The layout engine SHALL share a measured ink gap across a qualified East Asian fullwidth closing-opening pair only when the line needs compression. Each cell SHALL retain its remaining half-width limit after earlier derived compression.
+The layout engine SHALL allow curly quotes in runs with the East Asian font hint (`w:hint="eastAsia"`) to contribute measured opening or closing bearings inside an existing qualified CJK punctuation fitting window. The face SHALL resolve, authored character spacing SHALL be zero, horizontal scale SHALL be 100%, and complex shaping SHALL be absent. The document SHALL qualify its East Asian default face and SHALL NOT disable punctuation kerning.
 
-#### Scenario: A qualified pair supplies two bounded bearings
+#### Scenario: Qualified curly bearings complete an existing CJK punctuation window
 
-- GIVEN contiguous same-face East Asian punctuation with finite safe ink bounds and enabled source punctuation compression
-- WHEN a protected candidate exceeds the remaining line width
-- THEN the pair may use both remaining bearings within one measured ink gap
-- AND source text, ranges, and authored properties remain unchanged
+- **GIVEN** a plain source paragraph with supported CJK punctuation and curly quotes in a run with the East Asian font hint
+- **WHEN** the measured line deficit fits within the supported punctuation bearings
+- **THEN** layout fits the protected group without changing source text, authored font size, or UTF-16 source ranges
 
-#### Scenario: An unqualified pair supplies no new seam
+#### Scenario: Unsupported curly context keeps existing behavior
 
-- GIVEN disabled source punctuation kerning, missing East Asian defaults, incompatible styles, unresolved faces, or discontinuous ranges
-- WHEN a small deficit could fit one opening bearing
-- THEN the new pair path adds no compression seam
+- **GIVEN** a curly-only punctuation window, unhinted Latin quotes, a curly quote side that faces punctuation or a Latin word, unresolved face, authored tracking, horizontal scaling, complex shaping, decorated text, or source punctuation-kerning refusal
+- **WHEN** layout considers optical fitting
+- **THEN** the new East Asian curly path leaves the unsupported geometry unchanged
+
+### Requirement: Measured fullwidth closing-opening pair budgets
+
+The layout engine SHALL fit qualified fullwidth closing-opening pairs only in justified paragraphs with an authored East Asian default face. It SHALL measure both blank sides at the opening run size. Different run sizes and `w:noPunctuationKerning` SHALL NOT disable pair demand fitting. Other punctuation policies SHALL remain unchanged.
+
+#### Scenario: A justified mixed-size pair fits using the opening size
+
+- **GIVEN** a resolved same-face East Asian closing-opening pair with different run sizes
+- **WHEN** a justified line needs less space than the pair's remaining measured blank sides
+- **THEN** both sides contribute within the opening-size budget and one shared ink gap
+- **AND** the result remains eligible when `w:noPunctuationKerning` is present
+
+#### Scenario: Unsupported source or alignment keeps natural pair advances
+
+- **GIVEN** missing East Asian document defaults, a nonjustified paragraph, or an unqualified pair
+- **WHEN** layout considers closing-opening pair compression
+- **THEN** the pair does not supply a new one-sided or two-sided budget
+- **AND** other existing punctuation routes retain their own policies
+
+### Requirement: Measured pair budget conservation
+
+Each side SHALL retain only its remaining measured budget after earlier layout reductions. The pair SHALL share one finite ink gap. Source text, UTF-16 ranges, authored spacing, and scale SHALL remain unchanged. Unresolved faces, different faces, non-East-Asian slots, source gaps, authored tracking, horizontal scaling, and complex shaping SHALL NOT qualify.
+
+#### Scenario: Both measured sides have already been spent
+
+- **GIVEN** a pair whose two authored budgets have been consumed by earlier layout reductions
+- **WHEN** its remaining measured ink gap is still positive
+- **THEN** the pair supplies no new compression capacity
+- **AND** a rejected fit leaves the pending line unchanged
+
+#### Scenario: AutoFit and collaborative save retain source semantics
+
+- **WHEN** the pair appears in an AutoFit cell or a shared document
+- **THEN** cell flow uses the same source and alignment rules as body flow
+- **AND** AutoFit maximum width retains the naturally unwrapped line
+- **AND** editing, undo, save, and cold reopen preserve authored run properties and peer geometry

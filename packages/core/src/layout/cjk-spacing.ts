@@ -7,7 +7,11 @@ import { measureDisplayText, type ResolvedRunStyle } from './run-style.ts';
 import { styleForFontSlot } from './script-itemization.ts';
 import type { StyleSpanRecord, TextMeasurer } from './semantic-records.ts';
 import { eastAsianLanguage, type CjkParagraphTypography } from './cjk-typography.ts';
-import { withLayoutDerivedSpacing } from './layout-derived-spacing.ts';
+import {
+  withLayoutDerivedSpacing,
+  layoutDerivedSpacingStyleForEditing,
+} from './layout-derived-spacing.ts';
+import { closeOpenBearingBudgets } from './cjk-close-open-bearings.ts';
 import { isRunKerningEnabled } from './run-kerning.ts';
 
 const FULLWIDTH_PUNCTUATION =
@@ -121,6 +125,7 @@ function compressionSlices(
   pieces: readonly FieldAwarePiece[],
   includeKana: boolean,
   includePunctuation: boolean,
+  includeCloseOpen: boolean | undefined,
   measurer: TextMeasurer,
   { preserveColonAdvances, keepRightBearings }: LineLocalAdvances
 ): ReadonlyMap<FieldAwarePiece, readonly CompressionSlice[]> {
@@ -135,7 +140,7 @@ function compressionSlices(
     })
     .join('');
   const slices = new Map<FieldAwarePiece, CompressionSlice[]>();
-  const ownerAt = (offset: number): FieldAwarePiece | undefined => {
+  const ownerIndexAt = (offset: number): number => {
     let low = 0;
     let high = starts.length;
     while (low + 1 < high) {
@@ -143,8 +148,9 @@ function compressionSlices(
       if (starts[middle]! <= offset) low = middle;
       else high = middle;
     }
-    return pieces[low];
+    return low;
   };
+  const ownerAt = (offset: number): FieldAwarePiece | undefined => pieces[ownerIndexAt(offset)];
   const pairEnabled = (left: number, right: number): boolean => {
     if (!includePunctuation) return false;
     const a = ownerAt(left);
@@ -168,6 +174,112 @@ function compressionSlices(
     while (pieceIndex + 1 < pieces.length && starts[pieceIndex + 1]! <= cluster.utf16From)
       pieceIndex++;
     const base = pieces[pieceIndex]!;
+    // Closing/opening pairs have a separate source and alignment policy.
+    // Do not let the old one-sided rule spend a closing-size budget first.
+    if (
+      includeCloseOpen !== undefined &&
+      CLOSING.test(cluster.text) &&
+      next !== undefined &&
+      OPENING.test(next)
+    ) {
+      const nextCluster = clusters[clusterIndex + 1]!;
+      const openingPiece = ownerAt(nextCluster.utf16From);
+      if (
+        !includeCloseOpen ||
+        !pairEnabled(cluster.utf16From, nextCluster.utf16From) ||
+        !openingPiece ||
+        !compressible(base) ||
+        !compressible(openingPiece) ||
+        base.fieldAtom ||
+        openingPiece.fieldAtom ||
+        base.style.highlight ||
+        base.style.shading ||
+        openingPiece.style.highlight ||
+        openingPiece.style.shading ||
+        keepRightBearings?.has(base.start + cluster.utf16From - starts[pieceIndex]!) ||
+        (base !== openingPiece && base.end !== openingPiece.start)
+      )
+        continue;
+      const close = { ...base, text: cluster.text };
+      const open = { ...openingPiece, text: next };
+      const budgets = closeOpenBearingBudgets(close, open, measurer);
+      if (!budgets) continue;
+      const closeFace = styleForFontSlot(base.style, base.fontSlot);
+      const openFace = styleForFontSlot(openingPiece.style, openingPiece.fontSlot);
+      const closeInk = measurer.inkBounds?.(cluster.text, closeFace);
+      const openInk = measurer.inkBounds?.(next, openFace);
+      const closeWidth = measureDisplayText(cluster.text, closeFace, measurer);
+      const openWidth = measureDisplayText(next, openFace, measurer);
+      if (
+        !closeInk ||
+        !openInk ||
+        ![closeInk.right, openInk.left, closeWidth, openWidth].every(Number.isFinite)
+      )
+        continue;
+      const closingBudget = Math.max(
+        0,
+        Math.min(
+          closeWidth,
+          budgets.closing -
+            Math.max(
+              0,
+              layoutDerivedSpacingStyleForEditing(closeFace).characterSpacingPt -
+                closeFace.characterSpacingPt
+            )
+        )
+      );
+      const openingBudget = Math.max(
+        0,
+        Math.min(
+          openWidth,
+          budgets.opening -
+            Math.max(
+              0,
+              layoutDerivedSpacingStyleForEditing(openFace).characterSpacingPt -
+                openFace.characterSpacingPt
+            )
+        )
+      );
+      const sum = closingBudget + openingBudget;
+      const gap =
+        closeWidth +
+        (openingPiece.glyphOffsetPt ?? 0) +
+        openInk.left -
+        (base.glyphOffsetPt ?? 0) -
+        closeInk.right;
+      const shared = Math.max(0, Math.min(gap, sum));
+      if (sum <= 0 || shared <= 0) continue;
+      const append = (
+        side: FieldAwarePiece,
+        from: number,
+        to: number,
+        reduction: number,
+        glyphOffset: number
+      ) => {
+        if (reduction <= 0) return;
+        const list = slices.get(side) ?? [];
+        list.push({ from, to, reduction, glyphOffset });
+        slices.set(side, list);
+      };
+      const closeReduction = (closingBudget * shared) / sum;
+      const openReduction = (openingBudget * shared) / sum;
+      append(
+        base,
+        cluster.utf16From - starts[pieceIndex]!,
+        cluster.utf16To - starts[pieceIndex]!,
+        closeReduction,
+        base.glyphOffsetPt ?? 0
+      );
+      const openingIndex = ownerIndexAt(nextCluster.utf16From);
+      append(
+        openingPiece,
+        nextCluster.utf16From - starts[openingIndex]!,
+        nextCluster.utf16To - starts[openingIndex]!,
+        openReduction,
+        (openingPiece.glyphOffsetPt ?? 0) - openReduction
+      );
+      continue;
+    }
     // Remove one shared half-em at a punctuation seam, not both neighbours'
     // bearings. Ordinary text and authored spaces are never compression triggers.
     // Paragraph and manual-line boundaries do not supply a neighbouring bearing.
@@ -276,8 +388,11 @@ export function compressCjkPieces(
   policy: CjkParagraphTypography,
   measurer: TextMeasurer,
   advances: LineLocalAdvances = SHARED_BEARINGS,
-  available?: number
+  available?: number,
+  closeOpenFitting?: boolean
 ): readonly FieldAwarePiece[] {
+  // Undefined preserves the low-level legacy seam contract. Both layout callers
+  // supply an explicit alignment value: false forbids this pair; true measures it.
   const compression = policy.settings?.compression;
   const punctuation =
     policy.settings?.punctuationKerning !== false && policy.settings?.sourceEastAsianFont === true;
@@ -296,7 +411,7 @@ export function compressCjkPieces(
   if (!punctuation && !kana) return pieces;
   const result: FieldAwarePiece[] = [];
   const derived = new WeakMap<ResolvedRunStyle, Map<number, ResolvedRunStyle>>();
-  const slices = compressionSlices(pieces, kana, punctuation, measurer, advances);
+  const slices = compressionSlices(pieces, kana, punctuation, closeOpenFitting, measurer, advances);
   for (const piece of pieces) {
     const compressedSlices = slices.get(piece);
     if (!compressedSlices) {

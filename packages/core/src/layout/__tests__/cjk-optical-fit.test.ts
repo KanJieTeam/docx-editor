@@ -5,6 +5,8 @@ import { buildStyleCascadeTable } from '../style-cascade.ts';
 import { NO_THEME_FONTS } from '../run-style.ts';
 import { createLayoutSession } from '../layout-session.ts';
 import { linesOf, type TextMeasurer } from '../semantic-records.ts';
+import { fittingClusters } from '../cjk-optical-fit.ts';
+import { segmentGraphemes } from '../grapheme.ts';
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const bounds: Record<string, [number, number]> = {
   '（': [0.662, 0.899],
@@ -47,12 +49,13 @@ function layout(
   split = text.length,
   measure = measurer,
   runProps = '',
-  sourcePolicy?: { readonly eastAsianDefaults?: boolean; readonly kern?: number }
+  sourcePolicy?: { readonly eastAsianDefaults?: boolean; readonly kern?: number },
+  jc = 'both'
 ) {
   const run = (value: string) =>
     `<w:r><w:rPr><w:sz w:val="24"/>${sourcePolicy?.kern === undefined ? '' : `<w:kern w:val="${sourcePolicy.kern}"/>`}${runProps}</w:rPr><w:t xml:space="preserve">${value}</w:t></w:r>`;
   const source = part(
-    `<w:document xmlns:w="${W}"><w:body><w:p><w:pPr><w:overflowPunct w:val="0"/></w:pPr>${split === -1 ? [...text].map(run).join('') : run(text.slice(0, split)) + run(text.slice(split))}</w:p></w:body></w:document>`
+    `<w:document xmlns:w="${W}"><w:body><w:p><w:pPr><w:jc w:val="${jc}"/><w:overflowPunct w:val="0"/></w:pPr>${split === -1 ? [...text].map(run).join('') : run(text.slice(0, split)) + run(text.slice(split))}</w:p></w:body></w:document>`
   );
   return linesOf(
     layoutSemanticDocument(source, 0, {
@@ -81,10 +84,13 @@ const qualifiedLayout = (
   width: number,
   split = text.length,
   measure = measurer,
-  runProps = ''
-) => layout(text, width, split, measure, runProps, { eastAsianDefaults: true, kern: 2 });
-// Native Word PDFs from three independent width/group experiments, Songti SC 12 pt.
-const word = [
+  runProps = '',
+  jc = 'both'
+) => layout(text, width, split, measure, runProps, { eastAsianDefaults: true, kern: 2 }, jc);
+// Native Word PDFs from three independent width/group experiments, Songti SC 12 pt. The source
+// alignment was not recorded. Fitting vectors run justified; the 88 pt vector runs left-aligned
+// to keep its natural origins on a wrapped line.
+const word: { text: string; width: number; lines: string[]; origins: number[]; jc?: string }[] = [
   {
     text: '甲乙（丙丁）戊己',
     width: 90,
@@ -94,6 +100,7 @@ const word = [
   {
     text: '甲乙（丙丁）戊己',
     width: 88,
+    jc: 'left',
     lines: ['甲乙（丙丁）戊', '己'],
     origins: [0, 12, 24, 36, 48, 60, 72],
   },
@@ -135,8 +142,15 @@ const word = [
   },
 ];
 for (const fixture of word)
-  test(`Word optical fit at ${fixture.width}: ${fixture.text}`, () => {
-    const lines = qualifiedLayout(fixture.text, fixture.width);
+  test(`Word optical fit at ${fixture.width}${fixture.jc ? ` (${fixture.jc})` : ''}: ${fixture.text}`, () => {
+    const lines = qualifiedLayout(
+      fixture.text,
+      fixture.width,
+      undefined,
+      undefined,
+      '',
+      fixture.jc
+    );
     expect(lines.map((line) => line.spans.map((span) => span.text).join(''))).toEqual(
       fixture.lines
     );
@@ -155,7 +169,7 @@ for (const fixture of word)
 test('optical Word vectors survive each source-run seam', () => {
   for (const fixture of word) {
     for (let split = 0; split <= fixture.text.length; split++) {
-      const lines = qualifiedLayout(fixture.text, fixture.width, split);
+      const lines = qualifiedLayout(fixture.text, fixture.width, split, undefined, '', fixture.jc);
       expect({
         text: fixture.text,
         split,
@@ -386,7 +400,7 @@ test('ineligible decorated paragraphs retain the advance-only whitespace path', 
 test('optical line geometry remains stable through cached width changes', () => {
   const text = '甲乙（丙丁）戊己';
   const source = part(
-    `<w:document xmlns:w="${W}"><w:body><w:p><w:pPr><w:overflowPunct w:val="0"/></w:pPr><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`
+    `<w:document xmlns:w="${W}"><w:body><w:p><w:pPr><w:jc w:val="both"/><w:overflowPunct w:val="0"/></w:pPr><w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`
   );
   const session = createLayoutSession();
   const styleCascade = buildStyleCascadeTable(null, undefined, settings.root);
@@ -409,4 +423,35 @@ test('optical line geometry remains stable through cached width changes', () => 
   expect(draw(90)).toEqual(compressed);
   expect(draw(120)[0]!.origins).toEqual([0, 12000, 24000, 36000, 48000, 60000, 72000, 84000]);
   expect(draw(90)).toEqual(compressed);
+});
+
+test('the single-unit cluster fast path agrees with grapheme segmentation', () => {
+  const units: string[] = [' ', '\u2018', '\u2019', '\u201c', '\u201d'];
+  for (const [from, to] of [
+    [0x3000, 0x9fff],
+    [0xff00, 0xffef],
+  ] as const)
+    for (let code = from; code <= to; code += 1) units.push(String.fromCharCode(code));
+  let fast = 0;
+  for (const unit of units) {
+    const text = `甲${unit}${unit}乙`;
+    const clusters = fittingClusters(text);
+    expect(clusters).toEqual(segmentGraphemes(text));
+    if (clusters.length === 4) fast += 1;
+  }
+  // Combining kana, tone marks, and halfwidth voiced marks take the segmenter path.
+  const voiced = 'か' + String.fromCharCode(0x3099);
+  expect(fittingClusters(voiced)).toEqual(segmentGraphemes(voiced));
+  expect(fittingClusters(voiced)).toHaveLength(1);
+  expect(fast).toBeGreaterThan(20_000);
+});
+
+test('only a justified paragraph compresses punctuation to fit a line', () => {
+  const text = (jc: string) =>
+    qualifiedLayout('甲乙（丙丁）戊己', 90, undefined, undefined, '', jc).map((line) =>
+      line.spans.map((span) => span.text).join('')
+    );
+  expect(text('both')).toEqual(['甲乙（丙丁）戊己']);
+  expect(text('distribute')).toEqual(['甲乙（丙丁）戊己']);
+  for (const jc of ['left', 'center', 'right']) expect(text(jc)).toEqual(['甲乙（丙丁）戊', '己']);
 });

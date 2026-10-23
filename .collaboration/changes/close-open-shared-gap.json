@@ -1,13 +1,14 @@
 {
   "impact": "no-impact",
   "fields": [],
-  "before": "Demand fitting does not use the two measured bearings at a qualified fullwidth close-open pair.",
-  "after": "Demand fitting shares one measured ink gap between two qualified East Asian punctuation cells. Each cell retains its remaining half-width limit.",
-  "reason": "Only derived local layout geometry changes. Source text, authored properties, operations, awareness, shared snapshots, and room formats stay unchanged.",
+  "before": "Closing-opening pairs use one-sided compression and can use the closing run size.",
+  "after": "Qualified closing-opening pairs share both measured blank sides at the opening run size in justified paragraphs. Demand fitting does not depend on noPunctuationKerning.",
+  "reason": "Only derived local layout changes. Source text, authored properties, operations, awareness, shared snapshots, and room formats stay unchanged.",
   "tests": [
-    "packages/core/src/layout/__tests__/cjk-close-open-shared-gap.test.ts",
-    "packages/core/src/layout/__tests__/cjk-close-open-source-policy.test.ts",
-    "packages/pro/src/collaboration/__tests__/document-close-open-shared-gap.test.ts"
+    "packages/core/src/layout/__tests__/cjk-close-open-measured-bearings.test.ts",
+    "packages/core/src/layout/__tests__/cjk-close-open-parsed-reference-policy.test.ts",
+    "packages/core/src/layout/__tests__/table-close-open-measured-bearings.test.ts",
+    "packages/pro/src/collaboration/__tests__/document-close-open-measured-bearings.test.ts"
   ],
   "changeset": "close-open-shared-gap",
   "migration": null

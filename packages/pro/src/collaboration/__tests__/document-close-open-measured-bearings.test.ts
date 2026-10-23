@@ -16,23 +16,21 @@ import { createPeerHarness, zipDocument, type Peer } from './document-peer-suppo
 // A declared synthetic metric model, not an installed or substituted font.
 const measurer: TextMeasurer = {
   measure: (text, style) =>
-    (text.length * 14 * style.horizontalScalePercent) / 100 +
-    text.length * style.characterSpacingPt,
-  lineMetrics: () => ({ height: 18.2, baseline: 14 }),
+    text.length *
+    ((style.fontSizePt * style.horizontalScalePercent) / 100 + style.characterSpacingPt),
+  lineMetrics: () => ({ height: 24, baseline: 19.2 }),
   hasResolvedFont: () => true,
-  inkBounds: (text) =>
+  inkBounds: (text, style) =>
     text === '》'
-      ? { left: 1, right: 9.4 }
-      : /^[《（]$/.test(text)
-        ? { left: 7, right: 13 }
-        : text === '。'
-          ? { left: 0, right: 4 }
-          : { left: 0, right: 12 },
+      ? { left: style.fontSizePt * 0.1, right: style.fontSizePt * 0.6 }
+      : text === '（'
+        ? { left: style.fontSizePt * 0.4, right: style.fontSizePt * 0.95 }
+        : { left: 0, right: style.fontSizePt },
 };
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 function source(): Uint8Array {
   return zipDocument(
-    '<w:p><w:pPr><w:overflowPunct w:val="0"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Fixture Latin" w:hAnsi="Fixture Latin" w:eastAsia="Fixture EA" w:hint="eastAsia"/><w:sz w:val="28"/></w:rPr><w:t>甲》（乙戊</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="1680" w:h="6000"/><w:pgMar w:top="200" w:right="200" w:bottom="200" w:left="200"/></w:sectPr>',
+    '<w:p><w:pPr><w:jc w:val="both"/><w:spacing w:before="0" w:after="0"/><w:overflowPunct w:val="0"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Fixture Latin" w:hAnsi="Fixture Latin" w:eastAsia="Fixture EA" w:hint="eastAsia"/><w:sz w:val="24"/></w:rPr><w:t>甲》（乙戊。</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="1660" w:h="6000"/><w:pgMar w:top="200" w:right="200" w:bottom="200" w:left="200"/></w:sectPr>',
     {
       overrides:
         '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>',
@@ -100,16 +98,20 @@ test('close-open geometry converges through shared edits, history, selections, d
       expect(xml(left)).toBe(xml(right));
       expect(geometry(left)).toEqual(geometry(right));
     };
-    same('甲》（乙戊');
+    same('甲》（乙戊。');
     expect(linesOf(left.surface.layout())).toHaveLength(1);
     const spans = linesOf(left.surface.layout()).flatMap((line) => line.spans);
-    expect(spans.some((span) => /[》（]/u.test(span.text) && span.box.width < 14)).toBe(true);
+    expect(spans.some((span) => /[》（]/u.test(span.text) && span.box.width < 12)).toBe(true);
     // Layout-derived compression must not become authored run spacing on save.
     const originalXml = strFromU8(unzipSync(source())['word/document.xml']!);
     const savedCompressedXml = xml(left);
     for (const value of [originalXml, savedCompressedXml]) {
-      expect(value).not.toMatch(/<w:spacing(?:\s|\/|>)/u);
-      expect(value).not.toMatch(/<w:w(?:\s|\/|>)/u);
+      const runs = [...value.matchAll(/<w:rPr(?:\s[^>]*)?>[\s\S]*?<\/w:rPr>/gu)]
+        .map((match) => match[0])
+        .join('');
+      expect(runs).not.toMatch(/<w:spacing(?:\s|\/|>)/u);
+      expect(runs).not.toMatch(/<w:w(?:\s|\/|>)/u);
+      expect(value).toMatch(/<w:pPr>[\s\S]*?<w:spacing\s/u);
     }
     const compressedReopened = open(left.surface.save());
     views.push(compressedReopened);
@@ -130,24 +132,39 @@ test('close-open geometry converges through shared edits, history, selections, d
         offset: remote.head.offset,
       })
     ).toEqual(caretAt(left.surface.layout(), left.surface.state().selection.head));
+    // Concurrent replacements retain the demand-fit line and exercise both peers.
     peers.pause();
-    select(left, 0);
-    select(right, 5);
-    left.surface.type('甲');
-    right.surface.type('乙');
+    select(left, 0, 1);
+    select(right, 4, 5);
+    left.surface.type('丁');
+    right.surface.type('己');
     peers.resume();
-    same('甲甲》（乙戊乙');
+    same('丁》（乙己。');
+    const fittedLine = () => {
+      expect(linesOf(left.surface.layout())).toHaveLength(1);
+      expect(linesOf(right.surface.layout())).toHaveLength(1);
+      for (const view of [left, right]) {
+        const pair = linesOf(view.surface.layout())
+          .flatMap((line) => line.spans)
+          .filter((span) => span.text === '》' || span.text === '（');
+        expect(pair).toHaveLength(2);
+        expect(pair.every((span) => span.box.width < 12)).toBe(true);
+      }
+    };
+    fittedLine();
     left.surface.undo();
-    same('甲》（乙戊乙');
+    same('甲》（乙己。');
+    fittedLine();
     left.surface.redo();
-    same('甲甲》（乙戊乙');
+    same('丁》（乙己。');
+    fittedLine();
     peers.pause();
-    select(left, 3, 4);
-    select(right, 7);
+    select(left, 2, 3);
+    select(right, 6);
     left.surface.deleteForward();
-    right.surface.type('丙');
+    right.surface.type('庚');
     peers.resume();
-    same('甲甲》乙戊乙丙');
+    same('丁》乙己。庚');
     const reopened = open(left.surface.save());
     views.push(reopened);
     expect(text(reopened)).toBe(text(left));
@@ -156,7 +173,7 @@ test('close-open geometry converges through shared edits, history, selections, d
     destroy(right);
     views.splice(views.indexOf(right), 1);
     harness.leave(peers.bob);
-    select(left, 7);
+    select(left, 6);
     left.surface.type('丁');
     const joined = await harness.join(peers.alice, 'joined');
     const third = open(joined.room.document, joined);
