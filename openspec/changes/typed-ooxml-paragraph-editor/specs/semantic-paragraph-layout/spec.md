@@ -341,7 +341,7 @@ The editor SHALL replace host font resources without replacing its document sess
 
 ### Requirement: Terminal exact-row outer rule extent
 
-Semantic layout SHALL reserve a supported terminal exact row's simple outer rule outside its authored content height. Admission, published row and cell boxes, painted borders, and following flow SHALL consume the same extra extent. Text layout, exact clipping, vertical alignment, canonical source text, and saved XML SHALL retain their authored behavior.
+Semantic layout SHALL place a supported terminal exact row's simple bottom rule outside its authored content height. Published boxes, painted borders, and following flow SHALL include that outer extent. Admission SHALL use the authored row height. Canonical source text and saved XML SHALL remain unchanged.
 
 #### Scenario: Outer rule preserves authored exact row pitch
 
@@ -352,16 +352,22 @@ Semantic layout SHALL reserve a supported terminal exact row's simple outer rule
 #### Scenario: Border room is insufficient
 
 - **WHEN** an authored exact row fits the remaining band but its complete outer rule does not
-- **THEN** pagination measures the complete terminal extent before committing the row
-- **AND** direct bounded placement retains authored content height and alignment without deducting an unapplied border budget
+- **THEN** the row keeps its page and authored content height
+- **AND** only its outer bottom rule extends past the bottom margin
+
+#### Scenario: Cell text uses the authored bottom
+
+- **WHEN** a terminal exact-row cell has center or bottom alignment
+- **THEN** text aligns within the authored height and cell margins
+- **AND** the bottom rule reserves no space inside that content box
 
 ### Requirement: Terminal-rule table eligibility
 
-Only bounded, top-level, unpositioned, collapsed tables with text-only horizontal projections and complete grid coverage SHALL qualify. Equal single top and bottom rules SHALL have integral-twip widths up to 12pt. Only the first authored row MAY span columns. A first-column vertical merge MAY cover exactly the first two rows and SHALL end before the terminal row.
+Bounded, top-level, unpositioned, collapsed tables with text-only horizontal projections and complete grid coverage SHALL qualify. Terminal bottom-cell rules SHALL be equal single rules up to 12pt. Repeated headers, horizontal spans, and vertical merges in either column SHALL use the same terminal rule. Top and bottom widths MAY differ. Eighth-point widths SHALL NOT require integral-twip conversion for this outer extent.
 
 #### Scenario: Unsupported shapes keep existing geometry
 
-- **WHEN** a table has other merges, repeated headers, nested content, supported bottom-to-top cells, compound rules, cell spacing, or unequal or fractional-twip outer widths
+- **WHEN** a table has nested content, supported bottom-to-top cells, compound bottom rules, cell spacing, or unequal bottom-cell widths
 - **THEN** it retains its existing geometry
 
 ### Requirement: Cached terminal-rule eligibility

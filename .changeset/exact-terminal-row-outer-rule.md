@@ -2,4 +2,4 @@
 '@docx-editor.dev/core': patch
 ---
 
-Preserve the outer rule pitch of supported fixed-height terminal table rows.
+Place supported fixed-height terminal row borders outside the authored height and preserve cell text alignment.

@@ -4,7 +4,7 @@ import { reuseSingleLineAtWidth } from './paragraph-cache-width-reuse.ts';
 import { cellParagraphInputs, cellParagraphBreakInputs } from './cell-paragraph-inputs.ts';
 import { adjustedBreakIndex, paragraphKeeps } from './pagination-keeps.ts';
 import { firstRowContentDeps } from './table-fragment-content-insets.ts';
-import { exactTerminalBorderPt, fittingBorderPt } from './table-exact-terminal-border.ts';
+import { endRowInsets, exactTerminalBorderPt } from './table-exact-terminal-border.ts';
 import { cellContextualSpacing, contextualCellNeighbours } from './contextual-paragraph-spacing.ts';
 import { emitNestedTable } from './nested-table-layout.ts';
 import { paragraphIsRtl } from './rtl-paragraph.ts';
@@ -127,7 +127,7 @@ import {
 import { annotateTableFragmentGeometry } from './semantic-table-interaction.ts';
 import { type TableBorderOwnershipBudget } from './table-borders.ts';
 import { type TableVMergeResolveBudget } from './table-vmerge.ts';
-import { cellContentInsets, type CellContentInsets } from './table-cell-geometry.ts';
+import { type CellContentInsets } from './table-cell-geometry.ts';
 import { authoredRowMinimumFloorPt, type RowMinimumInsetMap } from './table-row-minimum-insets.ts';
 import {
   cellFlowBox,
@@ -1374,8 +1374,7 @@ export function layoutRowFragmentBounded(
     const spaced = gap && gridColumn < cols.length ? gap : null;
     const cellX = spaced ? left + spaced.cellLeft(gridColumn) : slotX;
     const cellW = Math.max(spaced ? spaced.cellWidth(gridColumn, span) : slotW, MIN_CELL_BOX_PT);
-    const ownInsets =
-      deps.cellContentInsets?.get(cell.id) ?? cellContentInsets(cell, cellSpacingPt === 0);
+    const ownInsets = endRowInsets(cell, deps, terminalBorderPt, rowTop, maxBottom, cellSpacingPt);
     const insets = rowGapPt > 0 ? { ...ownInsets, top: ownInsets.top + rowGapPt } : ownInsets;
     // Each page fragment retains the cell padding, even when its paragraph continues.
     const topInset = insets.top;
@@ -1524,7 +1523,7 @@ export function layoutRowFragmentBounded(
   if (exactHeightPt !== undefined) {
     const exactBottom = rowTop + exactHeightPt;
     if (exactBottom <= maxBottom + 0.001) {
-      appliedTerminalBorderPt = fittingBorderPt(exactBottom, terminalBorderPt, maxBottom);
+      appliedTerminalBorderPt = terminalBorderPt;
       rowBottom = exactBottom + appliedTerminalBorderPt;
       clipExact = true;
     } else {
@@ -1551,7 +1550,7 @@ export function layoutRowFragmentBounded(
     const floors = minBottom > rowBottom && minBottom <= maxBottom + 0.001;
     if (floors && flowed.every((entry) => entry.complete)) rowBottom = minBottom;
   }
-  rowBottom = Math.min(maxBottom, rowBottom);
+  rowBottom = Math.min(maxBottom + appliedTerminalBorderPt, rowBottom);
   const rowHeight = Math.max(0, rowBottom - rowTop);
   const cellHeight = Math.max(0, rowHeight - rowGapPt);
   if (layOutWaitingBottomToTopCells(flowed, rowHeight) && markSizedRow) anyFitted = true;

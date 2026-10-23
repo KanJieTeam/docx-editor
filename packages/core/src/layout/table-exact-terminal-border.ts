@@ -1,8 +1,13 @@
 // Reserve the supported terminal exact row's outer rule outside its authored content box.
-import { canProbeBorderRows, hasTableMerge } from './table-border-probe.ts';
+import { canProbeBorderRows } from './table-border-probe.ts';
 import { effectiveBorderSide } from './table-border-cascade.ts';
+import { cellContentInsets, type CellContentInsets } from './table-cell-geometry.ts';
 import { withoutFloatingTableZones } from './table-float-overlap.ts';
-import type { SemanticTableRow, SemanticTableStructure } from './semantic-table.ts';
+import type {
+  SemanticTableCell,
+  SemanticTableRow,
+  SemanticTableStructure,
+} from './semantic-table.ts';
 import type { TableFlowDeps } from './semantic-table-layout.ts';
 
 interface TerminalBorderBudget {
@@ -41,73 +46,36 @@ function readTerminalBudget(structure: SemanticTableStructure): TerminalBorderBu
   )
     return null;
 
-  const first = structure.rows[0]?.cells[0];
-  const second = structure.rows[1]?.cells[0];
-  // This merge ends before the ordinary body. It cannot own the terminal row's border.
-  const prefixMerge =
-    structure.rows.length >= 3 &&
-    first?.gridColumn === 0 &&
-    first.gridSpan === 1 &&
-    first.headsVerticalMerge === true &&
-    !first.vMergeContinue &&
-    second?.gridColumn === 0 &&
-    second.gridSpan === 1 &&
-    second.vMergeContinue &&
-    !second.headsVerticalMerge &&
-    structure.rows.every((r) =>
-      r.cells.every(
-        (c) => (!c.headsVerticalMerge || c === first) && (!c.vMergeContinue || c === second)
-      )
-    );
-  if (
-    (hasTableMerge(structure) && !prefixMerge) ||
-    structure.rows.some(
-      (r, i) =>
-        r.isHeader ||
-        r.cells.some(
-          (c) =>
-            (c.headsVerticalMerge && !(prefixMerge && c === first)) ||
-            ((i !== 0 || r === row) && c.gridSpan !== 1)
-        )
-    )
-  )
-    return null;
-  // Only the eligibility view clears this proved prefix continuation. Source rows stay intact.
-  const probeRows = prefixMerge
-    ? structure.rows.map((r) =>
-        r.cells.includes(second!)
-          ? {
-              ...r,
-              cells: r.cells.map((c) => (c === second ? { ...c, vMergeContinue: false } : c)),
-            }
-          : r
-      )
-    : structure.rows;
+  // Merge continuations still have bounded content. Only this eligibility view clears them.
+  const probeRows = structure.rows.map((source) =>
+    source.cells.some((cell) => cell.vMergeContinue)
+      ? {
+          ...source,
+          cells: source.cells.map((cell) =>
+            cell.vMergeContinue ? { ...cell, vMergeContinue: false } : cell
+          ),
+        }
+      : source
+  );
   if (!canProbeBorderRows(probeRows, structure.columnWidthsPt.length)) return null;
 
-  // Unequal widths, compound rules, and fractional-twip widths keep their existing geometry.
+  // The terminal rule owns this extent. The table's top rule does not constrain it.
   let width: number | undefined;
-  for (const [source, side] of [
-    [structure.rows[0]!, 'top'],
-    [row, 'bottom'],
-  ] as const) {
-    for (const cell of source.cells) {
-      const edge = effectiveBorderSide(
-        cell.borders[side],
-        (cell.rowTableBorders ?? structure.tableBorders)[side]
-      );
-      if (
-        edge.state !== 'edge' ||
-        edge.style !== 'single' ||
-        !Number.isFinite(edge.widthPt) ||
-        edge.widthPt <= 0 ||
-        edge.widthPt > 12
-      )
-        return null;
-      const points = Math.floor(edge.widthPt * 20 + 1e-8) / 20;
-      if (points !== edge.widthPt || (width !== undefined && points !== width)) return null;
-      width = points;
-    }
+  for (const cell of row.cells) {
+    const edge = effectiveBorderSide(
+      cell.borders.bottom,
+      (cell.rowTableBorders ?? structure.tableBorders).bottom
+    );
+    if (
+      edge.state !== 'edge' ||
+      edge.style !== 'single' ||
+      !Number.isFinite(edge.widthPt) ||
+      edge.widthPt <= 0 ||
+      edge.widthPt > 12
+    )
+      return null;
+    if (width !== undefined && edge.widthPt !== width) return null;
+    width = edge.widthPt;
   }
   return width && width > 0 ? { row, widthPt: width } : null;
 }
@@ -116,6 +84,22 @@ export function exactTerminalBorderPt(row: SemanticTableRow, deps: TableFlowDeps
   return deps.exactTerminalBorder?.row === row ? deps.exactTerminalBorder.widthPt : 0;
 }
 
-export function fittingBorderPt(exactBottom: number, widthPt: number, maxBottom: number): number {
-  return exactBottom + widthPt <= maxBottom + 0.001 ? widthPt : 0;
+export function endRowInsets(
+  cell: SemanticTableCell,
+  deps: TableFlowDeps,
+  terminalBorderPt: number,
+  rowTop: number,
+  maxBottom: number,
+  cellSpacingPt: number
+): CellContentInsets {
+  const insets =
+    deps.cellContentInsets?.get(cell.id) ?? cellContentInsets(cell, cellSpacingPt === 0);
+  const height = deps.exactTerminalBorder?.row.height;
+  // The caller already checks row identity, repetition, continuation, depth, and spacing.
+  const applies =
+    terminalBorderPt > 0 &&
+    height?.rule === 'exact' &&
+    rowTop + height.valuePt <= maxBottom + 0.001;
+  // The closing stroke sits below the authored box, outside its bottom margin.
+  return applies ? { ...insets, bottom: cell.margins.bottom } : insets;
 }

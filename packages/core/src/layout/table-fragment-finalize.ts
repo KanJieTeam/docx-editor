@@ -205,17 +205,18 @@ export function finalizeTableRows(
               height = last.box.y + last.box.height - cell.box.y;
             }
             const authored = authoredById.get(cell.id);
-            const terminalSource = sourceRows[rowIndex];
+            const terminalIndex = rowIndex + span - 1;
+            const terminalSource = sourceRows[terminalIndex];
+            const terminalRow = rows[terminalIndex]!;
             const terminalHeight = terminalSource?.height;
             const terminalBudget =
               anchorDeps &&
               terminalSource &&
-              !row.isHeaderRepeat &&
-              !row.isContinuation &&
-              span === 1 &&
+              !terminalRow.isHeaderRepeat &&
+              !terminalRow.isContinuation &&
               terminalHeight?.rule === 'exact' &&
               Math.abs(
-                row.box.height -
+                terminalRow.box.height -
                   (terminalHeight.valuePt + exactTerminalBorderPt(terminalSource, anchorDeps))
               ) < 0.001
                 ? exactTerminalBorderPt(terminalSource, anchorDeps)
@@ -239,7 +240,10 @@ export function finalizeTableRows(
                 const available =
                   (vertical
                     ? cell.box.width - insets.left - insets.right
-                    : height - terminalBudget - insets.top - insets.bottom) -
+                    : height -
+                      terminalBudget -
+                      insets.top -
+                      (terminalBudget > 0 ? authored.margins.bottom : insets.bottom)) -
                   (contentBottom - contentTop);
                 // Reset any per-row shift by measuring from cell top + inset.
                 const desiredTop =

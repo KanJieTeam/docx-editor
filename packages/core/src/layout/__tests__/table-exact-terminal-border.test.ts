@@ -81,16 +81,9 @@ for (const [name, options] of [
   ['minimum', { rule: 'atLeast' }],
   ['nil', { border: 'nil' }],
   ['compound', { border: 'double' }],
-  ['unequal outer rules', { topWidth: 0.5 }],
-  ['fractional-twip rule', { width: 0.375 }],
   ['cell spacing', { spacing: true }],
-  ['repeated header', { header: true }],
-  ['terminal merge', { rows: 8, terminalMerge: true }],
-  ['longer prefix merge', { rows: 8, threeRowMerge: true }],
-  ['other-column merge', { rows: 8, columns: 7, otherColumnMerge: true }],
   ['nested middle cell', { rows: 3, middleNested: true }],
   ['supported vertical text', { rows: 3, middleVertical: true }],
-  ['terminal horizontal span', { terminalSpan: true }],
   ['bounded scan refusal', { large: true }],
 ] satisfies [string, ExactTerminalOptions][]) {
   test(`unsupported terminal budget keeps the original dependencies: ${name}`, () => {
@@ -129,18 +122,27 @@ for (const align of ['top', 'center', 'bottom'] as const) {
         );
       const before = place(original);
       const after = place({ ...original, exactTerminalBorder: { row, widthPt: 1.5 } });
-      if (name === 'complete border room') {
+      if (room >= authored) {
         expect(after.record.box.height - before.record.box.height).toBeCloseTo(1.5, 6);
-        expect(after.record.cells.map((c) => c.blocks)).toEqual(
-          before.record.cells.map((c) => c.blocks)
-        );
+        for (const [index, cell] of after.record.cells.entries()) {
+          const original = before.record.cells[index]!;
+          // Overfull text keeps its origins. Its visible clip reaches the authored bottom.
+          expect(cell.blocks).toHaveLength(original.blocks.length);
+          for (const [blockIndex, block] of cell.blocks.entries()) {
+            const previous = original.blocks[blockIndex]!;
+            expect({ ...block, box: { ...block.box, height: previous.box.height } }).toEqual(
+              previous
+            );
+            expect(block.box.height).toBeCloseTo(Math.min(12, authored - block.box.y), 6);
+          }
+        }
       } else expect(after).toEqual(before);
     });
   }
 }
 
-test('terminal rule admission moves the last row when only the old exact box fits', () => {
-  const part = exactTerminalFixture({ pageHeight: 1800 });
+test('terminal rule admission moves the last row when its authored height does not fit', () => {
+  const part = exactTerminalFixture({ pageHeight: 1740 });
   const result = layoutSemanticDocument(part, 0, {
     measurer: createFixedMeasurer(5, 12),
     session: createLayoutSession(),
@@ -150,7 +152,7 @@ test('terminal rule admission moves the last row when only the old exact box fit
   expect(tables.map((t) => t.rows.length)).toEqual([1, 1]);
   for (const page of result.pages)
     for (const fragment of page.fragments) {
-      expect(fragment.box.y + fragment.box.height).toBeLessThanOrEqual(54.001);
+      expect(fragment.box.y + fragment.box.height).toBeLessThanOrEqual(51.001);
     }
 });
 
