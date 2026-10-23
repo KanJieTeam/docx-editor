@@ -22,7 +22,7 @@ import {
 } from '../store/package/drawing-projection.ts';
 import type { OoxmlNode } from '../store/package/ooxml-tree.ts';
 import { pageClipRegion } from './drawing-page-clip.ts';
-export { pageClipRegion } from './drawing-page-clip.ts';
+export { columnPaperClip, pageClipRegion } from './drawing-page-clip.ts';
 import type { ImageResourceState } from '../store/package/image-resources.ts';
 import {
   DEFAULT_REVISION_DISPLAY_MODE,

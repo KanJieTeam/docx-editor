@@ -126,6 +126,7 @@ import { resolvedParagraphMarkChangeSites } from './revision-formatting-projecti
 import { paragraphMergeGroupOf, storyBlocks } from './story-roots.ts';
 import {
   clipInlineDrawingRecordToRegion,
+  columnPaperClip,
   publishAnchoredDrawingsForParagraph,
   anchoredDrawingAtomsInParagraph,
   pageClipRegion,
@@ -2690,11 +2691,10 @@ function* layoutBlocksPass(
           lineAlignOffset(placedSpans, aligned, alignment, measure.available, measure.used)
       );
       const { spans: alignedSpans, offset: alignOffset } = content;
-      // Clip where alignment put each picture, not where the line's fill left it: physical
-      // paper horizontally, retaining the body vertical clip. Most lines carry no picture.
+      // Clip where alignment put each picture: paper or mid-gap sideways, the body band vertically.
       let alignedDrawings = content.drawings;
       if (alignedDrawings.length > 0) {
-        const paperClip = pageContentClip();
+        const paperClip = columnPaperClip(pageContentClip(), columns, columnIndex);
         const pageClip = { x: paperClip.x, y: 0, width: paperClip.width, height: contentHeight() };
         alignedDrawings = alignedDrawings.map((drawing) =>
           clipInlineDrawingRecordToRegion(drawing, pageClip)

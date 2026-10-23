@@ -24,14 +24,22 @@ const resource = Object.freeze({
   dpiX: 96,
   dpiY: 96,
 });
-function sample(width: number, left = 0, cell = false, height = 36, frame = '', rotation = 0) {
+function sample(
+  width: number,
+  left = 0,
+  cell = false,
+  height = 36,
+  frame = '',
+  rotation = 0,
+  section = ''
+) {
   const cx = width * 12700,
     cy = height * 12700;
   const paragraph = `<w:p><w:pPr>${frame}<w:ind w:left="${left * 20}"/></w:pPr><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="1" name="example"/><wp:cNvGraphicFramePr/><a:graphic><a:graphicData uri="${PIC}"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="example"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="example"/></pic:blipFill><pic:spPr><a:xfrm rot="${rotation * 60000}"><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
   const contents = cell
     ? `<w:tbl><w:tblPr><w:tblW w:w="2000" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:left w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr>${paragraph}</w:tc></w:tr></w:tbl>`
     : paragraph;
-  const xml = `<w:document xmlns:w="${WML_NAMESPACE_URI}" xmlns:wp="${WP}" xmlns:a="${DML}" xmlns:pic="${PIC}" xmlns:r="${REL}"><w:body>${contents}</w:body></w:document>`;
+  const xml = `<w:document xmlns:w="${WML_NAMESPACE_URI}" xmlns:wp="${WP}" xmlns:a="${DML}" xmlns:pic="${PIC}" xmlns:r="${REL}"><w:body>${contents}${section}</w:body></w:document>`;
   const parsed = readOoxmlPart(xml, { name: '/word/document.xml', contentType: 'application/xml' });
   if (!parsed.ok) throw Error(parsed.reason);
   const part = parsed.part,
@@ -150,4 +158,21 @@ test('body paper clipping preserves vertical limits and frame-local clipping', (
   expect(top.hitBounds).toEqual(top.paintBounds);
   expect(frame.authoredWidth).toBe(170);
   expect(frame.paint.width).toBe(100);
+});
+
+test('a picture in an earlier column stops at the middle of the gap to the next column', () => {
+  const columns = (cols: string) =>
+    sample(170, 0, false, 36, '', 0, `<w:sectPr>${cols}</w:sectPr>`);
+  // Equal columns of 70pt with a 20pt gap: the clip ends 10pt into the gap.
+  const equal = columns('<w:cols w:num="2" w:space="400"/>');
+  expect(equal.x).toBe(0);
+  expect(equal.paint.x).toBe(0);
+  expect(equal.paint.width).toBe(80);
+  expect(equal.paint).toEqual(equal.hit);
+  // Unequal columns of 30pt and 90pt with a 20pt gap.
+  const unequal = columns(
+    '<w:cols w:num="2" w:equalWidth="0"><w:col w:w="600" w:space="400"/><w:col w:w="1800"/></w:cols>'
+  );
+  expect(unequal.paint.width).toBe(40);
+  expect(unequal.sourceUnchanged).toBe(true);
 });
