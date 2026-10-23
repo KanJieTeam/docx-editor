@@ -42,6 +42,8 @@ type Options = {
   measure?: TextMeasurer;
   style?: ResolvedRunStyle;
   openingReduction?: number;
+  measuredPair?: boolean;
+  room?: number;
 };
 function setup(o: Options = {}) {
   const s = o.style ?? style,
@@ -67,6 +69,7 @@ function setup(o: Options = {}) {
       props: [],
       ...(text === 'A' ? {} : { fontSlot: 'eastAsia' as const }),
       box: { x, y: 3, width: 12 - amount, height: 16 },
+      ...(amount ? { glyphOffsetPt: -amount } : {}),
     };
     if (text === 'A' && o.witness !== undefined) span = withAutomaticTextSpacing(span, o.witness);
     if (text === 'A' && o.staleWitness)
@@ -90,14 +93,15 @@ function setup(o: Options = {}) {
     trailingSpacing: 0,
   };
   const original = snapshot(line),
-    available = line.width + 10;
+    available = line.width + (o.room ?? 10);
   const fit = createCjkOpticalFitter(
     pieces,
     cjkParagraphBreaks(pieces, policy),
     m,
     false,
     true,
-    true
+    true,
+    o.measuredPair ?? o.opening ?? false
   );
   const run = () =>
     fit(
@@ -197,38 +201,94 @@ test('a witnessed gap is retained conservatively rather than being spent to resc
   expect(result).toBeUndefined();
   expect(snapshot(a.line)).toEqual(before);
 });
-test('closing followed by opening uses only the opening left bearing and leaves the closing advance intact', () => {
+test('a qualified closing-opening pair shares the deficit across both measured bearings', () => {
   const a = setup({ opening: true }),
     result = a.run();
   expect(result).toBeDefined();
   const closing = a.line.spans.find((s) => s.text === '》')!,
     opening = a.line.spans.find((s) => s.text === '（')!;
-  expect(closing.box.width).toBe(12);
-  expect(closing.style.characterSpacingPt).toBe(0);
-  expect(opening.box.width).toBeCloseTo(10, 8);
-  expect(opening.glyphOffsetPt).toBeCloseTo(-2, 8);
+  // Each authored glyph is 12pt. Both measured bearing budgets are capped at 6pt.
+  // The 2pt deficit therefore uses 1pt from each side.
+  expect(closing.box.width).toBeCloseTo(11, 8);
+  expect(closing.style.characterSpacingPt).toBeCloseTo(-1, 8);
+  expect(opening.box.width).toBeCloseTo(11, 8);
+  expect(opening.glyphOffsetPt).toBeCloseTo(-1, 8);
   expect(a.line.width + result!.width).toBeCloseTo(a.available, 8);
   expect(opening.box.x + 8 + opening.glyphOffsetPt! - closing.box.x - 4).toBeGreaterThanOrEqual(0);
 });
-test('opening with missing ink, insufficient left bearing or overlapping prior ink cannot provide a seam', () => {
+test('a pair with missing ink or overlapping prior ink cannot provide a seam', () => {
   for (const inkBounds of [
     (text: string) => (text === '（' ? undefined : measurer.inkBounds!(text, style)),
-    (text: string) => (text === '（' ? { left: 0.5, right: 10 } : measurer.inkBounds!(text, style)),
     (text: string) => (text === '》' ? { left: 2, right: 22 } : measurer.inkBounds!(text, style)),
   ])
     rejected({ opening: true, measure: { ...measurer, inkBounds } });
 });
-test('a pre-reduced opening cannot spend its already consumed half glyph capacity again', () => {
-  rejected({ opening: true, openingReduction: 5 });
+test('a small opening bearing does not discard the qualified closing-side budget', () => {
+  const a = setup({
+      opening: true,
+      measure: {
+        ...measurer,
+        inkBounds: (text) =>
+          text === '（' ? { left: 0.5, right: 10 } : measurer.inkBounds!(text, style),
+      },
+    }),
+    result = a.run();
+  expect(result).toBeDefined();
+  expect(a.line.spans.find((s) => s.text === '》')!.box.width).toBeCloseTo(10.5, 8);
+  expect(a.line.spans.find((s) => s.text === '（')!.box.width).toBeCloseTo(11.5, 8);
+  expect(a.line.width + result!.width).toBeCloseTo(a.available, 8);
 });
-test('a repeated optical fit retains prior derived reduction and cannot compress the same opening twice', () => {
+
+test('a pre-reduced opening retains its remaining budget without blocking the closing bearing', () => {
+  const a = setup({ opening: true, openingReduction: 5 }),
+    result = a.run();
+  expect(result).toBeDefined();
+  expect(a.line.spans.find((s) => s.text === '》')!.box.width).toBeCloseTo(11, 8);
+  expect(a.line.spans.find((s) => s.text === '（')!.box.width).toBeCloseTo(6, 8);
+  expect(a.line.spans.find((s) => s.text === '（')!.glyphOffsetPt).toBeCloseTo(-6, 8);
+  expect(a.line.width + result!.width).toBeCloseTo(a.available, 8);
+});
+
+test('a repeated fit can use remaining pair capacity without exceeding either authored half', () => {
   const a = setup({ opening: true, openingReduction: 4 }),
     result = a.run();
   expect(result).toBeDefined();
-  expect(a.line.spans.find((s) => s.text === '（')!.box.width).toBeCloseTo(6, 8);
+  expect(a.line.spans.find((s) => s.text === '》')!.box.width).toBeCloseTo(11, 8);
+  expect(a.line.spans.find((s) => s.text === '（')!.box.width).toBeCloseTo(7, 8);
   a.line.spans.push(...result!.candidate);
   a.line.width += result!.width;
   a.line.end = 4;
+  const available = a.line.width + 10,
+    again = a.fit(
+      a.line,
+      4,
+      '丙',
+      { paragraphId: pid, start: 4, end: 5 },
+      12,
+      a.line.width,
+      available,
+      true
+    );
+  expect(again).toBeDefined();
+  expect(a.line.spans.find((s) => s.text === '》')!.box.width).toBeCloseTo(10, 8);
+  expect(a.line.spans.find((s) => s.text === '（')!.box.width).toBeCloseTo(6, 8);
+  expect(a.line.spans.find((s) => s.text === '（')!.glyphOffsetPt).toBeCloseTo(-6, 8);
+  expect(a.line.width + again!.width).toBeCloseTo(available, 8);
+});
+
+test('a saturated pair rejects another real source candidate without changing the line', () => {
+  // The opening already used its 6pt half. A legal 6pt remainder admits the next
+  // 12pt glyph, then spends the closing's full 6pt budget on this first fit.
+  const a = setup({ opening: true, openingReduction: 6, room: 6 }),
+    first = a.run();
+  expect(first).toBeDefined();
+  for (const text of ['》', '（'])
+    expect(a.line.spans.find((s) => s.text === text)!.box.width).toBeCloseTo(6, 8);
+  expect(a.line.width + first!.width).toBeCloseTo(a.available, 8);
+  a.line.spans.push(...first!.candidate);
+  a.line.width += first!.width;
+  a.line.end = 4;
+  expect(a.pieces[4]!.text).toBe('丙');
   const before = snapshot(a.line);
   expect(
     a.fit(
@@ -243,4 +303,8 @@ test('a repeated optical fit retains prior derived reduction and cannot compress
     )
   ).toBeUndefined();
   expect(snapshot(a.line)).toEqual(before);
+});
+
+test('a pair without explicit measured-pair qualification preserves the natural line', () => {
+  rejected({ opening: true, measuredPair: false });
 });

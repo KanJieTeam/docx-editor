@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { loadFixture } from './punctuation-kerning-fixture.ts';
 
-// 24pt Yu Mincho with kerning in a 468pt column: a full-width character advances 24pt,
-// and a shared punctuation bearing removes 12pt.
+// Fixed 24pt advances isolate source layout policy in a 468pt column.
+// This fixture has no resolved-face or ink witness. Close-open pairs stay natural;
+// other qualified legacy punctuation seams can still share a 12pt bearing.
 const H = (count: number) => '国'.repeat(count);
 const LEFT = '<w:jc w:val="left"/>';
 const JUSTIFIED = '<w:jc w:val="both"/>';
@@ -34,13 +35,13 @@ function lay(text: string, paragraphProperties = LEFT) {
 const texts = (lines: ReturnType<typeof lay>) => lines.map((line) => line.text);
 const ends = (lines: ReturnType<typeof lay>) => lines.map((line) => line.end);
 
-describe('punctuation pairs compress only within a line', () => {
+describe('unmeasured close-open pairs retain natural advances and legal line breaks', () => {
   test.each([
-    [15, [H(15) + '」「」「国', '国国'], [456, 48]],
-    [16, [H(16) + '」「」', '「国国国'], [444, 96]],
-    [17, [H(17) + '」「」', '「国国国'], [468, 96]],
-    [18, [H(18) + '」', '「」「国国国'], [456, 132]],
-    [19, [H(18), '国」「」「国国国'], [432, 168]],
+    [15, [H(15) + '」「」', '「国国国'], [432, 96]],
+    [16, [H(16) + '」「」', '「国国国'], [456, 96]],
+    [17, [H(17) + '」', '「」「国国国'], [432, 144]],
+    [18, [H(18) + '」', '「」「国国国'], [456, 144]],
+    [19, [H(18), '国」「」「国国国'], [432, 192]],
   ])('%d ideographs before 」「」「国国国', (count, expected, widths) => {
     const lines = lay(H(count) + '」「」「国国国');
     expect(texts(lines)).toEqual(expected);
@@ -50,13 +51,13 @@ describe('punctuation pairs compress only within a line', () => {
   test('a closing bracket at the line end keeps its full advance', () => {
     const [first, second] = lay(H(18) + '」「」「国国国');
     expect(first!.chars.at(-1)).toEqual({ char: '」', x: 432, width: 24 });
-    // The pair on the next line still shares one bearing.
-    expect(second!.chars.slice(0, 3).map((c) => c.x)).toEqual([0, 24, 36]);
+    // Left alignment does not reduce the pair on the next line either.
+    expect(second!.chars.slice(0, 3).map((c) => c.x)).toEqual([0, 24, 48]);
   });
 
   test.each([
     [H(18) + '。」「国', [H(18) + '。」', '「国'], [468, 48]],
-    [H(17) + '」「国国', [H(17) + '」「国', '国'], [468, 24]],
+    [H(17) + '」「国国', [H(17) + '」', '「国国'], [432, 72]],
     [H(18) + '」）国', [H(18) + '」）', '国'], [468, 24]],
     [H(19) + '。」国', [H(18), '国。」国'], [432, 84]],
   ])('%s', (text, expected, widths) => {
@@ -65,11 +66,11 @@ describe('punctuation pairs compress only within a line', () => {
     expect(ends(lines)).toEqual(widths);
   });
 
-  test('a pair that a colon retry moves off the line end still compresses', () => {
+  test('a close-open pair stays natural after a colon retry moves it off the line end', () => {
     const lines = lay(H(13) + '：「'.repeat(4) + H(17) + '）（国');
     const last = lines.at(-1)!;
     expect(last.text).toBe('国）（国');
-    expect(last.chars.map((c) => c.x)).toEqual([0, 24, 36, 60]);
+    expect(last.chars.map((c) => c.x)).toEqual([0, 24, 48, 72]);
   });
 
   test('right alignment places a line-final closing bracket at its full advance', () => {
@@ -105,10 +106,14 @@ describe('punctuation hangs past the margin only on justified lines', () => {
     }
   );
 
-  test('a justified line hangs its last closing bracket and keeps the inner pair', () => {
+  test('justified hanging does not authorize an inner pair without measured ink', () => {
     const lines = lay(H(18) + '」「」「国国国', JUSTIFIED);
-    expect(texts(lines)).toEqual([H(18) + '」「」', '「国国国']);
-    expect(lines[0]!.chars.slice(-3).map((c) => c.x)).toEqual([432, 444, 468]);
+    expect(texts(lines)).toEqual([H(18) + '」', '「」「国国国']);
+    // Natural width is 19 * 24 = 456. Justification adds 468 - 456 = 12pt
+    // before the closing glyph: its origin is 18 * 24 + 12 = 444pt.
+    expect(lines[0]!.chars.at(-1)).toEqual({ char: '」', x: 444, width: 24 });
+    expect(lines[0]!.end).toBe(468);
+    expect(lines[1]!.chars.map((c) => c.x)).toEqual([0, 24, 48, 72, 96, 120]);
     expect(texts(lay(H(19) + '」「」「国国国', JUSTIFIED))).toEqual([H(19) + '」', '「」「国国国']);
   });
 
