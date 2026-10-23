@@ -113,6 +113,22 @@ test('an enabled flag fills columns naturally and a continuous successor clears 
   expect(serializeOoxmlPart(part)).toBe(before);
 });
 
+test('compatibility mode 15 ignores the flag and balances the columns', () => {
+  const mode = (value: number) =>
+    `<w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="${value}"/>`;
+  expect(cascade(mode(15) + on).noColumnBalance).toBeUndefined();
+  expect(cascade(mode(14) + on).noColumnBalance).toBe(true);
+  expect(cascade(mode(12) + on).noColumnBalance).toBe(true);
+  const part = document(4);
+  const modern = layoutSemanticDocument(part, 1, {
+    measurer,
+    styleCascade: cascade(mode(15) + on),
+  });
+  const balanced = layoutSemanticDocument(part, 1, { measurer, styleCascade: cascade(mode(15)) });
+  expect(modern.pages).toEqual(balanced.pages);
+  expect(only(modern, 'FOLLOW').fragment.box.y).toBeLessThan(90);
+});
+
 test('default and disabled flags retain general final-page balancing', () => {
   for (const flag of ['', off]) {
     const result = layout(document(10), flag);

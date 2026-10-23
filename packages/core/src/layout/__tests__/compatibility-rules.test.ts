@@ -96,7 +96,11 @@ const PROFILE_MATRIX: Record<
   keyof typeof PROFILE_RULES,
   { options: string; on: readonly string[]; withoutOptions?: readonly string[] }
 > = {
-  noColumnBalance: { options: '<w:noColumnBalance/>', on: EVERY_MODE },
+  // Only legacy modes read the option; mode 13 has no rules.
+  noColumnBalance: {
+    options: '<w:noColumnBalance/>',
+    on: ['absent', '11', '12', '14', 'refused'],
+  },
   adjustLineHeightInTable: { options: '<w:adjustLineHeightInTable/>', on: EVERY_MODE },
   doNotBreakWrappedTables: { options: '<w:doNotBreakWrappedTables/>', on: EVERY_MODE },
   fixedParagraphSpacing: { options: '<w:doNotUseHTMLParagraphAutoSpacing/>', on: EVERY_MODE },

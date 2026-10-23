@@ -89,7 +89,7 @@ export const MAX_STYLE_DEFINITIONS = 4096;
  * styles part are never reused under another.
  */
 export interface StyleCascadeTable {
-  /** Fill section columns without balancing when `w:noColumnBalance` is enabled. */
+  /** Fill section columns without balancing: `w:noColumnBalance` is on in a legacy mode. */
   readonly noColumnBalance?: true;
   /** Keep floating tables that fit a full page together under the compatibility flag. */
   readonly doNotBreakWrappedTables?: true;

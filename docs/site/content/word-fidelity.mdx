@@ -176,7 +176,7 @@ When you compare a multipage table, check the space between each repeated header
 
 A multi-column section balances its final page before a continuous section follows. Earlier pages retain their column distribution.
 
-If settings enable `w:noColumnBalance`, the section fills each column before the next. An absent flag or an explicit off value retains balancing. The following continuous section starts below the tallest column, even when balancing is disabled.
+If settings enable `w:noColumnBalance` in a document saved in compatibility mode 14 or earlier, or with no declared mode, the section fills each column before the next. In compatibility mode 15 and later, the option has no effect and the section still balances. An absent flag or an explicit off value retains balancing. The following continuous section starts below the tallest column, even when balancing is disabled.
 
 ### Images and drawings
 
