@@ -74,6 +74,15 @@ export interface DrawingAccessibility {
     readonly label: string | null;
 }
 
+// @public
+export type DrawingChartPlotType = 'area' | 'area3D' | 'bar' | 'bar3D' | 'bubble' | 'doughnut' | 'line' | 'line3D' | 'ofPie' | 'pie' | 'pie3D' | 'radar' | 'scatter' | 'stock' | 'surface' | 'surface3D';
+
+// @public
+export interface DrawingChartSummary {
+    readonly plotTypes: readonly DrawingChartPlotType[];
+    readonly title: string | null;
+}
+
 // @public (undocumented)
 export interface DrawingGeometry {
     // (undocumented)
@@ -94,12 +103,27 @@ export interface DrawingGeometry {
 }
 
 // @public
+export interface DrawingGroupPictureLayerRecord {
+    readonly crop: SourceCrop;
+    readonly frameUnit: Readonly<{
+        height: number;
+        width: number;
+        x: number;
+        y: number;
+    }>;
+    readonly resource: ImageResourceState;
+}
+
+// @public
 export interface DrawingGroupPictureRecord {
     readonly alternateContent: boolean;
 }
 
 // @public (undocumented)
 export type DrawingHorizontalReferenceFrame = 'character' | 'column' | 'insideMargin' | 'leftMargin' | 'margin' | 'outsideMargin' | 'page' | 'rightMargin';
+
+// @public
+export type DrawingPlaceholderKind = 'chart' | 'diagram' | 'shape' | 'group' | 'textbox' | 'canvas' | 'graphic';
 
 // @public (undocumented)
 export interface DrawingTransform {
@@ -250,6 +274,11 @@ export interface ExportSession {
     dispose(): void;
     layout(): Promise<ExportSemanticLayout>;
     layoutFor(displayMode: ReviewDisplayMode): Promise<ExportSemanticLayout>;
+    // @internal
+    metafileBytes?(source: InlineDrawingRecord | AnchoredDrawingRecord): {
+        readonly bytes: Uint8Array;
+        readonly mime: 'image/x-emf' | 'image/x-wmf';
+    } | null;
     validatedImageBytes(source: InlineDrawingRecord | AnchoredDrawingRecord | ListMarkerPictureRecord): Uint8Array | null;
 }
 
@@ -395,6 +424,7 @@ export interface InlineDrawingRecord {
     // (undocumented)
     readonly baselineOffset: number;
     readonly bidiLevel?: number;
+    readonly chart?: DrawingChartSummary;
     // (undocumented)
     readonly crop: SourceCrop;
     // (undocumented)
@@ -409,9 +439,11 @@ export interface InlineDrawingRecord {
     readonly drawingNodeId: string;
     // (undocumented)
     readonly effects: DrawingImageEffects;
+    readonly frameEffects?: PictureFrameEffects;
     // (undocumented)
     readonly geometry: DrawingGeometry;
     readonly groupPicture?: DrawingGroupPictureRecord;
+    readonly groupPictureLayers?: readonly DrawingGroupPictureLayerRecord[];
     readonly groupTextboxStories?: readonly GroupTextboxStoryRecord[];
     // (undocumented)
     readonly height: number;
@@ -426,12 +458,13 @@ export interface InlineDrawingRecord {
     readonly paintBounds: LayoutBox;
     // (undocumented)
     readonly paragraphId: string;
-    readonly placeholderGraphicKind: string | null;
+    readonly placeholderGraphicKind: DrawingPlaceholderKind | null;
     // (undocumented)
     readonly resource: ImageResourceState;
     readonly revisions?: readonly RevisionAttribution[];
     // (undocumented)
     readonly start: number;
+    readonly textArt?: DrawingTextArtRecord;
     readonly textboxStory?: TextboxStoryLayout;
     // (undocumented)
     readonly transform: DrawingTransform;
@@ -713,6 +746,12 @@ export type OpenMarkdownDocumentForExportResult = {
 }>;
 
 // @public
+export interface PictureFrameEffects {
+    readonly reflection?: ShapeReflection;
+    readonly softEdgeEmu?: number;
+}
+
+// @public
 export type PreservedImageConverter = (bytes: Uint8Array, mime: PreservedImageMime, limits: ImageResourceLimits,
 signal?: AbortSignal) => Promise<Readonly<{
     bytes: Uint8Array;
@@ -947,6 +986,15 @@ export interface SemanticTrackedChangeArtifactRecord {
 }
 
 // @public
+export interface ShapeReflection {
+    readonly blurEmu: number;
+    readonly distanceEmu: number;
+    readonly endAlpha: number;
+    readonly endPosition: number;
+    readonly startAlpha: number;
+}
+
+// @public
 export interface SourceCrop {
     // (undocumented)
     readonly bottom: number;
@@ -976,6 +1024,7 @@ export type TextboxOutlineProjection = {
 
 // @public
 export interface TextboxStoryLayout {
+    readonly chromeByVector?: true;
     readonly chromeRotationDegrees?: number;
     readonly clippedResourceToken?: string;
     readonly contentHeight: number;
@@ -998,6 +1047,7 @@ export interface TextboxStoryLayout {
     readonly flowHeight: number;
     readonly fragments: readonly BlockFragmentRecord[];
     readonly outline?: TextboxOutlineProjection;
+    readonly overflowVisible?: true;
     readonly shadow?: Readonly<{
         alpha: number;
         dx: number;
@@ -1042,6 +1092,7 @@ export interface VectorShapeProjection {
     // (undocumented)
     readonly fillAlpha?: number;
     readonly fillHex: string | null;
+    readonly overflowVisible?: true;
     // (undocumented)
     readonly strokeAlpha?: number;
     readonly strokeHex: string | null;

@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import { projectDrawingsInPart, type DrawingProjection } from '../package/drawing-projection.ts';
 import { readOoxmlPart, type OoxmlPart } from '../package/ooxml-tree.ts';
-import { legacyRotationDegrees } from '../package/legacy-vml-text-art.ts';
+import { legacyRotationDegrees } from '../package/legacy-vml-values.ts';
 
 const NS =
   'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ' +
@@ -103,6 +103,20 @@ describe('VML text art', () => {
       watermark({ style: STYLE.replace('rotation:315', 'rotation:x') }),
     ];
     for (const run of refused) expect(projected(run)).toEqual([]);
+  });
+
+  test('without a text art renderer, WordArt outside a watermark is refused', () => {
+    const shape = (style: string) =>
+      `<w:pict>${TEMPLATE}<v:shape id="title" type="#_x0000_t136" style="${style}" ` +
+      'fillcolor="black"><v:textpath style="font-family:Cambria;font-size:24pt" ' +
+      'string="Title"/></v:shape></w:pict>';
+    // On the line it keeps the placeholder of a refused legacy drawing, which paints nothing.
+    const [inline] = projected(shape('width:238.8pt;height:27.6pt'));
+    expect(inline?.kind).toBe('inline');
+    expect(inline?.textArt).toBeUndefined();
+    expect(inline?.legacyGraphic).toBeUndefined();
+    // Floating, it takes the refusal path of any drawing outside the subset.
+    expect(projected(shape('position:absolute;width:238.8pt;height:27.6pt'))).toEqual([]);
   });
 
   test('rotation stays outside the subset for every other shape', () => {

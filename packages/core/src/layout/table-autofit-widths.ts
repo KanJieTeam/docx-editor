@@ -320,7 +320,11 @@ function paragraphWidthsPt(paragraph: OoxmlElement, inputs: MinimumInputs): Para
   const tabs = withDefaultTabInterval(layoutInputs.tabStops, context.defaultTabStopPt);
   // Tab stops count from the leading indent, which is the right one in right-to-left text.
   // The line breaker clamps a negative leading indent at the content edge.
-  const leading = Math.max(0, paragraphIsRtl(layoutInputs.props) ? right : left);
+  const rtl = paragraphIsRtl(layoutInputs.props);
+  const leading = Math.max(0, rtl ? right : left);
+  // A negative leading indent moves text into the cell margin and lowers the minimum; a
+  // negative trailing indent does not (the line still ends at the cell's content edge).
+  const sides = rtl ? Math.max(0, left) + right : left + Math.max(0, right);
   // Where a tab at `at` lands: the next stop the paragraph states, else the default grid.
   const nextTabStop = (at: number): number => nextAutofitTabStop(tabs, at);
   // Where each line starts: the first one shifted by its first-line indent or hanging. A list
@@ -347,7 +351,7 @@ function paragraphWidthsPt(paragraph: OoxmlElement, inputs: MinimumInputs): Para
   let onFirstLine = true;
   const endLine = (): void => {
     previousText = undefined;
-    const width = line - hung + Math.max(0, left + right + (onFirstLine ? firstShift : 0));
+    const width = Math.max(0, line - hung + sides + (onFirstLine ? firstShift : 0));
     if (line > 0 && width > longest) longest = width;
     line = 0;
     hung = 0;
@@ -360,10 +364,10 @@ function paragraphWidthsPt(paragraph: OoxmlElement, inputs: MinimumInputs): Para
   const close = (): void => {
     if (segment > 0) {
       // Indents are physical sides; the first-line shift moves whichever one leads.
-      const width = segment + Math.max(0, left + right + (first ? minimumShift : 0));
+      const width = Math.max(0, segment + sides + (first ? minimumShift : 0));
       if (width > widest) widest = width;
       const shift = first || firstAfterSpaces ? minimumShift : 0;
-      widestWidened = Math.max(widestWidened, segment + Math.max(0, left + right + shift));
+      widestWidened = Math.max(widestWidened, Math.max(0, segment + sides + shift));
       first = false;
       firstAfterSpaces = false;
     }

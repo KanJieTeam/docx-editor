@@ -2,8 +2,11 @@ import type { SourceCrop } from './drawing-projection.ts';
 import { RELATIONSHIPS_NAMESPACE_URI, type OoxmlElement } from './ooxml-tree.ts';
 import { legacyChromaKeyFilter } from './legacy-vml-chromakey.ts';
 import { LEGACY_IMAGE_EFFECT_ATTRIBUTES, legacyImageEffects } from './legacy-vml-image-effects.ts';
-import type { VectorShapeProjection } from './drawing-shape-projection.ts';
+import type { VectorShapeComponent, VectorShapeProjection } from './drawing-shape-projection.ts';
+import { compoundBands, type LineCompound } from './drawing-line-compound.ts';
+import { legacyDashPattern } from './legacy-vml-textbox-stroke.ts';
 import { freezeVectorShapeComponent } from './drawing-vector-freeze.ts';
+import { evaluateGeometry, presetGeometryDefinition } from './drawing-geometry-engine.ts';
 import {
   attribute as a,
   children,
@@ -18,6 +21,7 @@ import {
   styleOf,
   VML,
   WORD_VML,
+  coordOrigin,
 } from './legacy-vml-values.ts';
 
 /** Only generated, escaped SVG and relationship slots; never authored markup. */
@@ -28,6 +32,11 @@ export interface LegacyGraphicProjection {
   readonly width: number;
   readonly height: number;
   readonly fragments: readonly LegacyGraphicFragment[];
+  /**
+   * The relationship of the one uncropped picture that fills the whole graphic, when that is
+   * all it paints. The graphic then resolves to that picture, which every output can paint.
+   */
+  readonly soleImageRelationshipId?: string;
 }
 export interface LegacyBox {
   readonly x: number;
@@ -36,18 +45,47 @@ export interface LegacyBox {
   readonly height: number;
 }
 
-function paint(
-  node: OoxmlElement
-): { fill: string; stroke: string; weight: number; strokeNode?: OoxmlElement } | null {
+/** VML `v:stroke/@linestyle` as a compound outline. */
+const LINE_STYLES: ReadonlyMap<string, LineCompound> = new Map([
+  ['single', 'sng'],
+  ['thinthin', 'dbl'],
+  ['thinthick', 'thinThick'],
+  ['thickthin', 'thickThin'],
+  ['thickbetweenthin', 'tri'],
+]);
+
+export interface LegacyInk {
+  readonly fill: string;
+  readonly stroke: string;
+  readonly weight: number;
+  readonly strokeNode?: OoxmlElement;
+  /** Dash and gap lengths in outline widths; absent for solid. */
+  readonly dash?: readonly number[];
+  readonly compound: LineCompound;
+}
+
+/** The fill and outline of a legacy shape, or null outside the subset. */
+export function legacyInk(node: OoxmlElement, line = false): LegacyInk | null {
+  return paint(node, line);
+}
+
+function paint(node: OoxmlElement, line = false): LegacyInk | null {
   const list = children(node);
   if (['fill', 'stroke', 'path'].some((name) => list.filter((n) => named(n, VML, name)).length > 1))
     return null;
-  const fillNode = list.find((n) => named(n, VML, 'fill'));
+  // A frame picture fill draws as a picture over the shape; it adds no paint fill of its own.
+  const picture = !line && !!framePictureFill(node, list);
+  const fillNode = picture ? undefined : list.find((n) => named(n, VML, 'fill'));
   const strokeNode = list.find((n) => named(n, VML, 'stroke'));
   if (
     fillNode &&
     fillNode.attributes.some(
-      (attr) => !['on', 'color', 'focussize'].includes(attr.localName) || attr.namespaceUri
+      (attr) =>
+        attr.namespaceUri ||
+        // A solid fill is the default; other fill types paint gradients or pictures.
+        (attr.localName === 'type'
+          ? attr.value !== 'solid'
+          : !['on', 'color', 'focussize'].includes(attr.localName))
     )
   )
     return null;
@@ -66,12 +104,15 @@ function paint(
           'endarrowlength',
           'startarrowwidth',
           'startarrowlength',
+          'dashstyle',
+          'linestyle',
         ].includes(attr.localName) || attr.namespaceUri
     )
   )
     return null;
+  // A line has no inside, so its fill is never read; a writer may spell it `this`.
   const fill =
-    off(a(node, 'filled')) || (fillNode && off(a(fillNode, 'on')))
+    picture || line || off(a(node, 'filled')) || (fillNode && off(a(fillNode, 'on')))
       ? 'none'
       : color(
           fillNode ? (a(fillNode, 'color') ?? a(node, 'fillcolor')) : a(node, 'fillcolor'),
@@ -87,9 +128,31 @@ function paint(
   const weight = points(
     (strokeNode ? a(strokeNode, 'weight') : undefined) ?? a(node, 'strokeweight') ?? '0.75pt'
   );
+  // A dash or line style outside the known set refuses the shape rather than paint it solid.
+  const dashStyle = strokeNode ? a(strokeNode, 'dashstyle')?.trim().toLowerCase() : undefined;
+  const dash = legacyDashPattern(strokeNode);
+  if (dashStyle && dashStyle !== 'solid' && !dash) return null;
+  const compound = LINE_STYLES.get(
+    (strokeNode ? a(strokeNode, 'linestyle') : undefined)?.trim().toLowerCase() ?? 'single'
+  );
+  if (!compound) return null;
   return fill && stroke && Number.isFinite(weight) && weight >= 0 && weight <= 100
-    ? { fill, stroke, weight, strokeNode }
+    ? { fill, stroke, weight, strokeNode, ...(dash ? { dash } : {}), compound }
     : null;
+}
+
+/** The SVG dash attribute of `ink`, empty for a solid outline. */
+function dashArray(ink: LegacyInk): string {
+  return ink.dash ? ` stroke-dasharray="${ink.dash.map((d) => d * ink.weight).join(' ')}"` : '';
+}
+
+/** A vector shape's components with the ink's dash, split into its compound bands. */
+export function inkComponents(
+  component: VectorShapeComponent,
+  ink: LegacyInk
+): readonly VectorShapeComponent[] {
+  const dashed = ink.dash ? { ...component, strokeDash: ink.dash } : component;
+  return ink.compound === 'sng' ? [dashed] : compoundBands(dashed, ink.compound);
 }
 
 function wordArt(node: OoxmlElement, box: LegacyBox): string | null {
@@ -193,12 +256,23 @@ function pathPoints(
 ): [number, number][] | null {
   const style = styleOf(node)!;
   if (ends) {
-    // Explicit ends already carry the direction; a flip on top of them has no single meaning.
-    if (style.has('flip')) return null;
+    // Explicit ends already carry the direction, with the line's flip applied.
     return ends.map(([x, y]) => [box.x + x, box.y + y]);
   }
   let coords: [number, number][];
-  const source = a(node, 'path');
+  const authored = a(node, 'path');
+  // An omitted operand is 0: `m,l1811,e` moves to 0,0 and draws to 1811,0.
+  const source = authored?.replace(
+    /([a-z])([^a-z]*)/gi,
+    (_, command: string, operands: string) =>
+      command +
+      (operands.includes(',')
+        ? operands
+            .split(',')
+            .map((operand) => operand.trim() || '0')
+            .join(',')
+        : operands)
+  );
   if (source) {
     // One move followed by explicit line segments. Curves, formulas, relative
     // commands and multiple subpaths remain opaque rather than an incomplete chart.
@@ -228,12 +302,17 @@ function pathPoints(
       i += 2;
     }
     const size = pair(a(node, 'coordsize') ?? '21600,21600'),
-      origin = pair(a(node, 'coordorigin') ?? '0,0');
-    if (!size || !origin || size.some((v) => v <= 0) || coords.length < 2) return null;
-    coords = coords.map(([x, y]) => [
-      ((x - origin[0]) * box.width) / size[0],
-      ((y - origin[1]) * box.height) / size[1],
-    ]);
+      origin = coordOrigin(a(node, 'coordorigin') ?? '0,0');
+    if (!size || !origin || size.some((v) => v < 0) || coords.length < 2) return null;
+    // A zero coordinate extent is a flat axis: every point on it must sit at the origin.
+    const scale = (value: number, axis: 0 | 1, extent: number) =>
+      size[axis] > 0
+        ? ((value - origin[axis]) * extent) / size[axis]
+        : value === origin[axis]
+          ? 0
+          : NaN;
+    coords = coords.map(([x, y]) => [scale(x, 0, box.width), scale(y, 1, box.height)]);
+    if (coords.some((point) => !point.every(Number.isFinite))) return null;
   } else {
     if (a(node, 'from') || a(node, 'to')) return null;
     coords = [
@@ -258,7 +337,7 @@ export type LegacyLineEnds = readonly [readonly [number, number], readonly [numb
  * is outside the subset.
  */
 export function legacyLineReach(node: OoxmlElement, closed = false): number | null {
-  const ink = paint(node);
+  const ink = paint(node, !closed);
   if (!ink) return null;
   if (ink.stroke === 'none') return 0;
   // A closed shape draws no arrowheads.
@@ -314,7 +393,7 @@ export function legacyLineShape(
   height: number,
   ends: LegacyLineEnds
 ): VectorShapeProjection | null {
-  const ink = paint(node);
+  const ink = paint(node, true);
   if (!ink) return null;
   const emu = ([x, y]: readonly [number, number]): Point =>
     Object.freeze({ x: Math.round(x * EMU_PER_POINT), y: Math.round(y * EMU_PER_POINT) });
@@ -364,7 +443,68 @@ export function legacyLineShape(
     strokeHex,
     strokeAlpha: 1,
     strokeWidthEmu: component.strokeWidthEmu,
-    components: Object.freeze([component]),
+    components: Object.freeze(inkComponents(component, ink)),
+  });
+}
+
+/**
+ * A `v:rect`, `v:roundrect` or `v:oval` with a plain fill and outline, as a vector shape over
+ * the graphic's `outer` box with the shape at `box`. It paints the same pixels as its graphic
+ * preview, in every output. Null for any other shape.
+ */
+export function legacyBoxShape(
+  node: OoxmlElement,
+  box: LegacyBox,
+  outer: LegacyBox
+): VectorShapeProjection | null {
+  // The text box template is a plain rectangle.
+  const kind = a(node, 'type') === '#_x0000_t202' ? 'rect' : node.localName;
+  const preset = ({ rect: 'rect', roundrect: 'roundRect', oval: 'ellipse' } as const)[
+    kind as 'rect' | 'roundrect' | 'oval'
+  ];
+  const ink = preset ? paint(node) : null;
+  if (!preset || !ink) return null;
+  const radius = preset === 'roundRect' ? cornerRadius(node, box) : 0;
+  const definition = presetGeometryDefinition(preset);
+  if (radius === null || !definition) return null;
+  const shortSide = Math.min(box.width, box.height);
+  const adjust = new Map([['adj', shortSide > 0 ? Math.round((radius / shortSide) * 100_000) : 0]]);
+  const geometry = evaluateGeometry(
+    definition,
+    box.width * EMU_PER_POINT,
+    box.height * EMU_PER_POINT,
+    adjust
+  );
+  const outline = geometry?.paths[0];
+  if (!outline) return null;
+  const dx = box.x * EMU_PER_POINT,
+    dy = box.y * EMU_PER_POINT;
+  const stroked = ink.stroke !== 'none' && ink.weight > 0;
+  const fillHex = ink.fill === 'none' ? null : ink.fill.slice(1).toUpperCase();
+  const strokeHex = stroked ? ink.stroke.slice(1).toUpperCase() : null;
+  const component = freezeVectorShapeComponent({
+    subpathsEmu: outline.subpaths.map((subpath) =>
+      subpath.points.map((point) => ({ x: Math.round(point.x + dx), y: Math.round(point.y + dy) }))
+    ),
+    subpathsClosed: outline.subpaths.map((subpath) => subpath.closed),
+    fillHex,
+    fillAlpha: 1,
+    strokeHex,
+    strokeAlpha: 1,
+    strokeWidthEmu: stroked ? Math.round(ink.weight * EMU_PER_POINT) : 0,
+  });
+  return Object.freeze({
+    extentEmu: Object.freeze({
+      cx: Math.round(outer.width * EMU_PER_POINT),
+      cy: Math.round(outer.height * EMU_PER_POINT),
+    }),
+    subpathsEmu: component.subpathsEmu,
+    fillHex,
+    fillAlpha: 1,
+    strokeHex,
+    strokeAlpha: 1,
+    strokeWidthEmu: component.strokeWidthEmu,
+    components: Object.freeze(inkComponents(component, ink)),
   });
 }
 
@@ -432,11 +572,13 @@ export function legacyShapeFragment(
   bordered = false,
   ends?: LegacyLineEnds
 ): LegacyGraphicFragment | null {
+  // A point exactly on the edge stays inside despite floating-point error in the sums.
+  const tolerance = 1e-9;
   const inside = (x: number, y: number, padding = 0) =>
-    x - padding >= canvas.x &&
-    y - padding >= canvas.y &&
-    x + padding <= canvas.x + canvas.width &&
-    y + padding <= canvas.y + canvas.height;
+    x - padding >= canvas.x - tolerance &&
+    y - padding >= canvas.y - tolerance &&
+    x + padding <= canvas.x + canvas.width + tolerance &&
+    y + padding <= canvas.y + canvas.height + tolerance;
   if (!inside(box.x, box.y) || !inside(box.x + box.width, box.y + box.height)) return null;
   const list = children(node);
   if (
@@ -447,6 +589,8 @@ export function legacyShapeFragment(
           ['imagedata', 'textpath', 'fill', 'stroke', 'path'].includes(n.localName)
         ) &&
         !named(n, OFFICE, 'lock') &&
+        // A signature line's signing details are metadata; the picture is what shows.
+        !(named(n, OFFICE, 'signatureline') && children(n).length === 0) &&
         !named(n, WORD_VML, 'wrap') &&
         !(named(n, WORD_VML, 'anchorlock') && n.attributes.length === 0) &&
         !(bordered && isBorderSide(n))
@@ -542,8 +686,20 @@ export function legacyShapeFragment(
       after: '"/></svg>',
     });
   }
+  const framed = framePictureFill(node, list);
+  if (framed !== undefined) {
+    if (!framed) return null;
+    return Object.freeze({
+      relationshipId: framed,
+      nativeCrop: Object.freeze({ left: 0, top: 0, right: 0, bottom: 0 }),
+      before: `<svg x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" viewBox="0 0 ${box.width} ${box.height}" overflow="hidden"><image x="0" y="0" width="${box.width}" height="${box.height}" preserveAspectRatio="none" href="`,
+      after: '"/></svg>',
+    });
+  }
   const ink = paint(node);
   if (!ink) return null;
+  // The preview draws one outline; only a line painted as a vector shape draws bands.
+  if (ink.compound !== 'sng' && !ends) return null;
   const padding = ink.stroke === 'none' ? 0 : ink.weight / 2;
   if (
     ['rect', 'roundrect', 'oval'].includes(node.localName) &&
@@ -551,14 +707,14 @@ export function legacyShapeFragment(
   )
     return null;
   if (node.localName === 'rect')
-    return `<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" fill="${ink.fill}" stroke="${ink.stroke}" stroke-width="${ink.weight}"/>`;
+    return `<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" fill="${ink.fill}" stroke="${ink.stroke}" stroke-width="${ink.weight}"${dashArray(ink)}/>`;
   if (node.localName === 'roundrect') {
     const radius = cornerRadius(node, box);
     if (radius === null) return null;
-    return `<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="${radius}" ry="${radius}" fill="${ink.fill}" stroke="${ink.stroke}" stroke-width="${ink.weight}"/>`;
+    return `<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="${radius}" ry="${radius}" fill="${ink.fill}" stroke="${ink.stroke}" stroke-width="${ink.weight}"${dashArray(ink)}/>`;
   }
   if (node.localName === 'oval')
-    return `<ellipse cx="${box.x + box.width / 2}" cy="${box.y + box.height / 2}" rx="${box.width / 2}" ry="${box.height / 2}" fill="${ink.fill}" stroke="${ink.stroke}" stroke-width="${ink.weight}"/>`;
+    return `<ellipse cx="${box.x + box.width / 2}" cy="${box.y + box.height / 2}" rx="${box.width / 2}" ry="${box.height / 2}" fill="${ink.fill}" stroke="${ink.stroke}" stroke-width="${ink.weight}"${dashArray(ink)}/>`;
   if (node.localName !== 'line' && type !== '#_x0000_t32' && !a(node, 'path')) return null;
   const path = pathPoints(node, box, ends);
   if (!path || path.some((p) => p.some((v) => !Number.isFinite(v) || Math.abs(v) > 1_000_000)))
@@ -582,5 +738,37 @@ export function legacyShapeFragment(
   const start = arrow(path, true, ink.strokeNode, ink.stroke, ink.weight),
     end = arrow(path, false, ink.strokeNode, ink.stroke, ink.weight);
   if (start === null || end === null) return null;
-  return `<polyline points="${path.map((p) => p.join(',')).join(' ')}" fill="none" stroke="${ink.stroke}" stroke-width="${ink.weight}"/>${start}${end}`;
+  return `<polyline points="${path.map((p) => p.join(',')).join(' ')}" fill="none" stroke="${ink.stroke}" stroke-width="${ink.weight}"${dashArray(ink)}/>${start}${end}`;
+}
+
+/**
+ * A rectangle without an outline whose fill is one picture stretched to the shape
+ * (`v:fill type="frame"`), which draws exactly like that picture: its relationship id.
+ * `recolor` leaves the picture's own colours. Undefined when the shape has no such fill;
+ * null when it has one outside this subset.
+ */
+function framePictureFill(
+  node: OoxmlElement,
+  list: readonly OoxmlElement[]
+): string | null | undefined {
+  const fill = list.find((n) => named(n, VML, 'fill'));
+  if (!fill || a(fill, 'type') !== 'frame') return undefined;
+  const id = a(fill, 'id', RELATIONSHIPS_NAMESPACE_URI);
+  if (
+    node.localName !== 'rect' ||
+    !id ||
+    !off(a(node, 'stroked')) ||
+    off(a(fill, 'on') ?? a(node, 'filled')) ||
+    list.some((n) => n !== fill) ||
+    fill.attributes.some(
+      (attr) =>
+        !(
+          (attr.namespaceUri === RELATIONSHIPS_NAMESPACE_URI && attr.localName === 'id') ||
+          (attr.namespaceUri === OFFICE && attr.localName === 'title') ||
+          (!attr.namespaceUri && ['type', 'on', 'recolor', 'rotate'].includes(attr.localName))
+        )
+    )
+  )
+    return null;
+  return id;
 }

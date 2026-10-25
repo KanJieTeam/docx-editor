@@ -53,6 +53,7 @@ export type RenderableImageMime = SupportedImageMime | VectorImageMime;
  * A decode port may rasterize it; without one it paints as a labelled placeholder.
  */
 export type PreservedImageMime = 'image/tiff' | 'image/x-emf' | 'image/x-wmf';
+/** @internal */
 export type MetafileImageMime = 'image/x-emf' | 'image/x-wmf';
 
 export type { ImageResourceLimits };
@@ -780,6 +781,10 @@ function mimeClassesMismatch(
   if (imageMimeClass(claimed) !== imageMimeClass(sniffed)) return true;
   // Raster signatures control validation, decoding, and the published MIME type.
   if (imageMimeClass(sniffed) === 'raster') return false;
+  // A metafile part named for the other metafile format (an EMF saved as `.wmf`) draws by
+  // its own bytes: the signature picks the converter.
+  const metafile = (mime: string) => mime === 'image/x-emf' || mime === 'image/x-wmf';
+  if (metafile(claimed) && metafile(sniffed)) return false;
   return claimed !== sniffed;
 }
 
@@ -1384,11 +1389,12 @@ function createImageResourceCacheInternal(
     if (!picture) {
       return unrenderable(null, 'unknown', 'non-picture-graphic');
     }
+    // An embedded copy is the picture shown; a link beside it only names the source.
+    const embedded = picture.embeddedRelationshipId;
+    if (embedded) return resolveEmbedded(projection.ownerPartName, embedded);
     const linked = picture.linkedRelationshipId;
     if (linked) return resolveLinked(projection.ownerPartName, linked);
-    const embedded = picture.embeddedRelationshipId;
-    if (!embedded) return unrenderable(null, 'unknown', 'unsupported-format');
-    return resolveEmbedded(projection.ownerPartName, embedded);
+    return unrenderable(null, 'unknown', 'unsupported-format');
   };
 
   const lookup = Object.freeze({

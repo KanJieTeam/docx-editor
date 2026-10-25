@@ -5,16 +5,23 @@ Production use requires a commercial agreement: licensing@eigenpal.com
 */
 import { PDFDocument, PDFName, PDFStream, PDFString, type PDFImage, type PDFPage } from 'pdf-lib';
 import type { FontBackedExportCapabilities } from '@docx-editor.dev/core/export';
-import type {
-  LayoutBox,
-  ListMarkerPictureRecord,
-  SemanticDrawingVisit,
+import {
+  groupPictureLayerDrawing,
+  type LayoutBox,
+  type ListMarkerPictureRecord,
+  type SemanticDrawingVisit,
 } from '@docx-editor.dev/core/layout';
 import { color, number as n, pageHeight, pdfLiteralUri, rect, Commands, Work } from './context.ts';
 import { paintVectorShape } from './vector-shapes.ts';
 import { paintTextArt } from './text-art.ts';
 import { outlinePath, turnAbout } from './textbox-shape.ts';
 import { lumTransfer, type LumTransfer } from '@docx-editor.dev/core/output';
+import { MetafileForms } from './metafile-pdf.ts';
+import { gifToPng } from './gif-png.ts';
+import { embedPlainPng } from './png-passthrough.ts';
+import { reflectionMask, softEdgeMask } from './picture-effects.ts';
+
+const EMU_PER_POINT = 12_700;
 
 /**
  * The raster formats this writer embeds directly.
@@ -26,7 +33,16 @@ import { lumTransfer, type LumTransfer } from '@docx-editor.dev/core/output';
  * widening this set means writing new decoders over attacker-controlled bytes, not reading
  * a buffer core already has.
  */
-const EMBEDDABLE_MIMES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg']);
+// A GIF embeds as the PNG of its first frame.
+const EMBEDDABLE_MIMES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/gif']);
+
+/** Embed a picture of one of the embeddable formats. */
+async function embedRaster(doc: PDFDocument, mime: string, bytes: Uint8Array): Promise<PDFImage> {
+  if (mime === 'image/jpeg') return doc.embedJpg(bytes);
+  const png = mime === 'image/gif' ? gifToPng(bytes) : bytes;
+  if (!png) throw new Error('GIF picture could not be decoded');
+  return (await embedPlainPng(doc, png)) ?? doc.embedPng(png);
+}
 
 /**
  * Why a picture bullet cannot be drawn into the PDF, or null when it can.
@@ -46,11 +62,14 @@ function unpaintableBulletReason(picture: ListMarkerPictureRecord, box: LayoutBo
 
 export class ImageWriter {
   private readonly images = new Map<string, PDFImage>();
+  private readonly metafiles: MetafileForms;
   constructor(
     readonly doc: PDFDocument,
     readonly session: FontBackedExportCapabilities,
     readonly work: Work
-  ) {}
+  ) {
+    this.metafiles = new MetafileForms(doc, session, work);
+  }
   /**
    * Draw a list marker's picture bullet in the box layout published for it.
    *
@@ -89,11 +108,10 @@ export class ImageWriter {
     if (picture.resource.kind !== 'ready') return '';
     const mime = picture.resource.mime;
     const bytes = this.session.validatedImageBytes(picture);
-    if (!bytes) return '';
+    if (!bytes || (mime === 'image/gif' && !gifToPng(bytes))) return '';
     let image = this.images.get(picture.resource.resourceKey);
     if (!image) {
-      image =
-        mime === 'image/png' ? await this.doc.embedPng(bytes) : await this.doc.embedJpg(bytes);
+      image = await embedRaster(this.doc, mime, bytes);
       this.images.set(picture.resource.resourceKey, image);
     }
     const key = `Im${image.ref.objectNumber}`;
@@ -212,7 +230,14 @@ export class ImageWriter {
       if (chromeTurn) commands.push('Q');
       return commands;
     };
-    const shadow = story.shadow;
+    // A box whose shape paints as vector components: that shape first, under its own ink
+    // clip, then only the text in the box.
+    const vector =
+      story.chromeByVector && d.vectorShape
+        ? paintVectorShape(this.doc, page, visit, this.work)
+        : null;
+    if (vector !== null) out.unshift(vector);
+    const shadow = vector === null ? story.shadow : undefined;
     if (shadow) {
       // The shape again, under itself in the shadow colour, at its page offset. A plain shadow
       // copies the outline, and the text of an unfilled shape; an obscured one is the solid
@@ -271,7 +296,7 @@ export class ImageWriter {
       }
       out.push('Q');
     }
-    out.push(...chrome(story.fillHex, story.strokeHex));
+    if (vector === null) out.push(...chrome(story.fillHex, story.strokeHex));
     out.push('q', ...contentTurn, `${rect(content, 0, 0, height)} W n`, ...body, 'Q', 'Q');
     return out.join('\n');
   }
@@ -286,16 +311,23 @@ export class ImageWriter {
       return '';
     };
     if (d.groupPicture) return this.paintGroupPicture(visit, page, report);
+    // A picture's own frame: shadow and fill under the picture, the outline over it.
+    if (d.vectorShape && d.placeholderGraphicKind === null) {
+      const under = paintVectorShape(this.doc, page, visit, this.work, (c) => !!c.belowPicture);
+      const picture = await this.paintPicture(visit, page, report);
+      const over = paintVectorShape(this.doc, page, visit, this.work, (c) => !c.belowPicture);
+      return [under, picture, over].filter((commands) => commands !== '').join('\n');
+    }
     if (d.vectorShape) return paintVectorShape(this.doc, page, visit, this.work);
     if (d.textboxStory) return report('Textbox story not routed through paintTextbox');
-    if (d.kind === 'anchoredDrawing' && d.textArt)
-      return paintTextArt(this.doc, page, visit, this.work);
+    if (d.textArt) return paintTextArt(this.doc, page, visit, this.work);
     if (d.placeholderGraphicKind) return report(`Unsupported drawing: ${d.placeholderGraphicKind}`);
     return this.paintPicture(visit, page, report);
   }
 
   /**
-   * A shape group with a picture member: the picture, then the group's vector members over it.
+   * A shape group with picture members: the members drawn before the picture, the pictures in
+   * document order, then the other vector members over them.
    *
    * The group paints whole or not at all, as it does on screen. Layout already drops an
    * `mc:AlternateContent` group whose picture resource fails, following the rule for MC
@@ -310,28 +342,48 @@ export class ImageWriter {
     report: (message: string) => string
   ): Promise<string> {
     const d = visit.drawing;
-    const { resource } = d;
-    if (
-      d.groupPicture?.alternateContent &&
-      resource.kind === 'ready' &&
-      !EMBEDDABLE_MIMES.has(resource.mime)
-    ) {
-      this.work.report(
-        'drawing',
-        `Shape group left out: picture format not embeddable: ${resource.mime}`,
-        visit.page.index,
-        'information'
-      );
-      return '';
+    // The first picture is the record's own image; each later one paints above it, in order.
+    const pictures = [
+      visit,
+      ...(d.groupPictureLayers ?? []).map((layer) => ({
+        ...visit,
+        drawing: groupPictureLayerDrawing(d, layer),
+      })),
+    ];
+    for (const { drawing } of pictures) {
+      const { resource } = drawing;
+      if (
+        d.groupPicture?.alternateContent &&
+        resource.kind === 'ready' &&
+        !EMBEDDABLE_MIMES.has(resource.mime)
+      ) {
+        this.work.report(
+          'drawing',
+          `Shape group left out: picture format not embeddable: ${resource.mime}`,
+          visit.page.index,
+          'information'
+        );
+        return '';
+      }
     }
-    let refused = false;
-    const picture = await this.paintPicture(visit, page, (message) => {
-      refused = true;
-      return report(message);
-    });
-    if (refused) return '';
-    const vector = d.vectorShape ? paintVectorShape(this.doc, page, visit, this.work) : '';
-    return [picture, vector].filter((commands) => commands !== '').join('\n');
+    const painted: string[] = [];
+    for (const picture of pictures) {
+      let refused = false;
+      const commands = await this.paintPicture(picture, page, (message) => {
+        refused = true;
+        return report(message);
+      });
+      if (refused) return '';
+      painted.push(commands);
+    }
+    // Members drawn before the picture paint under it; the rest paint over it.
+    const under = d.vectorShape
+      ? paintVectorShape(this.doc, page, visit, this.work, (c) => !!c.belowPicture)
+      : '';
+    const over = d.vectorShape
+      ? paintVectorShape(this.doc, page, visit, this.work, (c) => !c.belowPicture)
+      : '';
+    return [under, ...painted, over].filter((commands) => commands !== '').join('\n');
   }
 
   /**
@@ -351,8 +403,7 @@ export class ImageWriter {
     const plain = async () => {
       let image = this.images.get(resourceKey);
       if (!image) {
-        image =
-          mime === 'image/png' ? await this.doc.embedPng(bytes) : await this.doc.embedJpg(bytes);
+        image = await embedRaster(this.doc, mime, bytes);
         this.images.set(resourceKey, image);
       }
       return image;
@@ -361,8 +412,7 @@ export class ImageWriter {
     const key = `${resourceKey}\0lum:${transfer.slope}:${transfer.intercept}`;
     const cached = this.images.get(key);
     if (cached) return { image: cached, lum: true };
-    const image =
-      mime === 'image/png' ? await this.doc.embedPng(bytes) : await this.doc.embedJpg(bytes);
+    const image = await embedRaster(this.doc, mime, bytes);
     await image.embed();
     const stream = this.doc.context.lookup(image.ref);
     const dict = stream instanceof PDFStream ? stream.dict : null;
@@ -389,12 +439,26 @@ export class ImageWriter {
     report: (message: string) => string
   ): Promise<string> {
     const d = visit.drawing;
+    // An EMF or WMF picture with no raster draws from its own vector commands.
+    if (d.resource.kind === 'unrenderable' && d.resource.partName !== null) {
+      const metafile = this.session.metafileBytes?.(d);
+      if (metafile) {
+        const form = await this.metafiles.form(d.resource.partName, metafile, visit.page.index);
+        if (!form) return report('Metafile picture could not be drawn');
+        const opacity = this.opacityCommand(visit, page);
+        if (opacity === null) return report('Invalid image opacity');
+        const key = `Fm${form.objectNumber}`;
+        page.node.setXObject(PDFName.of(key), form);
+        return this.placePicture(visit, page, key, opacity, report);
+      }
+    }
     const bytes = this.session.validatedImageBytes(d);
     if (!bytes || d.resource.kind !== 'ready') return report('Image has no validated raster bytes');
     const mime = d.resource.mime;
     // An inline drawing has no authored alternative, so an unembeddable format is a real
     // refusal here — unlike a picture bullet, whose level authors `w:lvlText` beside it.
     if (!EMBEDDABLE_MIMES.has(mime)) return report(`Unsupported PDF image format: ${mime}`);
+    if (mime === 'image/gif' && !gifToPng(bytes)) return report('GIF picture could not be decoded');
     const transfer = lumTransfer(d.effects.brightness, d.effects.contrast);
     const embedded = await this.embedPicture(d.resource.resourceKey, mime, bytes, transfer);
     if (d.effects.grayscale || d.effects.bilevel !== undefined || (transfer && !embedded.lum))
@@ -404,20 +468,38 @@ export class ImageWriter {
         visit.page.index
       );
     const image = embedded.image;
-    let opacityCommand = '';
-    if (d.effects.opacity !== undefined && d.effects.opacity !== 1) {
-      const opacity = d.effects.opacity;
-      if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1)
-        return report('Invalid image opacity');
-      const name = `Alpha${Math.round(opacity * 100000)}`;
-      const ref = this.doc.context.register(
-        this.doc.context.obj({ Type: 'ExtGState', ca: opacity, CA: opacity })
-      );
-      page.node.setExtGState(PDFName.of(name), ref);
-      opacityCommand = `/${name} gs `;
-    }
+    const opacityCommand = this.opacityCommand(visit, page);
+    if (opacityCommand === null) return report('Invalid image opacity');
     const key = `Im${image.ref.objectNumber}`;
     page.node.setXObject(PDFName.of(key), image.ref);
+    return this.placePicture(visit, page, key, opacityCommand, report);
+  }
+
+  /** The graphics state command for the picture's opacity; null for an invalid opacity. */
+  private opacityCommand(visit: SemanticDrawingVisit, page: PDFPage): string | null {
+    const opacity = visit.drawing.effects.opacity;
+    if (opacity === undefined || opacity === 1) return '';
+    if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) return null;
+    const name = `Alpha${Math.round(opacity * 100000)}`;
+    const ref = this.doc.context.register(
+      this.doc.context.obj({ Type: 'ExtGState', ca: opacity, CA: opacity })
+    );
+    page.node.setExtGState(PDFName.of(name), ref);
+    return `/${name} gs `;
+  }
+
+  /**
+   * Draw the XObject `key`, which fills the unit square, as the picture: placed by its
+   * transform and crop, clipped by its geometry, with its link.
+   */
+  private placePicture(
+    visit: SemanticDrawingVisit,
+    page: PDFPage,
+    key: string,
+    opacityCommand: string,
+    report: (message: string) => string
+  ): string {
+    const d = visit.drawing;
     const points = d.geometry.imageTransformCorners ?? d.geometry.transformedCorners;
     if (points.length !== 4) return report('Image has no affine rectangle geometry');
     if (d.geometry.clipFallback !== 'none')
@@ -472,6 +554,41 @@ export class ImageWriter {
       );
     }
     const path = clip.map((v, i) => `${n(v.x)} ${n(v.y)} ${i === 0 ? 'm' : 'l'}`).join(' ');
-    return `q ${opacityCommand}${path} h W n ${n(ax / width)} ${n(ay / width)} ${n(bx / height)} ${n(by / height)} ${n(bottomLeft.x - (ax * crop.left) / width - (bx * crop.bottom) / height)} ${n(bottomLeft.y - (ay * crop.left) / width - (by * crop.bottom) / height)} cm /${key} Do Q`;
+    const matrix = [
+      ax / width,
+      ay / width,
+      bx / height,
+      by / height,
+      bottomLeft.x - (ax * crop.left) / width - (bx * crop.bottom) / height,
+      bottomLeft.y - (ay * crop.left) / width - (by * crop.bottom) / height,
+    ];
+    const effects = d.frameEffects;
+    const soft = effects?.softEdgeEmu
+      ? softEdgeMask(this.doc, page, clip, effects.softEdgeEmu / EMU_PER_POINT)
+      : '';
+    const picture = `q ${opacityCommand}${soft}${path} h W n ${matrix.map(n).join(' ')} cm /${key} Do Q`;
+    const reflection = effects?.reflection;
+    if (!reflection) return picture;
+    // The mirror image of an upright picture, below its bottom edge and fading downward.
+    const bottom = Math.min(...p.map((v) => v.y));
+    const top = Math.max(...p.map((v) => v.y));
+    const gap = reflection.distanceEmu / EMU_PER_POINT;
+    const mirror = (y: number) => 2 * bottom - y - gap;
+    const [a, b, c, dd, e, f] = matrix as [number, number, number, number, number, number];
+    const fade = reflectionMask(
+      this.doc,
+      page,
+      bottom - gap,
+      bottom - gap - (top - bottom) * reflection.endPosition,
+      reflection.startAlpha,
+      reflection.endAlpha
+    );
+    const mirrored = clip
+      .map((v, i) => `${n(v.x)} ${n(mirror(v.y))} ${i === 0 ? 'm' : 'l'}`)
+      .join(' ');
+    return [
+      picture,
+      `q ${opacityCommand}${fade}${mirrored} h W n ${[a, -b, c, -dd, e, mirror(f)].map(n).join(' ')} cm /${key} Do Q`,
+    ].join('\n');
   }
 }

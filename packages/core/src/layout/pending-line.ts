@@ -146,6 +146,23 @@ export function admittedToNarrowPassage(
   return continuesCutSegment;
 }
 
+/**
+ * Whether page or column breaks, and nothing else, precede `offset` among a paragraph's
+ * pieces: the text from `offset` is then the paragraph's first line, with its indent.
+ */
+export function onlyLeadingBreaksBefore(
+  pieces: readonly { readonly start: number; readonly text: string; readonly breakKind?: string }[],
+  offset: number
+): boolean {
+  let seen = false;
+  for (const piece of pieces) {
+    if (piece.start >= offset) continue;
+    if (piece.text !== PAGE_BREAK_CHAR && piece.breakKind !== 'column') return false;
+    seen = true;
+  }
+  return seen;
+}
+
 /** Whether page breaks, and nothing else, precede `offset` among a paragraph's pieces. */
 export function onlyPageBreaksBefore(
   pieces: readonly { readonly start: number; readonly text: string }[],
@@ -215,7 +232,9 @@ export function holdsOnlyPageBreak(line: PendingLine): boolean {
  * A no-break space still counts, and so does a line break.
  */
 export function isHeightlessWhitespace(text: string): boolean {
-  return text.length > 0 && /^[ \t]+$/.test(text);
+  // Spaces, tabs, soft hyphens and zero-width characters draw no ink: a line of only these
+  // takes the paragraph mark's height.
+  return text.length > 0 && /^[ \t\u00AD\u200B\u200C\u200D\u2060\uFEFF]+$/.test(text);
 }
 
 /** Face extents translated by an authored baseline position, without rescaling glyphs. */
@@ -542,12 +561,15 @@ export function growPendingLineDrawingExtent(line: PendingLine): void {
     line.height = Math.max(line.height, drawing.y + drawing.height + drawing.distB);
 }
 
-/** Clip each inline drawing that reaches above its line's top to paint from that top down. */
+/**
+ * Clip each inline drawing that reaches above its line's top to paint from that top down. Text
+ * art whose ink reaches past its box keeps it, as text drawn along an arch rises over the box.
+ */
 export function clipLineDrawingsAtTop(line: PendingLine): void {
   for (let index = 0; index < line.drawings.length; index += 1) {
     const drawing = line.drawings[index]!;
     const bounds = drawing.paintBounds;
-    if (bounds.y >= -0.001) continue;
+    if (bounds.y >= -0.001 || drawing.textArt?.inkBounds) continue;
     line.drawings[index] = clipInlineDrawingRecordVertically(drawing, 0, bounds.y + bounds.height);
   }
 }

@@ -23,12 +23,13 @@ Add review, collaboration, and custom content to the [docx-editor.dev](https://d
 - [Comments](https://www.docx-editor.dev/docs/2.x/pro/comments): Threads anchored to a range, with replies.
 - [Collaboration](https://www.docx-editor.dev/docs/2.x/pro/collaboration): Provider-neutral sessions with WebRTC and Hocuspocus helpers.
 - [Custom nodes](https://www.docx-editor.dev/docs/2.x/pro/custom-nodes): Inline node types stored as content controls.
+- [Advanced drawing rendering](https://www.docx-editor.dev/docs/2.x/pro/drawing): Charts, SmartArt layout, shape effects, WordArt, and EMF and WMF pictures.
 
 ```bash
 npm install @docx-editor.dev/react @docx-editor.dev/core @docx-editor.dev/pro
 ```
 
-The framework-neutral entry is `@docx-editor.dev/pro`. Framework chrome lives at `@docx-editor.dev/pro/react` and `@docx-editor.dev/pro/vue`.
+The framework-neutral entry is `@docx-editor.dev/pro`. Framework chrome lives at `@docx-editor.dev/pro/react` and `@docx-editor.dev/pro/vue`. Drawing rendering is at `@docx-editor.dev/pro/drawing` for both frameworks; `reviewModule()` installs it too.
 
 ## Register a module
 
@@ -154,11 +155,24 @@ The review hooks need `reviewModule()` from `@docx-editor.dev/pro` in the editor
 
 This package ships the task recipes in [`docs/index.md`](./docs/index.md). They are also on the site: [Task recipes](https://www.docx-editor.dev/docs/2.x/recipes).
 
+## Render charts and advanced drawings
+
+Register `drawingModule()` to render charts, SmartArt saved without its drawing, shape effects, WordArt, and EMF and WMF pictures. If you already register `reviewModule()`, you don't need it.
+
+```ts
+import { drawingModule } from '@docx-editor.dev/pro/drawing';
+
+// Next.js; with Vite, read import.meta.env.VITE_DOCX_LICENSE.
+const MODULES = [drawingModule({ licenseKey: process.env.NEXT_PUBLIC_DOCX_LICENSE })];
+```
+
+For headless use, call `installDrawing()` from the same entry before you open documents.
+
 ## Licensing
 
 This package uses the [EigenPal Pro License](https://github.com/eigenpal/docx-editor/blob/main/packages/pro/LICENSE.md). See [pricing](https://www.docx-editor.dev/pricing) for license and support options.
 
-`reviewModule`, `customNodesModule`, and `collaborationModule` accept an optional `licenseKey`. Construction never validates it and never touches the network.
+`reviewModule`, `customNodesModule`, `collaborationModule`, `drawingModule`, and `installDrawing` accept an optional `licenseKey`. Pass the key once, to any of them. The key is optional and is never validated or sent anywhere: every module works the same with or without it. Production use requires an EigenPal Pro License, and the key identifies yours when you contact support. The key is not a secret, so you can ship it in browser code. Construction never validates it and never touches the network.
 
 ## Documentation
 

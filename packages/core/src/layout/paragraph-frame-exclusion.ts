@@ -40,7 +40,7 @@ export function hasParagraphFrames(
 
 /** Each shared frame contributes one exclusion, regardless of its paragraph count. */
 export function addParagraphFrameExclusions(
-  pages: readonly PageRecord[],
+  pages: readonly Pick<PageRecord, 'fragments'>[],
   existing: ReadonlyMap<number, readonly ExclusionZone[]>,
   columns: ExclusionColumnLayout
 ): ReadonlyMap<number, readonly ExclusionZone[]> {
@@ -85,6 +85,8 @@ export function addParagraphFrameExclusions(
         drawingNodeId: `frame:${frame.groupId}`,
         anchorParagraphId: frame.anchorId,
         anchorModelStart: 0,
+        // A page- or margin-positioned frame keeps its band when earlier text reflows.
+        ...(frame.pageFramed ? { pageFramedBand: true } : {}),
         paintLayer: 'inFront',
         relativeHeight: 0,
         allowOverlap: true,

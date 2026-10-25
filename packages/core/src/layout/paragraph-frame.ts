@@ -63,17 +63,18 @@ export function supportsParagraphFrameContent(
   let count = 0;
   while (pending.length) {
     const node = pending.pop()!;
-    if (++count > MAX_FRAME_NODES || node.localName === 'object') return false;
+    if (++count > MAX_FRAME_NODES) return false;
     if (node.kind === 'drawing' || isLegacyVmlAtom(node) || isRunLevelMcAlternateContent(node)) {
       const projection =
         drawings?.projectionForAtom?.(node.id) ??
         (node.kind === 'drawing' ? drawings?.project(node) : undefined);
-      if (
-        projection?.kind !== 'inline' ||
-        projection.textboxStory ||
-        drawings?.resourceOf(projection).kind !== 'ready'
-      )
-        return false;
+      const resource = projection && drawings?.resourceOf(projection);
+      // A metafile the host does not rasterize still draws: an exporter draws it as vectors.
+      const drawable =
+        resource?.kind === 'ready' ||
+        (resource?.kind === 'unrenderable' &&
+          (resource.mime === 'image/x-emf' || resource.mime === 'image/x-wmf'));
+      if (projection?.kind !== 'inline' || projection.textboxStory || !drawable) return false;
       continue;
     }
     if (node.namespaceUri !== W) return false;
@@ -184,7 +185,6 @@ export function readParagraphFrame(properties: readonly OoxmlProperty[]): Paragr
   const y = effectiveYAlign ? 0 : coordinate(attributes.y ?? '0');
   const width = attributes.w === undefined ? 0 : coordinate(attributes.w);
   if (x === null || y === null || width === null || width < 0) return null;
-  if (verticalAnchor === 'text' && y < 0) return null;
   const autoWidth = attributes.w === undefined;
   if (!autoWidth && width <= 0) return null;
 
@@ -284,7 +284,9 @@ export function paragraphFrameOrigin(
   const vertical = origins[frame.verticalAnchor];
   const slackY = vertical.height - frameSize.height;
   let y: number;
-  if (frame.verticalAnchor === 'text' || !frame.yAlign) y = vertical.y + frame.y;
+  // A negative text offset raises the frame above its anchor, but never past the page top.
+  if (frame.verticalAnchor === 'text') y = Math.max(origins.page.y, vertical.y + frame.y);
+  else if (!frame.yAlign) y = vertical.y + frame.y;
   else if (frame.yAlign === 'center') y = vertical.y + slackY / 2;
   else if (frame.yAlign === 'bottom' || frame.yAlign === 'outside') y = vertical.y + slackY;
   else if (frame.yAlign === 'inline') y = origins.text.y;
@@ -344,17 +346,32 @@ export function translateParagraphFragment(
   };
 }
 
-/** A continuous section clears frames whose wrapping bands intersect the body area. */
+/**
+ * A continuous section clears the drop caps whose bands intersect the body area. Other frames
+ * stay on the sheet as wrap obstacles for the continued section.
+ */
 export function positionedFrameBottom(
   blocks: readonly BlockFragmentRecord[],
   contentHeight: number
 ): number {
   let bottom = 0;
   for (const block of blocks) {
-    if (block.kind !== 'paragraph' || !block.positionedFrame) continue;
+    if (
+      block.kind !== 'paragraph' ||
+      !block.positionedFrame ||
+      block.positionedFrame.dropCapLines === undefined
+    )
+      continue;
     const { box, vSpace } = block.positionedFrame;
     if (box.y - vSpace >= contentHeight || box.y + box.height + vSpace <= 0) continue;
     bottom = Math.max(bottom, box.y + box.height + vSpace);
   }
   return bottom;
+}
+
+/** Whether `previous` is a positioned frame (not a drop cap) that the next paragraph anchors. */
+export function anchorsFrames(
+  previous: { readonly kind: string; readonly frame?: ParagraphFrame } | undefined
+): boolean {
+  return previous?.kind === 'paragraph' && !!previous.frame && !previous.frame.dropCapLines;
 }

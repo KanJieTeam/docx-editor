@@ -18,7 +18,7 @@ Pass an `ImageDecodePort` through `imageDecodePort` on `DocxEditor` to use a cus
 | PNG, JPEG, GIF | Yes, `normalizeImageBytes` preflight | Full decode at authored `wp:extent` | Original media preserved unless replaced |
 | BMP, WebP | No insert | Full decode at authored `wp:extent` | Original media preserved |
 | SVG | No insert | Painted at authored `wp:extent` | Original media preserved |
-| TIFF, EMF, WMF | No insert | Rasterized when conversion succeeds; labeled placeholder otherwise | Preserved; no zero-click fetch |
+| TIFF, EMF, WMF | No insert | Rasterized when conversion succeeds; labeled placeholder otherwise. EMF and WMF in PDF export need the drawing module. | Preserved; no zero-click fetch |
 | External `r:link` / `TargetMode="External"` | No auto-load | Placeholder + preserved rel | Preserved; explicit user gesture to embed |
 
 Insert accepts PNG/JPEG/GIF only. Other payloads stay in the package and affect pagination through their authored extent.
@@ -33,7 +33,7 @@ JPEG validation accepts large EXIF and ICC metadata segments before the frame he
 
 BMP and WebP decode in the browser and paint like PNG or JPEG. BMP support includes top-down bitmaps and the 12-byte `BITMAPCOREHEADER`. WebP support includes lossy, lossless, and extended containers.
 
-TIFF, EMF, and WMF paint when conversion to a validated raster succeeds. The original media stays unchanged in the package through save. When conversion is unavailable, declined, or fails, the image keeps its extent and shows a labeled placeholder.
+TIFF, EMF, and WMF paint when conversion to a validated raster succeeds. The editor and PDF export convert TIFF without extra setup. The editor rasterizes EMF and WMF without extra setup. PDF export of EMF and WMF requires the drawing module from `@docx-editor.dev/pro/drawing`, which `@docx-editor.dev/docx-to-pdf` includes. For more information, see [Advanced drawing rendering](/docs/2.x/pro/drawing). The original media stays unchanged in the package through save. When conversion is unavailable, declined, or fails, the image keeps its extent and shows a labeled placeholder.
 
 SVG is painted through an `<img>`, which puts the browser in secure static mode: scripts in the file never run and external references in it are never fetched. Its intrinsic size is read from `width`/`height`/`viewBox` for reset-to-natural-size; layout always uses the authored `wp:extent`. An SVG whose root element cannot be read renders as a placeholder rather than inferring missing dimensions.
 
@@ -245,7 +245,7 @@ Both packages export `UnsupportedElement` with these fields:
 - `source` exposes the read-only canonical source. Treat document values as untrusted data.
 - `placement` is `inline` or `block`, as determined by the source position.
 - `label` contains the default fallback text.
-- Optional `drawing` and `equation` records provide engine metadata.
+- Optional `drawing` and `equation` records provide engine metadata. `drawing.placeholderGraphicKind` names the kind of graphic: `chart` (a chart), `diagram` (SmartArt), `textbox` (a DrawingML shape, with or without text), `group` (a shape group), `canvas` (a drawing canvas), `shape` (a legacy VML drawing, such as WordArt), or `graphic` (any other graphic). A picture placeholder, such as an EMF, WMF, or TIFF picture that does not convert, has `null`. `drawing.accessibility.label` holds the drawing's alternative text. A chart placeholder also has `drawing.chart`, with the chart's `title` and `plotTypes`.
 - Optional `bounds` describes the box after layout. Use source metadata for matching before pagination.
 
 Omit `match` for a catch-all. The first mounted matching declaration wins. Prop updates retain priority. Removing and remounting a declaration gives it a later priority. Use matchers that do not overlap, or keep declarations mounted and change their matchers to disable them temporarily. An empty result keeps the fallback; it does not try the next declaration.
@@ -254,7 +254,7 @@ Omit `match` for a catch-all. The first mounted matching declaration wins. Prop 
 
 Components retain declaration-local framework context and local state across same-page repaints. They can unmount when an occurrence leaves its page, is virtualized, or the document or registration changes. Keep durable annotations in application state. Controls own their keyboard, clipboard, context-menu, and drop events. Fit controls within the reserved box, or use scrolling or an external panel.
 
-Properties, metadata, and private payloads inside owning drawing, equation, and field projections are not independent content occurrences. This presentation API does not implement native chart, SmartArt, or DrawingML rendering. Standalone low-level painters without a source lookup can expose `source: null`.
+Properties, metadata, and private payloads inside owning drawing, equation, and field projections are not independent content occurrences. These declarations replace placeholders only; they do not render charts, SmartArt, or other DrawingML themselves. To show a chart's title in place of its placeholder, see [Replace a placeholder](/docs/2.x/pro/drawing#replace-a-placeholder); the recipe works without the EigenPal Pro License. Standalone low-level painters without a source lookup can expose `source: null`.
 
 ## Drawing limits
 
@@ -264,7 +264,11 @@ The editor renders brightness, contrast, grayscale, and bilevel black-and-white 
 | --- | --- |
 | Solid shapes and bounded shape groups | Render geometry with sRGB or theme colors |
 | One picture in a shape group, below the group's shapes | Render in its own frame, as described in [Pictures in shape groups](#pictures-in-shape-groups) |
-| Charts, SmartArt, unsupported groups, and canvases | Preserve the extent and show a labeled placeholder. In alternative content (`mc:AlternateContent`), charts, SmartArt, and unsupported groups are not shown, and a floating one with a wrapping mode still reserves its wrap area. A canvas in alternative content uses the fallback content instead |
+| Charts | Render read-only when you register `drawingModule()` from `@docx-editor.dev/pro/drawing`. Without the module, preserve the extent and show a labeled placeholder |
+| SmartArt | Render the saved diagram drawing read-only. A diagram saved without its drawing renders when you register `drawingModule()`. Without the module, it shows a labeled placeholder |
+| Glow, inner shadow, reflection, soft edge, and dark-edged bevel rim | Render when you register `drawingModule()`. Without the module, the shape or picture paints without these effects |
+| Drawing canvases | Render shapes, connectors, and text read-only |
+| Unsupported groups and drawings | Preserve the extent and show a labeled placeholder. In alternative content (`mc:AlternateContent`), a drawing that cannot render uses the fallback content. If neither renders, it is not shown, and a floating one with a wrapping mode still reserves its wrap area |
 | Anchored text boxes | Render clipped stories, edit supported body text boxes, and drag or resize their borders |
 | Page fields in anchored header or footer text boxes | Evaluate per page |
 | Inline text boxes | Render clipped stories on the line and edit supported body text boxes. They move with their line, so they cannot be dragged or resized |
@@ -273,7 +277,7 @@ The editor renders brightness, contrast, grayscale, and bilevel black-and-white 
 | `w:object` and `w:altChunk` | Preserve as generic content with diagnostics |
 | Tracked image insertion and deletion | Record the change in suggesting mode |
 | Tracked image property edits | Stay unavailable in suggesting mode |
-| Artistic effects (`a:effectLst`) | Do not render; authored markup round-trips |
+| Picture artistic effects (`a14:imgEffect`) | Do not render; authored markup round-trips. Glow, inner shadow, reflection, and soft edge in `a:effectLst` render with the drawing module. |
 
 ## Pictures in shape groups
 
@@ -332,7 +336,7 @@ Use `useDocumentSearch` to add Find navigation to a custom [React](/docs/2.x/rea
 
 ## Legacy VML previews
 
-Standalone `w:pict` can render unrotated embedded photos and bounded groups of photos, solid rectangles, rounded rectangles, and ellipses, straight line segments with arrows, and straight fit-to-box WordArt (`_x0000_t136`). A floating `v:line` spans its `from` and `to` points and also renders in PDF export. Group-local coordinates, picture crops, supported text wrapping, aligned positions, and source order are retained. A shape without `position:absolute` in its style is inline. WordArt uses the authored font when available on the host; curved or rotated WordArt is not supported.
+Standalone `w:pict` can render unrotated embedded photos and bounded groups of photos, solid rectangles, rounded rectangles, and ellipses, straight line segments with arrows, and, with the drawing module, WordArt on a text path (`_x0000_t136` to `_x0000_t175`). A floating `v:line` spans its `from` and `to` points and also renders in PDF export. Group-local coordinates, picture crops, supported text wrapping, aligned positions, and source order are retained. A shape without `position:absolute` in its style is inline. Without the drawing module, inline WordArt keeps its extent with a placeholder, and floating WordArt does not render. WordArt uses the authored font when available on the host. Curved WordArt renders when the drawing includes its shape definition, or for the arch shape.
 
 Floating `v:shape` paths with two explicit points can have one zero extent. They paint as native vector lines. A zero coordinate axis requires both corresponding coordinates to match its origin. Curves, multiple subpaths, and invalid coordinate axes remain opaque.
 

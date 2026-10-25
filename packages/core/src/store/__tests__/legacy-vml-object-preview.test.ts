@@ -31,6 +31,7 @@ import { paragraphLength, segmentsOf } from '../store/tree-op-segments.ts';
 import { paragraphTextOf } from '../store/tree-ops.ts';
 import { TreePackageStore } from '../store/tree-package-store.ts';
 import { TreeDocumentStore } from '../store/tree-store.ts';
+import { expectRefused } from './legacy-vml-refusal.ts';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const V = 'urn:schemas-microsoft-com:vml';
@@ -185,7 +186,7 @@ describe('embedded object cached previews', () => {
     }
   });
 
-  test('keep unsupported objects opaque, with no offset and no geometry', () => {
+  test('keep unsupported objects unpainted: opaque, or a placeholder that keeps the box', () => {
     const samples = [
       embeddedObject({
         ole: '<o:OLEObject Type="Link" ProgID="Package" ShapeID="_x0000_i1025" r:id="rOle"/>',
@@ -220,7 +221,6 @@ describe('embedded object cached previews', () => {
       }),
       embeddedObject({ shapeChildren: '<v:textbox/>' }),
       embeddedObject().replace('<v:imagedata r:id="rPreview" o:title=""/>', ''),
-      embeddedObject().replace('r:id="rPreview" o:title=""', 'r:id="rPreview" grayscale="t"'),
       embeddedObject().replace('r:id="rPreview"', 'o:href="https://example.invalid/preview.png"'),
       embeddedObject({ template: false }).replace('type="#_x0000_t75"', 'type="#_x0000_t202"'),
       embeddedObject().replace('o:spt="75"', 'o:spt="76"'),
@@ -229,11 +229,23 @@ describe('embedded object cached previews', () => {
     for (const sample of samples) {
       const part = parse(sample);
       const before = serializeOoxmlPart(part);
-      expect(isLegacyVmlAtom(objectIn(part.root)!)).toBe(false);
-      expect(projectDrawingsInPart(part)).toHaveLength(0);
-      expect(paragraphLength(firstParagraph(part))).toBe(2);
+      // An object whose preview cannot paint keeps its box as a placeholder atom on the line;
+      // an object without a readable preview stays opaque. Neither paints.
+      const atom = isLegacyVmlAtom(objectIn(part.root)!);
+      expectRefused(projectDrawingsInPart(part));
+      expect(paragraphLength(firstParagraph(part))).toBe(atom ? 3 : 2);
       expect(serializeOoxmlPart(part)).toBe(before);
     }
+  });
+
+  test('show an ActiveX control by its preview picture and never read the control', () => {
+    const control = '<w:control r:id="rOle" w:name="CheckBox1" w:shapeid="_x0000_i1025"/>';
+    const part = parse(embeddedObject({ ole: control }));
+    const [projection] = projectDrawingsInPart(part);
+    expect(projection?.legacyGraphic?.soleImageRelationshipId).toBe('rPreview');
+    // A control that names another shape keeps the object opaque.
+    const other = parse(embeddedObject({ ole: control.replace('_x0000_i1025', '_x0000_i9') }));
+    expect(isLegacyVmlAtom(objectIn(other.root)!)).toBe(false);
   });
 
   test('resolve only the preview image and report a metafile preview as unrenderable', async () => {
@@ -252,7 +264,8 @@ describe('embedded object cached previews', () => {
         const projection = projectDrawingsInPackage(pkg)[0]!;
         const state = await lookup.resolveForProjection(projection);
         if (format === 'png') {
-          expect(state).toMatchObject({ kind: 'ready', mime: 'image/svg+xml' });
+          // The preview is one uncropped picture, so it resolves to that picture itself.
+          expect(state).toMatchObject({ kind: 'ready', mime: 'image/png' });
           expect(decoded).toEqual(['image/png']);
         } else {
           // No metafile converter: an honest unsupported-format state, never a fake picture.

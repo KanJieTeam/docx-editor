@@ -12,17 +12,48 @@ import {
   MAX_GROUP_SHAPE_CHILDREN,
   readDrawingGroupFrame,
   supportedGroupVisuals,
-  schemaAngleIsZero,
   schemaFlagIsSet,
   schemaFlagIsUnset,
 } from './drawing-group-frame.ts';
 import { schemaAttributeValue, WPS_NAMESPACE_URI } from './ooxml-drawing-rules.ts';
 import { WML_NAMESPACE_URI } from './ooxml-shared.ts';
 import { projectLineArrowheads } from './drawing-line-arrowheads.ts';
+import { compoundBands } from './drawing-line-compound.ts';
+import { drawingTextboxFrame } from './drawing-textbox-frame.ts';
+import {
+  authoredPatternFill,
+  patternMeanColor,
+  type VectorPattern,
+} from './drawing-pattern-fill.ts';
 import { readShapePathPolygons } from './drawing-vector-paths.ts';
+import type { GeometryFill } from './drawing-geometry-engine.ts';
+import { readShapeShadow, shapeEffectList, type ShapeShadow } from './drawing-shape-effects.ts';
+import { drawingRenderers } from './drawing-renderers.ts';
+import {
+  gradientMeanColor,
+  placeGradient,
+  readGradientFill,
+  shadeGradient,
+  shapeAffine,
+  type GradientFillSpec,
+  type VectorGradient,
+} from './drawing-gradient.ts';
+import {
+  pathFillColor,
+  readShapeGeometry,
+  shapePointTransform,
+  shapeRotationDegrees,
+} from './drawing-shape-geometry.ts';
 import { transformComponent } from './drawing-group-transform.ts';
+import { groupPictureOutline } from './drawing-group-picture-outline.ts';
 import { readLineProperties, readStyleReferenceIndex } from './drawing-line-properties.ts';
-import { DRAWINGML_MAIN_NAMESPACE_URI, type OoxmlElement, type OoxmlNode } from './ooxml-tree.ts';
+import {
+  directFill,
+  resolveColorNode,
+  type ShapeColor,
+  type ShapeSchemeColorResolver,
+} from './drawing-shape-color.ts';
+import { DRAWINGML_MAIN_NAMESPACE_URI, type OoxmlElement } from './ooxml-tree.ts';
 import type {
   TextboxOutlineProjection,
   TextboxTextAreaRule,
@@ -30,11 +61,9 @@ import type {
 import type { LegacyTextboxShadow } from './legacy-vml-textbox-stroke.ts';
 
 const WPS_GRAPHIC_DATA_URI = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape';
-const SHAPE_HEX_RE = /^[0-9A-Fa-f]{6}$/;
 const MAX_VECTOR_SHAPE_POINTS = 1024;
-const ELLIPSE_POINTS = 32;
 
-export type ShapeSchemeColorResolver = (scheme: string) => string | null;
+export type { ShapeSchemeColorResolver } from './drawing-shape-color.ts';
 export type ShapeStyleMatrixResolver = (
   kind: 'fill' | 'line',
   index: number
@@ -47,6 +76,8 @@ export type ShapeStyleMatrixResolver = (
  * from `a:srgbClr` or from the theme, through `a:schemeClr` or a `wps:style` matrix
  * reference. Anything richer (gradient and picture fills, text bodies, rotation, a nested
  * group) projects as `null` and paints the labelled placeholder instead.
+ *
+ * @public
  */
 export interface VectorShapeProjection {
   /** The drawing extent that frames the subpath coordinate space. */
@@ -71,8 +102,14 @@ export interface VectorShapeProjection {
   readonly strokeWidthEmu: number;
   /** Independently styled paths, always non-empty. A direct shape has one component. */
   readonly components: readonly VectorShapeComponent[];
+  /**
+   * Geometry outside the extent paints too. A drawing canvas does not cut its members at
+   * its frame: a member placed past an edge shows whole.
+   */
+  readonly overflowVisible?: true;
 }
 
+/** One painted layer of a vector shape. @public */
 export interface VectorShapeComponent {
   readonly subpathsEmu: readonly (readonly Readonly<{ x: number; y: number }>[])[];
   /** Authored close commands; omitted by older consumers means closed polygons. */
@@ -84,15 +121,47 @@ export interface VectorShapeComponent {
   readonly strokeHex: string | null;
   readonly strokeAlpha: number;
   readonly strokeWidthEmu: number;
+  /**
+   * A gradient fill (`a:gradFill`), painted in place of `fillHex` where the painter can.
+   * `fillHex` then holds the mean of its stops.
+   */
+  readonly fillGradient?: VectorGradient;
+  /** A preset pattern the fill paints with; `fillHex` is its mean colour. */
+  readonly fillPattern?: VectorPattern;
+  /** The outer shadow the shape casts, painted under this component. */
+  readonly shadow?: ShapeShadow;
+  /**
+   * The component only casts `shadow`: it is the silhouette of a shape with several paths,
+   * placed before them, and paints no fill or outline of its own.
+   */
+  readonly shadowOnly?: true;
   /** Authored line ends and joins, inherited from the selected theme line when absent. */
   readonly strokeCap?: 'butt' | 'round' | 'square';
-  readonly strokeJoin?: 'round' | 'bevel';
+  readonly strokeJoin?: 'round' | 'bevel' | 'miter';
+  /** Miter limit in line widths, for a miter join. */
+  readonly strokeMiterLimit?: number;
+  /** Dash and gap lengths in multiples of the stroke width; absent for a solid outline. */
+  readonly strokeDash?: readonly number[];
+  /** Paint clips to these closed subpaths, as an inner shadow clips to its shape. */
+  readonly clipEmu?: readonly (readonly Readonly<{ x: number; y: number }>[])[];
+  /** In a picture's frame: paints under the picture (its shadow and fill), not over it. */
+  readonly belowPicture?: true;
+  /**
+   * How far the stroked path lies outside the geometry by design, in EMU: a picture outline
+   * runs half its width outside the picture, so the whole stroke stays off the picture.
+   */
+  readonly strokeOutsetEmu?: number;
   /**
    * The outline sits inside the closed geometry (`a:ln algn="in"`): painters draw it at twice
    * its width clipped to the path, so the authored width stays inside the shape and adds no
    * reach past the extent. Set only for a closed outline with area.
    */
   readonly strokeInset?: boolean;
+  /**
+   * The subpaths fill by the nonzero winding rule rather than even-odd, so overlapping
+   * subpaths of one direction stay filled where they cross.
+   */
+  readonly fillRule?: 'nonzero';
 }
 
 /**
@@ -101,6 +170,8 @@ export interface VectorShapeComponent {
  * The projection captures only the story root and the shape chrome reads; it never walks the
  * story content, so the per-drawing element budget is not spent on paragraphs. Layout collects
  * blocks from `content` under its own caps.
+ *
+ * @internal
  */
 export interface TextboxStoryProjection {
   /** Canonical node id of the `w:txbxContent` element. */
@@ -138,9 +209,19 @@ export interface TextboxStoryProjection {
   readonly strokeCap?: 'round' | 'square';
   /** The shape painted again under itself in one colour, offset on the page. */
   readonly shadow?: LegacyTextboxShadow;
+  /**
+   * The story is DrawingML shape text lowered to read-only paragraphs (a diagram's text): it
+   * lays out without the document's styles and with the DrawingML line rule.
+   */
+  readonly drawingText?: true;
+  /**
+   * The drawing's `vectorShape` paints the box's fill, outline and effects; the story paints
+   * only its text. The fill and outline fields stay for the text insets they give.
+   */
+  readonly chromeByVector?: true;
 }
 
-/** Shape geometry, turn and text flow of a legacy VML text box. */
+/** Shape geometry, turn and text flow of a text box: a legacy VML one, or a DrawingML one. */
 export interface TextboxLegacyFrame {
   /** Space between the shape box and its text area, in EMU, before the story insets. */
   readonly textAreaEmu: Readonly<{ top: number; right: number; bottom: number; left: number }>;
@@ -161,252 +242,16 @@ export interface TextboxLegacyFrame {
   readonly textAreaRule?: TextboxTextAreaRule;
 }
 
-interface ShapeColor {
-  readonly hex: string;
-  readonly alpha: number;
-}
-
-function colorChannels(hex: string): [number, number, number] {
-  return [
-    Number.parseInt(hex.slice(0, 2), 16),
-    Number.parseInt(hex.slice(2, 4), 16),
-    Number.parseInt(hex.slice(4, 6), 16),
-  ];
-}
-
-function channelsHex(channels: readonly number[]): string {
-  return channels
-    .map((channel) =>
-      Math.round(Math.max(0, Math.min(255, channel)))
-        .toString(16)
-        .padStart(2, '0')
-    )
-    .join('')
-    .toUpperCase();
-}
-
-/**
- * DrawingML blends `a:tint` and `a:shade` in linear light, not on the stored sRGB channel.
- * The conversion uses a plain 2.3 colour-space gamma, not the sRGB piecewise curve, and the
- * linear result truncates back to a byte rather than rounding.
- *
- * Where those two constants come from, precisely, because they look arbitrary:
- *
- * - Measured against LibreOffice, rendering purpose-built `.docx` files to PDF and sampling
- *   the pixel. Word was not available on the machine that wrote this, so it is NOT the
- *   oracle here. Treat this as one renderer's behaviour reproduced exactly (47 of 47
- *   base/ratio pairs), not as Word's behaviour confirmed. Note also that 2.3 is LibreOffice's
- *   own colour-space gamma, so agreement with it is partly circular.
- * - The one check that does not come from a renderer: ECMA-376 Part 1 20.1.2.3.31's worked
- *   `a:shade` example, `00FF00` at `val="50%"`, gives `00BC00`. This model reproduces it
- *   exactly. Read what that does and does not settle — a blend on the stored channel gives
- *   `008000`, so the example rules that reading out decisively, but the sRGB curve gives
- *   `00BB00`, one level away, so it barely speaks to the choice of curve.
- *
- * On the spelling in that citation: Part 1 (Strict) writes percentages as `50%`, and its
- * `ST_PositiveFixedPercentage` does not admit `50000` at all. The 1000ths-of-a-percent
- * integer Word writes is Part 4 (Transitional). `transformRatio` takes both.
- *
- * Both constants are load-bearing, though neither is dramatic on any single colour. Against
- * `Math.round` the result moves a level on about half of a uniform base/ratio grid. Against
- * the sRGB piecewise curve, holding this floor fixed, it moves on about half as well, by
- * four levels on `336699` + `shade 40000` (`224466` here, `1E4163` through sRGB) and by as
- * much as eleven at the dark end.
- *
- * `lumMod`/`lumOff` are NOT linear-light: they stay in HSL over the stored channels and keep
- * `channelsHex`'s rounding. That path is confirmed against Word itself, so do not fold it in.
- */
-const SHAPE_COLOR_GAMMA = 2.3;
-
-function linearFromChannel(channel: number): number {
-  return (Math.max(0, Math.min(255, channel)) / 255) ** SHAPE_COLOR_GAMMA;
-}
-
-function channelFromLinear(linear: number): number {
-  const channel = Math.max(0, Math.min(1, linear)) ** (1 / SHAPE_COLOR_GAMMA) * 255;
-  // The epsilon only absorbs the round-trip error of the two `**` calls, so a ratio of
-  // 100000 (the identity transform) returns the input channel instead of the one below it.
-  return Math.max(0, Math.min(255, Math.floor(channel + 1e-6)));
-}
-
-function rgbToHsl([red, green, blue]: readonly number[]): [number, number, number] {
-  const r = red! / 255;
-  const g = green! / 255;
-  const b = blue! / 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const lightness = (max + min) / 2;
-  if (max === min) return [0, 0, lightness];
-  const delta = max - min;
-  const saturation = lightness > 0.5 ? delta / (2 - max - min) : delta / (max + min);
-  const hue =
-    max === r
-      ? (g - b) / delta + (g < b ? 6 : 0)
-      : max === g
-        ? (b - r) / delta + 2
-        : (r - g) / delta + 4;
-  return [hue / 6, saturation, lightness];
-}
-
-function hslToRgb([hue, saturation, lightness]: readonly number[]): [number, number, number] {
-  if (saturation === 0) return [lightness! * 255, lightness! * 255, lightness! * 255];
-  const q =
-    lightness! < 0.5
-      ? lightness! * (1 + saturation!)
-      : lightness! + saturation! - lightness! * saturation!;
-  const p = 2 * lightness! - q;
-  const channel = (offset: number): number => {
-    let value = hue! + offset;
-    if (value < 0) value += 1;
-    if (value > 1) value -= 1;
-    if (value < 1 / 6) return p + (q - p) * 6 * value;
-    if (value < 1 / 2) return q;
-    if (value < 2 / 3) return p + (q - p) * (2 / 3 - value) * 6;
-    return p;
-  };
-  return [channel(1 / 3) * 255, channel(0) * 255, channel(-1 / 3) * 255];
-}
-
-/**
- * `val` on a colour transform, as a 0..1 ratio, or null to refuse the colour.
- *
- * Two spellings are legal and both appear in the wild:
- *
- * - The 1000ths-of-a-percent integer (`50000`). This is `ST_Percentage`'s Transitional
- *   spelling (ECMA-376 Part 4), and it is what Word writes, so it is the common case.
- * - The percentage literal (`50%`, `12.5%`). This is the Strict spelling
- *   (`ST_PositiveFixedPercentage`, Part 1 20.1.10.45, whose pattern is 22.9.2.10) and the
- *   one the spec's own worked examples use. Refusing it dropped the shape to a placeholder.
- *
- * Both regexes are anchored, bounded and have no nested quantifier, so a hostile `val`
- * cannot make either backtrack. Anything else — a sign, an exponent, whitespace, 7 digits —
- * refuses, and the caller fails the whole colour closed rather than guessing.
- *
- * The percentage PATTERN is wider than the value space it belongs to: 22.9.2.10 admits
- * `100.99%`, which is 1.0099 as a ratio. The explicit ceiling below is what keeps the
- * result in 0..1, not the regex, and it refuses the overshoot the same way the integer
- * branch refuses `100001`.
- */
-function transformRatio(node: OoxmlElement): number | null {
-  const value = schemaAttributeValue(node.attributes, 'val');
-  if (value === undefined) return null;
-  if (/^\d{1,6}$/.test(value)) {
-    const parsed = Number(value);
-    return Number.isInteger(parsed) && parsed >= 0 && parsed <= 100_000 ? parsed / 100_000 : null;
-  }
-  if (/^(?:100|\d{1,2})(?:\.\d{1,2})?%$/.test(value)) {
-    const percent = Number(value.slice(0, -1));
-    return percent >= 0 && percent <= 100 ? percent / 100 : null;
-  }
-  return null;
-}
-
-function resolveColorNode(
-  color: OoxmlNode,
-  resolveSchemeColor?: ShapeSchemeColorResolver,
-  placeholder?: ShapeColor
-): ShapeColor | null {
-  if (
-    !isElement(color) ||
-    !('namespaceUri' in color) ||
-    color.namespaceUri !== DRAWINGML_MAIN_NAMESPACE_URI ||
-    (color.localName !== 'srgbClr' && color.localName !== 'schemeClr')
-  ) {
-    return null;
-  }
-  const token = schemaAttributeValue(color.attributes, 'val');
-  let alpha = 1;
-  let hex: string | null | undefined;
-  if (color.localName === 'srgbClr') hex = token;
-  else if (token === 'phClr' && placeholder) {
-    hex = placeholder.hex;
-    alpha = placeholder.alpha;
-  } else {
-    hex = token !== undefined ? resolveSchemeColor?.(token) : null;
-  }
-  if (!hex || !SHAPE_HEX_RE.test(hex)) return null;
-  let channels = colorChannels(hex);
-  for (const child of color.children) {
-    if (!isElement(child) || child.namespaceUri !== DRAWINGML_MAIN_NAMESPACE_URI) continue;
-    const ratio = transformRatio(child);
-    if (ratio === null) return null;
-    if (child.localName === 'alpha') alpha = ratio;
-    else if (child.localName === 'tint') {
-      // ECMA-376 20.1.2.3.34: `val` is the fraction of the INPUT colour, the rest white.
-      channels = channels.map((channel) =>
-        channelFromLinear(linearFromChannel(channel) * ratio + (1 - ratio))
-      ) as [number, number, number];
-    } else if (child.localName === 'shade') {
-      // ECMA-376 20.1.2.3.31: `val` is the fraction of the input colour, the rest black.
-      channels = channels.map((channel) =>
-        channelFromLinear(linearFromChannel(channel) * ratio)
-      ) as [number, number, number];
-    } else if (child.localName === 'lumMod' || child.localName === 'lumOff') {
-      const hsl = rgbToHsl(channels);
-      hsl[2] = Math.max(
-        0,
-        Math.min(1, child.localName === 'lumMod' ? hsl[2] * ratio : hsl[2] + ratio)
-      );
-      channels = hslToRgb(hsl);
-    } else {
-      return null;
-    }
-  }
-  hex = channelsHex(channels);
-  return { hex, alpha };
-}
-
-/** Resolve and transform one DrawingML solid fill at the store trust boundary. */
-function readSolidFill(
-  parent: OoxmlElement,
-  resolveSchemeColor?: ShapeSchemeColorResolver,
-  placeholder?: ShapeColor
-): ShapeColor | null {
-  const solidFill = findDirectChild(parent.children, {
-    namespaceUri: DRAWINGML_MAIN_NAMESPACE_URI,
-    localName: 'solidFill',
-  });
-  if (!solidFill) return null;
-  const color = solidFill.children.find(isElement);
-  return color ? resolveColorNode(color, resolveSchemeColor, placeholder) : null;
-}
-
-const FILL_ELEMENT_NAMES = new Set([
-  'noFill',
-  'solidFill',
-  'gradFill',
-  'blipFill',
-  'pattFill',
-  'grpFill',
-]);
-
-function directFill(
-  parent: OoxmlElement,
-  resolveSchemeColor?: ShapeSchemeColorResolver,
-  placeholder?: ShapeColor
-): { readonly present: boolean; readonly color: ShapeColor | null } {
-  const authored = parent.children.find(
-    (child) =>
-      isElement(child) &&
-      child.namespaceUri === DRAWINGML_MAIN_NAMESPACE_URI &&
-      FILL_ELEMENT_NAMES.has(child.localName)
-  );
-  if (!authored || !isElement(authored)) return { present: false, color: null };
-  return {
-    present: true,
-    color:
-      authored.localName === 'solidFill'
-        ? readSolidFill(parent, resolveSchemeColor, placeholder)
-        : null,
-  };
-}
-
 function readStyleReference(
   wsp: OoxmlElement,
   referenceName: 'fillRef' | 'lnRef',
   resolveSchemeColor?: ShapeSchemeColorResolver,
   resolveStyleMatrixReference?: ShapeStyleMatrixResolver
-): { readonly color: ShapeColor; readonly matrix?: OoxmlElement } | null {
+): {
+  readonly color: ShapeColor;
+  readonly matrix?: OoxmlElement;
+  readonly gradient?: GradientFillSpec;
+} | null {
   const reference = readStyleReferenceIndex(wsp, referenceName);
   const color = reference?.color;
   if (!reference || !color) return null;
@@ -418,13 +263,12 @@ function readStyleReference(
   );
   if (!placeholder || !matrix) return null;
   if (referenceName === 'fillRef') {
-    if (
-      !isElement(matrix) ||
-      matrix.namespaceUri !== DRAWINGML_MAIN_NAMESPACE_URI ||
-      matrix.localName !== 'solidFill'
-    ) {
-      return null;
+    if (!isElement(matrix) || matrix.namespaceUri !== DRAWINGML_MAIN_NAMESPACE_URI) return null;
+    if (matrix.localName === 'gradFill') {
+      const gradient = readGradientFill(matrix, resolveSchemeColor, placeholder);
+      return gradient ? { color: gradientMeanColor(gradient), gradient } : null;
     }
+    if (matrix.localName !== 'solidFill') return null;
     const matrixColor = matrix.children.find(isElement);
     const resolved = matrixColor
       ? resolveColorNode(matrixColor, resolveSchemeColor, placeholder)
@@ -439,7 +283,7 @@ function readStyleReference(
 }
 
 /** The `wps:wsp` under the anchor's graphic data, or null when the payload is something else. */
-function findWspInAnchor(anchor: OoxmlElement): OoxmlElement | null {
+export function findWspInAnchor(anchor: OoxmlElement): OoxmlElement | null {
   const data = findGraphicData(anchor);
   if (!data) return null;
   if (schemaAttributeValue(data.attributes, 'uri') !== WPS_GRAPHIC_DATA_URI) return null;
@@ -451,6 +295,21 @@ function findWspInAnchor(anchor: OoxmlElement): OoxmlElement | null {
   );
 }
 
+/** The authored `a:gradFill` of a shape or line, when it is the element that fills it. */
+function authoredGradientFill(
+  parent: OoxmlElement,
+  resolveSchemeColor?: ShapeSchemeColorResolver
+): GradientFillSpec | null {
+  for (const node of parent.children) {
+    if (!isElement(node) || node.namespaceUri !== DRAWINGML_MAIN_NAMESPACE_URI) continue;
+    if (node.localName === 'gradFill') return readGradientFill(node, resolveSchemeColor);
+    if (['noFill', 'solidFill', 'blipFill', 'pattFill', 'grpFill'].includes(node.localName)) {
+      return null;
+    }
+  }
+  return null;
+}
+
 /** The fill and outline a `wps:wsp` paints with, from its own properties or its style. */
 function shapePaint(
   wsp: OoxmlElement,
@@ -459,10 +318,19 @@ function shapePaint(
   resolveStyleMatrixReference?: ShapeStyleMatrixResolver
 ) {
   const authoredFill = directFill(spPr, resolveSchemeColor);
+  const authoredGradient = authoredFill.present
+    ? authoredGradientFill(spPr, resolveSchemeColor)
+    : null;
   const styleFill = authoredFill.present
     ? null
     : readStyleReference(wsp, 'fillRef', resolveSchemeColor, resolveStyleMatrixReference);
-  const fill = authoredFill.present ? authoredFill.color : (styleFill?.color ?? null);
+  const pattern = authoredFill.present ? authoredPatternFill(spPr, resolveSchemeColor) : null;
+  const fill = authoredFill.present
+    ? (authoredFill.color ??
+      (authoredGradient ? gradientMeanColor(authoredGradient) : null) ??
+      (pattern ? patternMeanColor(pattern) : null))
+    : (styleFill?.color ?? null);
+  const fillGradient = authoredFill.present ? authoredGradient : (styleFill?.gradient ?? null);
   const ln = findDirectChild(spPr.children, {
     namespaceUri: DRAWINGML_MAIN_NAMESPACE_URI,
     localName: 'ln',
@@ -472,13 +340,21 @@ function shapePaint(
     authoredStroke?.present === true
       ? null
       : readStyleReference(wsp, 'lnRef', resolveSchemeColor, resolveStyleMatrixReference);
+  // An outline paints one colour; a gradient outline paints the mean of its stops.
+  const strokeGradient =
+    authoredStroke?.present === true && !authoredStroke.color && ln
+      ? authoredGradientFill(ln, resolveSchemeColor)
+      : null;
   const stroke =
-    authoredStroke?.present === true ? authoredStroke.color : (styleStroke?.color ?? null);
-  return { fill, ln, stroke, styleStroke };
+    authoredStroke?.present === true
+      ? (authoredStroke.color ?? (strokeGradient ? gradientMeanColor(strokeGradient) : null))
+      : (styleStroke?.color ?? null);
+  return { fill, fillGradient, pattern, ln, stroke, styleStroke };
 }
 
+/** The shape's `spPr`, in its own namespace: `wps:spPr`, or `dsp:spPr` in a diagram drawing. */
 function shapeProperties(wsp: OoxmlElement): OoxmlElement | null {
-  return findDirectChild(wsp.children, { namespaceUri: WPS_NAMESPACE_URI, localName: 'spPr' });
+  return findDirectChild(wsp.children, { namespaceUri: wsp.namespaceUri, localName: 'spPr' });
 }
 
 function hasTextbox(wsp: OoxmlElement): boolean {
@@ -504,17 +380,24 @@ export function isUnpaintedGroupTextbox(
 }
 
 /**
- * `groupMember` lets a text box member paint its shape. A group does not lay out its text, so
- * only the fill and outline paint. A top-level text box paints through its story instead.
+ * The painted components of one shape, one per geometry path: presets such as `can` or `cube`
+ * draw faces with their own fill mode, and some paths only stroke or only fill.
+ *
+ * `groupMember` lets a text box member paint its shape; its story lays out separately. A
+ * top-level text box paints through its story instead. Only a group member may turn: a turned
+ * top-level shape would paint past the extent that layout reserves for it.
+ *
+ * An empty list means the shape paints nothing (no fill and no outline); null means its
+ * geometry, transform or paint is outside the supported subset.
  */
-function projectWspComponent(
+export function projectShapeComponents(
   wsp: OoxmlElement,
   extent: Readonly<{ cx: number; cy: number }>,
   pointBudget: { remaining: number },
   resolveSchemeColor?: ShapeSchemeColorResolver,
   resolveStyleMatrixReference?: ShapeStyleMatrixResolver,
   groupMember = false
-): VectorShapeComponent | null {
+): readonly VectorShapeComponent[] | null {
   if (!groupMember && hasTextbox(wsp)) return null;
   const spPr = shapeProperties(wsp);
   if (!spPr) return null;
@@ -522,14 +405,15 @@ function projectWspComponent(
     namespaceUri: DRAWINGML_MAIN_NAMESPACE_URI,
     localName: 'xfrm',
   });
+  const rotation = shapeRotationDegrees(xfrm);
+  if (rotation === null || (rotation !== 0 && !groupMember)) return null;
   if (xfrm) {
-    if (!schemaAngleIsZero(schemaAttributeValue(xfrm.attributes, 'rot'))) return null;
     for (const name of ['flipH', 'flipV']) {
       const value = schemaAttributeValue(xfrm.attributes, name);
       if (!schemaFlagIsUnset(value) && !schemaFlagIsSet(value)) return null;
     }
   }
-  const { fill, ln, stroke, styleStroke } = shapePaint(
+  const { fill, fillGradient, pattern, ln, stroke, styleStroke } = shapePaint(
     wsp,
     spPr,
     resolveSchemeColor,
@@ -540,107 +424,238 @@ function projectWspComponent(
       ? readLineProperties(wsp, ln, resolveStyleMatrixReference, styleStroke?.matrix)
       : null;
   const strokeWidthEmu = line?.widthEmu ?? 0;
-  if (fill === null && stroke === null) return null;
+  if (fill === null && stroke === null) return [];
 
-  const subpaths: { x: number; y: number }[][] = [];
-  const closed: boolean[] = [];
+  const paths = shapePaths(spPr, extent, pointBudget);
+  if (!paths) return null;
+  const flipH = xfrm !== null && schemaFlagIsSet(schemaAttributeValue(xfrm.attributes, 'flipH'));
+  const flipV = xfrm !== null && schemaFlagIsSet(schemaAttributeValue(xfrm.attributes, 'flipV'));
+  const place = shapePointTransform(extent, flipH, flipV, rotation);
+  const effectList = shapeEffectList(wsp, spPr, resolveSchemeColor, resolveStyleMatrixReference);
+  const shadow = readShapeShadow(effectList, resolveSchemeColor, {
+    flipH,
+    flipV,
+    rotationDegrees: rotation,
+  });
+  const gradient = fillGradient
+    ? placeGradient(
+        fillGradient,
+        extent.cx,
+        extent.cy,
+        fillGradient.turnsWithShape
+          ? shapeAffine(extent.cx, extent.cy, flipH, flipV, rotation)
+          : shapeAffine(extent.cx, extent.cy, false, false, 0)
+      )
+    : null;
+  const components: VectorShapeComponent[] = [];
+  for (const path of paths) {
+    const pathFill = pathFillColor(fill, path.fill);
+    const pathStroke = path.stroke ? stroke : null;
+    if (pathFill === null && pathStroke === null) continue;
+    const polygons = path.subpaths
+      .filter(({ points }) => points.length >= 3 || (points.length === 2 && pathStroke !== null))
+      .map(({ points }) => points);
+    if (polygons.length === 0) continue;
+    const subpathsClosed = path.subpaths.flatMap((subpath) =>
+      polygons.includes(subpath.points) ? [subpath.closed] : []
+    );
+    const lineEnds = pathStroke
+      ? projectLineArrowheads(polygons, subpathsClosed, ln, strokeWidthEmu)
+      : { arrows: [], paths: polygons };
+    if (lineEnds === null) return null;
+    const arrowheads = lineEnds.arrows;
+    // A filled path keeps its outline; only a stroke-only path stops short of its line ends.
+    const outlines = pathFill === null ? lineEnds.paths : polygons;
+    const arrowPoints = arrowheads.reduce((sum, outline) => sum + outline.length, 0);
+    if (arrowPoints > pointBudget.remaining) return null;
+    pointBudget.remaining -= arrowPoints;
+    components.push({
+      subpathsEmu: outlines.map((points) => points.map(place)),
+      subpathsClosed,
+      ...(arrowheads.length
+        ? { arrowheadsEmu: arrowheads.map((points) => points.map(place)) }
+        : {}),
+      fillHex: pathFill?.hex ?? null,
+      fillAlpha: pathFill?.alpha ?? 1,
+      ...(gradient && pathFill
+        ? {
+            fillGradient:
+              path.fill === 'norm'
+                ? gradient
+                : shadeGradient(gradient, (color) => pathFillColor(color, path.fill) ?? color),
+          }
+        : {}),
+      ...(pattern && pathFill && path.fill === 'norm' ? { fillPattern: pattern } : {}),
+      strokeHex: pathStroke?.hex ?? null,
+      strokeAlpha: pathStroke?.alpha ?? 1,
+      strokeWidthEmu: pathStroke ? strokeWidthEmu : 0,
+      ...(pathStroke && line?.cap ? { strokeCap: line.cap } : {}),
+      ...(pathStroke && line ? { strokeJoin: line.join } : {}),
+      ...(pathStroke && line?.join === 'miter' ? { strokeMiterLimit: line.miterLimit } : {}),
+      ...(pathStroke && line?.dash ? { strokeDash: line.dash } : {}),
+      // Only a closed outline with area can sit inside its geometry: a line, or a closed path
+      // collapsed onto a line, stays centred, or the clip to its own path would remove it.
+      ...(pathStroke &&
+      line?.alignment === 'in' &&
+      subpathsClosed.every(Boolean) &&
+      polygons.every(enclosesArea)
+        ? { strokeInset: true }
+        : {}),
+    });
+  }
+  if (line && line.compound !== 'sng') {
+    components.splice(
+      0,
+      components.length,
+      ...components.flatMap((component) => compoundBands(component, line.compound))
+    );
+  }
+  // One shadow for the whole shape, under all of its paths: a single path carries it, and a
+  // shape of several paths gets a silhouette of them all, painted before any of them.
+  if (shadow && components.length === 1) {
+    components[0] = { ...components[0]!, shadow };
+  } else if (shadow && components.length > 1) {
+    const silhouette = components.filter((component) => component.fillHex !== null);
+    const casters = silhouette.length ? silhouette : components;
+    components.unshift({
+      subpathsEmu: casters.flatMap((component) => component.subpathsEmu),
+      subpathsClosed: casters.flatMap((component) =>
+        component.subpathsEmu.map((_, index) => component.subpathsClosed?.[index] !== false)
+      ),
+      fillHex: silhouette.length ? casters[0]!.fillHex : null,
+      fillAlpha: 1,
+      strokeHex: silhouette.length ? null : casters[0]!.strokeHex,
+      strokeAlpha: 1,
+      strokeWidthEmu: silhouette.length ? 0 : casters[0]!.strokeWidthEmu,
+      shadow,
+      shadowOnly: true,
+    });
+  }
+  // Effects beyond the outer shadow paint only through an installed effects renderer.
+  const effects = drawingRenderers().effects;
+  if (!effects) return components;
+  return effects.shape({
+    shape: wsp,
+    spPr,
+    effectList,
+    components,
+    extent,
+    ...(resolveSchemeColor ? { resolveSchemeColor } : {}),
+  });
+}
+
+interface ShapePath {
+  readonly subpaths: readonly {
+    readonly points: readonly Readonly<{ x: number; y: number }>[];
+    readonly closed: boolean;
+  }[];
+  readonly fill: GeometryFill;
+  readonly stroke: boolean;
+}
+
+/**
+ * The shape's geometry paths in its own extent, charged against the point budget. A straight
+ * line keeps its endpoints exactly, so a zero-extent axis stays a line. A custom geometry
+ * keeps the bounded polygon reader where it applies; the geometry engine covers presets and
+ * the custom paths that reader refuses (arcs and quadratic curves).
+ */
+function shapePaths(
+  spPr: OoxmlElement,
+  extent: Readonly<{ cx: number; cy: number }>,
+  pointBudget: { remaining: number }
+): readonly ShapePath[] | null {
+  const prstGeom = findDirectChild(spPr.children, {
+    namespaceUri: DRAWINGML_MAIN_NAMESPACE_URI,
+    localName: 'prstGeom',
+  });
+  const preset = prstGeom ? schemaAttributeValue(prstGeom.attributes, 'prst') : undefined;
   const custGeom = findDirectChild(spPr.children, {
     namespaceUri: DRAWINGML_MAIN_NAMESPACE_URI,
     localName: 'custGeom',
   });
+  if (!custGeom && (preset === 'line' || preset === 'straightConnector1')) {
+    if (pointBudget.remaining < 2) return null;
+    pointBudget.remaining -= 2;
+    const points = [
+      { x: 0, y: 0 },
+      { x: extent.cx, y: extent.cy },
+    ];
+    return [{ subpaths: [{ points, closed: false }], fill: 'norm', stroke: true }];
+  }
   if (custGeom) {
-    const pathLst = findDirectChild(custGeom.children, {
-      namespaceUri: DRAWINGML_MAIN_NAMESPACE_URI,
-      localName: 'pathLst',
-    });
-    if (!pathLst) return null;
-    for (const child of pathLst.children) {
-      if (!isElement(child)) continue;
-      if (child.namespaceUri !== DRAWINGML_MAIN_NAMESPACE_URI || child.localName !== 'path') {
-        return null;
+    const polygons = readCustomPolygons(custGeom, extent, pointBudget);
+    if (polygons) return [polygons];
+    // Only what the polygon reader cannot express goes to the engine. A path the reader
+    // refuses for its sizes, such as a zero path space on a sized axis, stays refused.
+    if (!needsGeometryEngine(custGeom)) return null;
+  }
+  const geometry = readShapeGeometry(spPr, extent);
+  if (!geometry) return null;
+  let points = 0;
+  for (const path of geometry.paths) {
+    for (const subpath of path.subpaths) points += subpath.points.length;
+  }
+  if (points > pointBudget.remaining) return null;
+  pointBudget.remaining -= points;
+  return geometry.paths;
+}
+
+/** Whether a custom geometry uses arcs, quadratic curves, guides, or per-path paint modes. */
+function needsGeometryEngine(custGeom: OoxmlElement): boolean {
+  for (const list of custGeom.children) {
+    if (!isElement(list) || list.namespaceUri !== DRAWINGML_MAIN_NAMESPACE_URI) continue;
+    if (list.localName === 'gdLst' && list.children.some(isElement)) return true;
+    if (list.localName !== 'pathLst') continue;
+    for (const path of list.children) {
+      if (!isElement(path)) continue;
+      const fillMode = schemaAttributeValue(path.attributes, 'fill');
+      if (fillMode !== undefined && fillMode !== 'norm') return true;
+      if (schemaFlagIsUnset(schemaAttributeValue(path.attributes, 'stroke') ?? '1')) return true;
+      for (const command of path.children) {
+        if (isElement(command) && ['arcTo', 'quadBezTo'].includes(command.localName)) return true;
       }
-      const pathW = readSize(schemaAttributeValue(child.attributes, 'w'), extent.cx);
-      const pathH = readSize(schemaAttributeValue(child.attributes, 'h'), extent.cy);
-      if (pathW === null || pathH === null) return null;
-      const scaleX = pathScale(extent.cx, pathW);
-      const scaleY = pathScale(extent.cy, pathH);
-      if (scaleX === null || scaleY === null) return null;
-      if (!readShapePathPolygons(child, scaleX, scaleY, subpaths, pointBudget, closed)) {
-        return null;
-      }
-    }
-  } else {
-    const prstGeom = findDirectChild(spPr.children, {
-      namespaceUri: DRAWINGML_MAIN_NAMESPACE_URI,
-      localName: 'prstGeom',
-    });
-    const preset = prstGeom ? schemaAttributeValue(prstGeom.attributes, 'prst') : undefined;
-    if (preset === 'line' || preset === 'straightConnector1') {
-      if (pointBudget.remaining < 2) return null;
-      subpaths.push([
-        { x: 0, y: 0 },
-        { x: extent.cx, y: extent.cy },
-      ]);
-      closed.push(false);
-      pointBudget.remaining -= 2;
-    } else if (preset === 'rect') {
-      if (pointBudget.remaining < 4) return null;
-      subpaths.push([
-        { x: 0, y: 0 },
-        { x: extent.cx, y: 0 },
-        { x: extent.cx, y: extent.cy },
-        { x: 0, y: extent.cy },
-      ]);
-      pointBudget.remaining -= 4;
-      closed.push(true);
-    } else if (preset === 'ellipse' && pointBudget.remaining >= ELLIPSE_POINTS) {
-      const ellipse: { x: number; y: number }[] = [];
-      for (let index = 0; index < ELLIPSE_POINTS; index += 1) {
-        const angle = (index / ELLIPSE_POINTS) * Math.PI * 2;
-        ellipse.push({
-          x: extent.cx / 2 + (Math.cos(angle) * extent.cx) / 2,
-          y: extent.cy / 2 + (Math.sin(angle) * extent.cy) / 2,
-        });
-      }
-      pointBudget.remaining -= ELLIPSE_POINTS;
-      subpaths.push(ellipse);
-      closed.push(true);
-    } else {
-      return null;
     }
   }
-  const polygons = subpaths.filter(
-    (points) => points.length >= 3 || (points.length === 2 && stroke !== null)
-  );
-  if (polygons.length === 0) return null;
-  const subpathsClosed = subpaths.flatMap((points, index) =>
-    polygons.includes(points) ? [closed[index]!] : []
-  );
-  const arrowheads = projectLineArrowheads(polygons, subpathsClosed, ln, strokeWidthEmu);
-  if (arrowheads === null || arrowheads.length * 3 > pointBudget.remaining) return null;
-  pointBudget.remaining -= arrowheads.length * 3;
-  const flipH = xfrm !== null && schemaFlagIsSet(schemaAttributeValue(xfrm.attributes, 'flipH'));
-  const flipV = xfrm !== null && schemaFlagIsSet(schemaAttributeValue(xfrm.attributes, 'flipV'));
-  const flip = (point: Readonly<{ x: number; y: number }>) => ({
-    x: flipH ? extent.cx - point.x : point.x,
-    y: flipV ? extent.cy - point.y : point.y,
+  return false;
+}
+
+/** The polygon reader's view of an `a:custGeom`: one filled and stroked path set. */
+function readCustomPolygons(
+  custGeom: OoxmlElement,
+  extent: Readonly<{ cx: number; cy: number }>,
+  pointBudget: { remaining: number }
+): ShapePath | null {
+  const pathLst = findDirectChild(custGeom.children, {
+    namespaceUri: DRAWINGML_MAIN_NAMESPACE_URI,
+    localName: 'pathLst',
   });
+  if (!pathLst) return null;
+  const subpaths: { x: number; y: number }[][] = [];
+  const closed: boolean[] = [];
+  const budget = { remaining: pointBudget.remaining };
+  for (const child of pathLst.children) {
+    if (!isElement(child)) continue;
+    if (child.namespaceUri !== DRAWINGML_MAIN_NAMESPACE_URI || child.localName !== 'path') {
+      return null;
+    }
+    // Paths that opt out of fill or stroke need the engine's per-path modes.
+    const fillMode = schemaAttributeValue(child.attributes, 'fill');
+    const strokeMode = schemaAttributeValue(child.attributes, 'stroke');
+    if ((fillMode !== undefined && fillMode !== 'norm') || schemaFlagIsUnset(strokeMode ?? '1'))
+      return null;
+    const pathW = readSize(schemaAttributeValue(child.attributes, 'w'), extent.cx);
+    const pathH = readSize(schemaAttributeValue(child.attributes, 'h'), extent.cy);
+    if (pathW === null || pathH === null) return null;
+    const scaleX = pathScale(extent.cx, pathW);
+    const scaleY = pathScale(extent.cy, pathH);
+    if (scaleX === null || scaleY === null) return null;
+    if (!readShapePathPolygons(child, scaleX, scaleY, subpaths, budget, closed)) return null;
+  }
+  pointBudget.remaining = budget.remaining;
   return {
-    subpathsEmu: polygons.map((points) => points.map(flip)),
-    subpathsClosed,
-    ...(arrowheads.length ? { arrowheadsEmu: arrowheads.map((points) => points.map(flip)) } : {}),
-    fillHex: fill?.hex ?? null,
-    fillAlpha: fill?.alpha ?? 1,
-    strokeHex: stroke?.hex ?? null,
-    strokeAlpha: stroke?.alpha ?? 1,
-    strokeWidthEmu,
-    ...(line?.cap ? { strokeCap: line.cap } : {}),
-    ...(line?.join ? { strokeJoin: line.join } : {}),
-    // Only a closed outline with area can sit inside its geometry: a line, or a closed path
-    // collapsed onto a line, stays centred, or the clip to its own path would remove it.
-    ...(line?.alignment === 'in' && subpathsClosed.every(Boolean) && polygons.every(enclosesArea)
-      ? { strokeInset: true }
-      : {}),
+    subpaths: subpaths.map((points, index) => ({ points, closed: closed[index]! })),
+    fill: 'norm',
+    stroke: true,
   };
 }
 
@@ -683,10 +698,7 @@ export function childTransform(wsp: OoxmlElement): {
   readonly offset: Readonly<{ x: number; y: number }>;
   readonly extent: Readonly<{ cx: number; cy: number }>;
 } | null {
-  const spPr = findDirectChild(wsp.children, {
-    namespaceUri: WPS_NAMESPACE_URI,
-    localName: 'spPr',
-  });
+  const spPr = shapeProperties(wsp);
   const xfrm = spPr
     ? findDirectChild(spPr.children, {
         namespaceUri: DRAWINGML_MAIN_NAMESPACE_URI,
@@ -720,8 +732,8 @@ export function childTransform(wsp: OoxmlElement): {
 /**
  * Renderable-subset projection of direct `wps:wsp` and one bounded `wpg:wgp` group.
  *
- * `groupPictureNodeId` names the one group member the group picture projection paints; it is
- * skipped here. Every other member must be a supported `wps:wsp`, or the group refuses.
+ * `groupPictureNodeIds` names the group members the group picture projection paints; they
+ * are skipped here. Every other member must be a supported `wps:wsp`, or the group refuses.
  */
 export function projectVectorShape(
   anchor: OoxmlElement,
@@ -729,7 +741,7 @@ export function projectVectorShape(
   compatibilityMode: boolean,
   resolveSchemeColor?: ShapeSchemeColorResolver,
   resolveStyleMatrixReference?: ShapeStyleMatrixResolver,
-  groupPictureNodeId?: string
+  groupPictureNodeIds?: ReadonlySet<string>
 ): VectorShapeProjection | null {
   void compatibilityMode;
   // A straight vertical or horizontal line has a zero width or height; both zero is empty.
@@ -738,15 +750,15 @@ export function projectVectorShape(
   const wsp = findWspInAnchor(anchor);
   let components: VectorShapeComponent[] = [];
   if (wsp) {
-    const component = projectWspComponent(
+    const shapeComponents = projectShapeComponents(
       wsp,
       extent,
       pointBudget,
       resolveSchemeColor,
       resolveStyleMatrixReference
     );
-    if (!component) return null;
-    components = [component];
+    if (!shapeComponents?.length) return null;
+    components = [...shapeComponents];
   } else {
     const frame = readDrawingGroupFrame(anchor);
     if (!frame) return null;
@@ -761,7 +773,23 @@ export function projectVectorShape(
       if (!isElement(child) || isGroupPropertyChild(child)) continue;
       childCount += 1;
       if (childCount > MAX_GROUP_SHAPE_CHILDREN) return null;
-      if (child.id === groupPictureNodeId) continue;
+      if (groupPictureNodeIds?.has(child.id)) {
+        // The group picture paints the raster; its outline, if any, strokes above it here.
+        const outline = groupPictureOutline(child, pointBudget, resolveSchemeColor, {
+          project: projectShapeComponents,
+          childTransform,
+          place: (component, offset) =>
+            transformComponent(
+              component,
+              { x: (offset.x - chOffX) * scaleX, y: (offset.y - chOffY) * scaleY },
+              scaleX,
+              scaleY
+            ),
+        });
+        if (outline === null) return null;
+        components.push(...outline);
+        continue;
+      }
       // One group level is the enforced nesting cap. Do not paint a partial nested group.
       if (child.namespaceUri !== WPS_NAMESPACE_URI || child.localName !== 'wsp') return null;
       const properties = findDirectChild(child.children, {
@@ -773,7 +801,7 @@ export function projectVectorShape(
       if (isUnpaintedGroupTextbox(child, resolveSchemeColor, resolveStyleMatrixReference)) continue;
       const transform = childTransform(child);
       if (!transform) return null;
-      const component = projectWspComponent(
+      const memberComponents = projectShapeComponents(
         child,
         transform.extent,
         pointBudget,
@@ -781,18 +809,20 @@ export function projectVectorShape(
         resolveStyleMatrixReference,
         true
       );
-      if (!component) return null;
-      components.push(
-        transformComponent(
-          component,
-          {
-            x: (transform.offset.x - chOffX) * scaleX,
-            y: (transform.offset.y - chOffY) * scaleY,
-          },
-          scaleX,
-          scaleY
-        )
-      );
+      if (!memberComponents?.length) return null;
+      for (const component of memberComponents) {
+        components.push(
+          transformComponent(
+            component,
+            {
+              x: (transform.offset.x - chOffX) * scaleX,
+              y: (transform.offset.y - chOffY) * scaleY,
+            },
+            scaleX,
+            scaleY
+          )
+        );
+      }
     }
     if (components.length === 0) return null;
   }
@@ -830,7 +860,22 @@ export function projectTextboxStory(
 ): TextboxStoryProjection | null {
   const wsp = findWspInAnchor(anchor);
   if (!wsp) return null;
-  return projectWspTextboxStory(wsp, extent, resolveSchemeColor, resolveStyleMatrixReference);
+  const story = projectWspTextboxStory(
+    wsp,
+    extent,
+    resolveSchemeColor,
+    resolveStyleMatrixReference
+  );
+  const spPr = shapeProperties(wsp);
+  if (!story || !spPr) return story;
+  // A top-level box paints the outline of its geometry, turns, and flows its text vertically;
+  // a group member's shape paints with the group.
+  const bodyPr = findDirectChild(wsp.children, {
+    namespaceUri: WPS_NAMESPACE_URI,
+    localName: 'bodyPr',
+  });
+  const frame = drawingTextboxFrame(spPr, bodyPr, extent);
+  return frame ? { ...story, legacyFrame: frame, strokeCentered: true } : story;
 }
 
 /**
@@ -912,10 +957,11 @@ export function projectWspTextboxStory(
       : readStyleReference(wsp, 'lnRef', resolveSchemeColor, resolveStyleMatrixReference);
   const strokeHex =
     (authoredStroke?.present === true ? authoredStroke.color?.hex : styleStroke?.color.hex) ?? null;
-  const strokeWidthEmu =
+  const outline =
     strokeHex !== null
-      ? readLineProperties(wsp, ln, resolveStyleMatrixReference, styleStroke?.matrix).widthEmu
-      : 0;
+      ? readLineProperties(wsp, ln, resolveStyleMatrixReference, styleStroke?.matrix)
+      : null;
+  const strokeWidthEmu = outline?.widthEmu ?? 0;
 
   return {
     contentNodeId: content.id,
@@ -932,5 +978,6 @@ export function projectWspTextboxStory(
     fillHex,
     strokeHex,
     strokeWidthEmu,
+    ...(outline?.dash ? { strokeDash: outline.dash } : {}),
   };
 }

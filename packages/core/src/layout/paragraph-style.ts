@@ -150,11 +150,32 @@ export interface ParagraphLineSpacing {
   readonly value: number;
   /** Legacy noExtraLineSpacing: retain the natural baseline within an exact-height box. */
   readonly preserveExactBaseline?: true;
+  /** A wrap band tests only the line's content, not the extra an `auto` multiple adds. @internal */
+  readonly wrapsContentOnly?: true;
+  /**
+   * DrawingML shape text: an `auto` line keeps its descent at the bottom of the box, so the
+   * space a multiple adds or removes is above the glyphs, never below them.
+   *
+   * @internal
+   */
+  readonly descentAnchored?: true;
   /**
    * Active section line-grid pitch in points (`w:docGrid/@w:linePitch`). Present only when
    * the paragraph snaps to the grid; only with `auto`. See `line-grid.ts`.
    */
   readonly gridPitch?: number;
+}
+
+/** The document-level line rules a style cascade turns on for every paragraph it resolves. */
+export function cascadeLineSpacingFlags(
+  cascade:
+    | { readonly preserveExactLineBaseline?: true; readonly drawingTextLines?: true }
+    | undefined
+): Pick<ParagraphLineSpacing, 'preserveExactBaseline' | 'descentAnchored'> {
+  return {
+    ...(cascade?.preserveExactLineBaseline ? { preserveExactBaseline: true as const } : {}),
+    ...(cascade?.drawingTextLines ? { descentAnchored: true as const } : {}),
+  };
 }
 
 /** Single spacing: what a paragraph that says nothing gets. */
@@ -472,6 +493,9 @@ export function applyLineSpacing(
     };
   }
   const delta = height - naturalHeight;
+  if (spacing.rule === 'auto' && spacing.descentAnchored) {
+    return { height, baseline: naturalBaseline + delta };
+  }
   if (delta < 0) {
     // A multiple below single scales the baseline with the line instead of keeping the
     // natural baseline and cutting the descent: measured against reference renders of
@@ -622,7 +646,10 @@ export function paragraphBorderStrokeWidthPt(edge: ParagraphBorderEdge): number 
  */
 export function paragraphBorderExtentPt(edge: ParagraphBorderEdge | undefined): number {
   if (!edge) return 0;
-  return edge.spacePt + paragraphBorderStrokeWidthPt(edge);
+  // A shadowed edge takes its own width once more: the box moves down by it under a shadowed
+  // top rule, and the shadow band lies below a shadowed bottom rule.
+  const stroke = paragraphBorderStrokeWidthPt(edge);
+  return edge.spacePt + stroke + (edge.shadow ? stroke : 0);
 }
 
 /** Vertical extent a bottom border adds below the last line (gap + rule). */

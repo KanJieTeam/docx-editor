@@ -1,17 +1,24 @@
 import type { OoxmlElement, OoxmlNode } from './ooxml-tree.ts';
 
+/** The VML namespace. @internal */
 export const VML = 'urn:schemas-microsoft-com:vml';
+/** The Office VML extensions namespace (`o:`). @internal */
 export const OFFICE = 'urn:schemas-microsoft-com:office:office';
+/** The Word VML extensions namespace (`w10:`). @internal */
 export const WORD_VML = 'urn:schemas-microsoft-com:office:word';
 export const element = (node: OoxmlNode): node is OoxmlElement => node.kind !== 'textValue';
+/** Whether `node` is the element `ns`:`name`. @internal */
 export const named = (node: OoxmlNode, ns: string, name: string): boolean =>
   element(node) && node.namespaceUri === ns && node.localName === name;
+/** The value of attribute `name` in namespace `ns` (none by default). @internal */
 export const attribute = (node: OoxmlElement, name: string, ns = '') =>
   node.attributes.find((a) => (a.namespaceUri ?? '') === ns && a.localName === name)?.value;
+/** The element children of `node`. @internal */
 export function children(node: OoxmlElement): OoxmlElement[] {
   const values: readonly OoxmlNode[] = node.children;
   return values.filter(element);
 }
+/** Whether a VML boolean is false (`f`, `false`, `0`). @internal */
 export const off = (value: string | undefined) => /^(f|false|0)$/i.test(value ?? '');
 export const escapeXml = (value: string) =>
   value.replace(
@@ -25,14 +32,21 @@ export const escapeXml = (value: string) =>
 export function vmlFraction(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;
   const trimmed = raw.trim();
+  // A 16.16 fixed-point value spans the signed 32-bit range, up to `2147483647f`.
+  if (/^-?\d{8,10}f$/.test(trimmed)) {
+    const fixed = Number(trimmed.slice(0, -1));
+    return Math.abs(fixed) <= 2_147_483_647 ? fixed / 65536 : NaN;
+  }
   if (!/^-?(?:\d{1,7}(?:\.\d{1,6})?|\.\d{1,6})f?$/.test(trimmed)) return NaN;
   return trimmed.endsWith('f') ? numeric(trimmed.slice(0, -1)) / 65536 : numeric(trimmed);
 }
+/** A plain decimal number, bounded; NaN when malformed. @internal */
 export function numeric(value: string | undefined): number {
   if (!/^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value ?? '')) return NaN;
   const n = Number(value);
   return Number.isFinite(n) && Math.abs(n) <= 1_000_000 ? n : NaN;
 }
+/** A VML length in points (`pt`, `in`, `cm`, `mm`, `px`); NaN when malformed. @internal */
 export function points(value: string | undefined): number {
   const match = value?.match(/^(-?(?:\d+(?:\.\d*)?|\.\d+))(pt|in|cm|mm|px)?$/i);
   if (!match) return NaN;
@@ -51,6 +65,28 @@ export function wrapDistancePoints(value: string): number {
   const scaled = points(match[1]! + (match[3] ?? '')) * 10 ** Number(match[2] ?? 0);
   return Number.isFinite(scaled) ? Math.max(0, scaled) : NaN;
 }
+/**
+ * VML rotation in degrees (`315`, `-45`, or `fd` sixty-five-thousandths). NaN when malformed.
+ *
+ * @internal
+ */
+export function legacyRotationDegrees(raw: string | undefined): number {
+  if (raw === undefined) return 0;
+  const value = raw.trim();
+  // `fd` is sixty-five-thousandths of a degree, so whole turns exceed the plain number bound.
+  // A bare `f` suffix is read the same way.
+  const fixed = /^(-?\d{1,10})fd?$/.exec(value);
+  const degrees = fixed ? Number(fixed[1]) / 65536 : numeric(value);
+  if (!Number.isFinite(degrees) || Math.abs(degrees) > 100_000) return NaN;
+  return ((degrees % 360) + 360) % 360;
+}
+
+/** A `coordorigin`: an omitted y is 0, as in `coordorigin="5689"`. */
+export function coordOrigin(value: string): [number, number] | null {
+  const single = /^\s*(-?\d+(?:\.\d+)?)\s*$/.exec(value);
+  return single ? [Number(single[1]), 0] : pair(value);
+}
+
 export function pair(value: string): [number, number] | null {
   const values = value
     .trim()
@@ -58,6 +94,7 @@ export function pair(value: string): [number, number] | null {
     .map(numeric);
   return values.length === 2 && values.every(Number.isFinite) ? (values as [number, number]) : null;
 }
+/** The declarations of a `style` attribute by lower-case name; null when malformed. @internal */
 export function styleOf(node: OoxmlElement): ReadonlyMap<string, string> | null {
   const styles = new Map<string, string>();
   for (const part of (attribute(node, 'style') ?? '').split(';')) {
@@ -71,6 +108,7 @@ export function styleOf(node: OoxmlElement): ReadonlyMap<string, string> | null 
   }
   return styles;
 }
+/** A VML colour as `#rrggbb`, `fallback` when absent; null when malformed. @internal */
 export function color(value: string | undefined, fallback: string): string | null {
   const input = value ?? fallback;
   // Anchor the color token so malformed suffixes cannot rescan each whitespace position.
@@ -105,17 +143,18 @@ const NAMED_COLORS: ReadonlyMap<string, string> = new Map([
 /**
  * Bound the complete input before doing any splitting, recursion or SVG allocation.
  *
- * `story` is a validated text-box story root inside the shape. It is ordinary WML content that
- * the story layout bounds by its own limits, so this graphic budget counts only its element.
+ * `stories` are the text-box story roots inside the shape, a group member's included. They are
+ * ordinary WML content that story layout bounds by its own limits, so this graphic budget
+ * counts only their elements.
  */
-export function boundedVml(node: OoxmlNode, story?: OoxmlNode): boolean {
+export function boundedVml(node: OoxmlNode, stories?: ReadonlySet<OoxmlNode>): boolean {
   const stack = [{ node, depth: 0 }];
   let visited = 0,
     characters = 0;
   while (stack.length) {
     const current = stack.pop()!;
     if (++visited > 512 || current.depth > 16) return false;
-    if (current.node === story) continue;
+    if (stories?.has(current.node)) continue;
     if (!element(current.node)) {
       if (current.node.value.trim()) return false;
       characters += current.node.value.length;
@@ -126,6 +165,9 @@ export function boundedVml(node: OoxmlNode, story?: OoxmlNode): boolean {
       )
         return false;
       for (const attr of current.node.attributes) {
+        // A packed copy of the drawing (`o:gfxdata`) is opaque and never read here or
+        // anywhere else, so it spends no part of the budget.
+        if (attr.localName === 'gfxdata' && attr.namespaceUri === OFFICE) continue;
         // Equation Editor stores opaque source metadata beside its preview.
         // Never parse or emit that metadata into SVG. It still counts against
         // the complete 64 KiB input budget below.

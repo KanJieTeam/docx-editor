@@ -21,6 +21,7 @@ import {
   forEachSemanticSpan,
   forEachSemanticStory,
   forEachSemanticDrawing,
+  compoundBorderStrokesForExtentPt,
   runBorderStrokesForLine,
   type BlockFragmentRecord,
   type LayoutBox,
@@ -63,6 +64,15 @@ const FAITHFUL_RULES: ReadonlySet<string> = new Set([
   'dotted',
   'double',
   'triple',
+  'thinThickSmallGap',
+  'thickThinSmallGap',
+  'thinThickThinSmallGap',
+  'thinThickMediumGap',
+  'thickThinMediumGap',
+  'thinThickThinMediumGap',
+  'thinThickLargeGap',
+  'thickThinLargeGap',
+  'thinThickThinLargeGap',
 ]);
 
 const DASHED_RULES = new Set([
@@ -124,6 +134,24 @@ function rule(
             width: horizontal ? box.width : third,
             height: horizontal ? third : box.height,
           },
+          colorHex,
+          'single',
+          x,
+          y,
+          height
+        )
+      )
+      .join('\n');
+  }
+  const horizontalBand = box.width >= box.height;
+  const strokes = compoundBorderStrokesForExtentPt(style, horizontalBand ? box.height : box.width);
+  if (strokes) {
+    return strokes
+      .map((stroke) =>
+        rule(
+          horizontalBand
+            ? { ...box, y: box.y + stroke.offsetPt, height: stroke.widthPt }
+            : { ...box, x: box.x + stroke.offsetPt, width: stroke.widthPt },
           colorHex,
           'single',
           x,

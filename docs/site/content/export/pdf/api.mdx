@@ -66,7 +66,7 @@ For both formats from one layout, see [Compare PDF and Markdown conversion](/doc
 | `maxPages` | `10000` | Maximum pages; integer from `1` to `10000`. Checked after layout, before PDF painting. |
 | `maxOutputBytes` | `67108864` | Maximum encoded bytes; integer from `1` to `67108864`. Checked after encoding. |
 | `imageDecodePort` | Bounded built-in decoder | Supply image metadata through Core's decoder interface. |
-| `convertPreservedImage` | — | Convert a preserved image format through Core's converter interface. |
+| `convertPreservedImage` | Built-in TIFF conversion | Convert a preserved image format through Core's converter interface. A supplied converter replaces the built-in TIFF conversion. |
 
 Resource and font deadlines must be positive, finite numbers no greater than `2147483647`. The conversion deadline also applies during those phases.
 
@@ -107,6 +107,16 @@ Each `font-origin-failed` diagnostic identifies one failed source through `origi
 `incomplete-font` identifies incomplete coverage or substituted face variants within a family. It has `information` severity; `fontPolicy: 'strict'` independently rejects the font failure.
 
 `font-substitution` reports generic substitutes that can change pagination. Other codes identify limitations such as `equation-fallback`, `image-clip`, or `core-*` source omissions.
+
+Drawings report these codes. With the default `fidelityPolicy: 'strict'`, a diagnostic of `approximation` or `unsupported` severity rejects the export with `PdfFidelityError`. Strict mode rejects only what the converter reports. Drawing effects that do not paint, such as lit bevel faces, skewed reflections, and picture artistic effects, are not reported; for the list, see [What renders](/docs/2.x/pro/drawing#what-renders). Use `'best-effort'` to keep the rest of the document.
+
+| Code | Severity | Meaning |
+| --- | --- | --- |
+| `drawing` | `unsupported` | A chart, SmartArt diagram, WordArt, or other drawing cannot render and is left out. The message names the kind, such as `Unsupported drawing: chart`, and `pageNumber` gives its page. A shape group left out of alternative content because its picture cannot embed reports `drawing` at `information` severity. |
+| `metafile-limit` | `unsupported` | An EMF or WMF picture stopped drawing at a resource bound. |
+| `metafile-image` | `unsupported` | An image inside an EMF or WMF picture could not be decoded and is left out. |
+| `metafile-text` | `unsupported` | Text inside an EMF or WMF picture could not be shaped and is left out. |
+| `metafile-font` | `information` | An EMF or WMF picture names a font that the document does not use; its text uses the default font. |
 
 Handle unknown diagnostic codes by severity; the set can grow. Use messages for display, not program control.
 

@@ -1,5 +1,5 @@
-import { objectPreviewFrameReader } from './legacy-object-context.ts';
 import { stylesPartOf } from './ooxml-indexes.ts';
+import type { DrawingChartSummary } from './chart-summary.ts';
 import { projectLegacyVml, type LegacyGraphicProjection } from './legacy-vml-projection.ts';
 import { paintableMcFallback } from './mc-fallback-projection.ts';
 // Bounded semantic projection for typed `w:drawing` nodes and run-level MC wrappers (task 3).
@@ -12,12 +12,11 @@ import { readDistances } from './drawing-distances.ts';
 import { readBlipEffects, type DrawingImageEffects } from './drawing-image-effects.ts';
 import { freezeVectorShapeComponent } from './drawing-vector-freeze.ts';
 import { wrapFootprintProjection } from './drawing-wrap-footprint.ts';
-import { groupTextboxesField, hostsTextboxStory } from './group-textbox-projection.ts';
+import { hostsTextboxStory } from './group-textbox-projection.ts';
 import type { GroupTextboxProjection } from './group-textbox-projection.ts';
 import { HYPERLINK_RELATIONSHIP_TYPE, type RelationshipTargetResolver } from './hyperlink.ts';
 import { resolveRelationship } from './relationships.ts';
 import {
-  DRAWING_WRAP_POLYGON_MAX_POINTS,
   MAX_XML_DEPTH,
   ST_COORDINATE_MAX,
   ST_COORDINATE_MIN,
@@ -39,6 +38,7 @@ import {
   type DrawingProjectionLimits,
   type WalkState,
 } from './drawing-projection-walk.ts';
+import { readWrapPolygon as readPolygon } from './drawing-wrap-polygon.ts';
 import {
   MC_NAMESPACE_URI,
   RELATIONSHIPS_NAMESPACE_URI,
@@ -57,18 +57,17 @@ import {
 } from './ooxml-tree.ts';
 import { readEffectExtentFromNode, readExtent } from './drawing-anchor-extent.ts';
 import {
-  groupVectorMembersAreBounded,
-  readGroupPicture,
+  withAlternateContentGroupPictures,
   type GroupPictureProjection,
 } from './drawing-group-picture.ts';
+import { createDiagramPartResolver, type DiagramPartResolver } from './diagram-parts.ts';
+import { projectDrawingContent, withPictureClip } from './drawing-content-projection.ts';
 import { parseCropPercent } from './drawing-shape-readers.ts';
 import type { OoxmlPackage } from './ooxml-package.ts';
 import { createPackageShapeThemeResolvers } from './theme-color-resolution.ts';
 import {
   findDirectChild,
   parseEmu,
-  projectTextboxStory,
-  projectVectorShape,
   type ShapeSchemeColorResolver,
   type ShapeStyleMatrixResolver,
   type TextboxStoryProjection,
@@ -232,13 +231,22 @@ export interface DrawingProjection {
   readonly vectorShape: VectorShapeProjection | null;
   /** The picture member of a `wpg:wgp` group; `picture` stays null for a group. */
   readonly groupPicture: GroupPictureProjection | null;
+  /**
+   * The group's other picture members, in document order. Each paints above `groupPicture`
+   * and the ones before it, and below `vectorShape`. Absent when the group has one picture.
+   */
+  readonly groupPictureLayers?: readonly GroupPictureProjection[];
   readonly textboxStory: TextboxStoryProjection | null;
   /** Text box members of a `wpg:wgp` group, laid out read-only; absent when none has text. */
   readonly groupTextboxes?: readonly GroupTextboxProjection[];
+  /** The title and plot types of a chart that does not paint. */
+  readonly chartSummary?: DrawingChartSummary;
   /** Read-only preview of the supported native VML subset; the canonical XML is untouched. */
   readonly legacyGraphic?: LegacyGraphicProjection;
   /** Floating VML text art (a text watermark), fitted to the box by layout. */
   readonly textArt?: import('./legacy-vml-text-art.ts').LegacyTextArtProjection;
+  /** A horizontal rule; layout widens it to its line and gives it its `vectorShape`. */
+  readonly horizontalRule?: import('./legacy-vml-rule.ts').HorizontalRuleProjection;
   readonly locks: DrawingLocks;
   readonly effects: DrawingImageEffects;
   readonly compatibilityBranchNodeId: string | null;
@@ -285,6 +293,10 @@ export interface PictureProjection {
   readonly fillMode: 'stretch' | 'tile';
   readonly transform: DrawingTransform;
   readonly presetGeometry: string | null;
+  /** The clip ring of non-rectangular geometry, in the unit square of the extent. */
+  readonly clipUnit?: readonly Readonly<{ x: number; y: number }>[];
+  /** Effects that change how the picture itself paints: a reflection, soft edges. */
+  readonly frameEffects?: import('./drawing-picture-frame.ts').PictureFrameEffects;
 }
 
 export const DEFAULT_DRAWING_PROJECTION_LIMITS: DrawingProjectionLimits = Object.freeze({
@@ -309,6 +321,7 @@ export const DEFAULT_SUPPORTED_MC_REQUIRES: ReadonlySet<string> = new Set([
   // solid-geometry subset and placeholders the rest, so the Choice branch is understood.
   'http://schemas.microsoft.com/office/word/2010/wordprocessingShape',
   'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup',
+  'http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas',
 ]);
 
 const PIC_GRAPHIC_DATA_URI = 'http://schemas.openxmlformats.org/drawingml/2006/picture';
@@ -335,6 +348,7 @@ interface ProjectionContext {
   readonly resolveRelationship?: RelationshipTargetResolver;
   readonly resolveSchemeColor?: ShapeSchemeColorResolver;
   readonly resolveStyleMatrixReference?: ShapeStyleMatrixResolver;
+  readonly resolveDiagramParts?: DiagramPartResolver;
 }
 
 /** Resolve `(ownerPartName, r:id)` against a package's relationship records. */
@@ -840,63 +854,6 @@ function readPosition(
   });
 }
 
-/** Signed ST_Coordinate for wp:wrapPolygon x/y — full schema range. */
-function parseWrapPolygonCoordinate(value: string | undefined): number | null {
-  if (value === undefined || !/^-?\d+$/.test(value)) return null;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed)) return null;
-  if (parsed < ST_COORDINATE_MIN || parsed > ST_COORDINATE_MAX) return null;
-  return parsed;
-}
-
-function readPolygon(
-  wrap: OoxmlElement,
-  state: WalkState,
-  nodeId: string
-): readonly Readonly<{ x: number; y: number }>[] {
-  const polygon = findDirectKind(wrap.children, 'drawingWrapPolygon');
-  if (!polygon) return Object.freeze([]);
-  let pointCount = 0;
-  for (const child of polygon.children) {
-    if (!isElement(child)) continue;
-    if (child.kind !== 'drawingWrapPolygonStart' && child.kind !== 'drawingWrapPolygonLineTo')
-      continue;
-    pointCount += 1;
-  }
-  if (pointCount > DRAWING_WRAP_POLYGON_MAX_POINTS) {
-    state.diagnostics.push({
-      code: 'wrap-polygon-over-limit',
-      nodeId,
-      detail: String(pointCount),
-    });
-    return Object.freeze([]);
-  }
-  const points: Readonly<{ x: number; y: number }>[] = [];
-  let malformed = false;
-  for (const child of polygon.children) {
-    if (!isElement(child)) continue;
-    if (child.kind !== 'drawingWrapPolygonStart' && child.kind !== 'drawingWrapPolygonLineTo') {
-      continue;
-    }
-    const x = parseWrapPolygonCoordinate(schemaAttributeValue(child.attributes, 'x'));
-    const y = parseWrapPolygonCoordinate(schemaAttributeValue(child.attributes, 'y'));
-    if (x === null || y === null) {
-      malformed = true;
-      continue;
-    }
-    points.push(Object.freeze({ x, y }));
-  }
-  if (malformed || points.length < 3) {
-    state.diagnostics.push({
-      code: 'wrap-polygon-malformed',
-      nodeId,
-      detail: malformed ? 'invalid-coordinate' : 'insufficient-points',
-    });
-    return Object.freeze([]);
-  }
-  return Object.freeze(points);
-}
-
 function wrapElementKind(wrap: OoxmlElement | null): DrawingWrapElement {
   switch (wrap?.kind) {
     case 'drawingWrapSquare':
@@ -1079,6 +1036,7 @@ function projectPicture(
   readonly relationshipId: string | null;
   readonly effects: DrawingImageEffects;
   readonly diagnostic: DrawingDiagnostic | null;
+  readonly element?: OoxmlElement;
 } {
   if (!visitNode(state, ctx.limits)) {
     return { picture: null, relationshipId: null, effects: EMPTY_EFFECTS, diagnostic: null };
@@ -1112,6 +1070,12 @@ function projectPicture(
         })
       : null);
   if (!data) {
+    // Non-picture payloads (charts, diagrams) stay generic; their URI names the placeholder.
+    const generic = findDirectChild(graphic.children, {
+      namespaceUri: DRAWINGML_MAIN_NAMESPACE_URI,
+      localName: 'graphicData',
+    });
+    const genericUri = generic ? schemaAttributeValue(generic.attributes, 'uri') : undefined;
     return {
       picture: null,
       relationshipId: null,
@@ -1119,7 +1083,8 @@ function projectPicture(
       diagnostic: {
         code: 'unsupported-graphic',
         nodeId: graphic.id,
-        detail: 'missing-graphic-data',
+        detail:
+          genericUri && genericUri !== PIC_GRAPHIC_DATA_URI ? genericUri : 'missing-graphic-data',
       },
     };
   }
@@ -1204,6 +1169,7 @@ function projectPicture(
     relationshipId,
     effects,
     diagnostic: null,
+    element: picture,
   };
 }
 
@@ -1371,20 +1337,7 @@ export function resolveRunLevelMcAtom(
   });
 }
 
-export function drawingAccessibility(projection: DrawingProjection): DrawingAccessibility {
-  const label =
-    projection.description.length > 0
-      ? projection.description
-      : projection.title.length > 0
-        ? projection.title
-        : null;
-  return Object.freeze({
-    // A wrap footprint reserves space only: no output paints, selects or exports it.
-    hidden: projection.hidden || projection.footprintOnly === true,
-    decorative: label === null,
-    label,
-  });
-}
+export { drawingAccessibility } from './drawing-accessibility.ts';
 
 type DrawingProjectionContext = Readonly<{
   ownerPartName: string;
@@ -1394,6 +1347,7 @@ type DrawingProjectionContext = Readonly<{
   resolveRelationship?: RelationshipTargetResolver;
   resolveSchemeColor?: ShapeSchemeColorResolver;
   resolveStyleMatrixReference?: ShapeStyleMatrixResolver;
+  resolveDiagramParts?: DiagramPartResolver;
 }>;
 
 /**
@@ -1413,6 +1367,7 @@ export function projectDrawing(
     resolveRelationship?: RelationshipTargetResolver;
     resolveSchemeColor?: ShapeSchemeColorResolver;
     resolveStyleMatrixReference?: ShapeStyleMatrixResolver;
+    resolveDiagramParts?: DiagramPartResolver;
   }>
 ): DrawingProjection | null {
   return projectDrawingWithState(drawing, context, createWalkState());
@@ -1431,6 +1386,7 @@ export function projectDrawingWithState(
     resolveRelationship: context.resolveRelationship,
     resolveSchemeColor: context.resolveSchemeColor,
     resolveStyleMatrixReference: context.resolveStyleMatrixReference,
+    resolveDiagramParts: context.resolveDiagramParts,
   };
   const namespaceScope = context.namespaceScope ?? emptyNamespaceScope();
   const compatibilityMode = isCompatibilityDrawing(drawing);
@@ -1523,33 +1479,14 @@ export function projectDrawingWithState(
           allowOverlap: anchorFlag('allowOverlap') ?? true,
         })
       : null;
-  const groupRead = pictureResult.picture
-    ? null
-    : readGroupPicture(anchor, extent, ctx.resolveStyleMatrixReference, ctx.resolveSchemeColor);
-  const vectorMembers = pictureResult.picture
-    ? null
-    : projectVectorShape(
-        anchor,
-        extent,
-        compatibilityMode,
-        ctx.resolveSchemeColor,
-        ctx.resolveStyleMatrixReference,
-        groupRead?.picture.memberNodeId
-      );
-  // A group paints whole or not at all: the picture needs every other member to paint too,
-  // inside the same bounds as the picture frame.
-  const groupAdmitted =
-    groupRead !== null &&
-    (vectorMembers
-      ? groupVectorMembersAreBounded(vectorMembers, extent)
-      : !groupRead.hasOtherMembers);
-  const groupPicture = groupAdmitted ? groupRead.picture : null;
-  const vectorShape = groupRead && !groupAdmitted ? null : vectorMembers;
-  const painted = { groupPicture, vectorShape };
-  const textboxStory = pictureResult.picture
-    ? null
-    : projectTextboxStory(anchor, extent, ctx.resolveSchemeColor, ctx.resolveStyleMatrixReference);
-  if ((vectorShape || groupPicture) && pictureResult.diagnostic) {
+  const content = projectDrawingContent(
+    anchor,
+    extent,
+    compatibilityMode,
+    pictureResult.picture ? (pictureResult.element ?? null) : null,
+    ctx
+  );
+  if (content.paints && pictureResult.diagnostic) {
     removeSupersededDrawingDiagnostic(state.diagnostics, pictureResult.diagnostic);
   }
   return freezeDrawingProjection(
@@ -1571,11 +1508,13 @@ export function projectDrawingWithState(
       wrapGeometry,
       position,
       anchor: anchorMeta,
-      picture: pictureResult.picture,
-      vectorShape,
-      groupPicture,
-      textboxStory,
-      ...groupTextboxesField(anchor, extent, { picture: pictureResult.picture, ...painted }, ctx),
+      picture: withPictureClip(pictureResult.picture, content),
+      vectorShape: content.vectorShape,
+      groupPicture: content.groupPicture,
+      ...(content.groupPictureLayers ? { groupPictureLayers: content.groupPictureLayers } : {}),
+      textboxStory: content.textboxStory,
+      ...(content.groupTextboxes ? { groupTextboxes: content.groupTextboxes } : {}),
+      ...(content.chartSummary ? { chartSummary: content.chartSummary } : {}),
       locks,
       effects: pictureResult.effects,
       compatibilityBranchNodeId: state.compatibilityBranchNodeId,
@@ -1595,6 +1534,7 @@ export function projectRunLevelMcDrawing(
     resolveRelationship?: RelationshipTargetResolver;
     resolveSchemeColor?: ShapeSchemeColorResolver;
     resolveStyleMatrixReference?: ShapeStyleMatrixResolver;
+    resolveDiagramParts?: DiagramPartResolver;
     /** Answer an anchored payload that cannot paint with its wrap footprint (layout index). */
     retainWrapFootprint?: boolean;
   }>
@@ -1626,11 +1566,7 @@ export function projectRunLevelMcDrawing(
     return context.retainWrapFootprint ? wrapFootprintProjection(projection) : null;
   }
   // Layout applies the same rule to a group picture whose resource fails.
-  if (projection.groupPicture) {
-    const groupPicture = Object.freeze({ ...projection.groupPicture, alternateContent: true });
-    return Object.freeze({ ...projection, groupPicture });
-  }
-  return projection;
+  return withAlternateContentGroupPictures(projection);
 }
 
 /**
@@ -1650,7 +1586,6 @@ interface PartCollectFrame {
   readonly depth: number;
   /** Text-box stories entered on the path to this node. */
   readonly storyDepth: number;
-  readonly framed?: boolean;
 }
 
 function collectDrawingsInPartBounded(
@@ -1663,7 +1598,6 @@ function collectDrawingsInPartBounded(
   const stack: PartCollectFrame[] = [
     { node: root, namespaceScope: emptyNamespaceScope(), depth: 0, storyDepth: 0 },
   ];
-  const hasFrame = objectPreviewFrameReader(ctx.stylesPart);
   let visited = 0;
   // A drawing that hosts a text box is not a leaf: its story is ordinary WML that can hold
   // pictures of its own, and those need projections (and atom ids) like any other run-level
@@ -1691,7 +1625,6 @@ function collectDrawingsInPartBounded(
         namespaceScope: scope,
         depth: frame.depth + 1,
         storyDepth: frame.storyDepth + 1,
-        framed: frame.framed || hasFrame(frame.node),
       });
     }
   };
@@ -1708,15 +1641,6 @@ function collectDrawingsInPartBounded(
 
     const scope = namespaceScopeForNode(frame.namespaceScope, frame.node);
 
-    const framed = frame.framed || hasFrame(frame.node);
-    // Unsupported frame geometry must not turn an embedded preview into ordinary flow.
-    // Its model atom remains present for every editing and offset reader.
-    if (
-      framed &&
-      frame.node.namespaceUri === WML_NAMESPACE_URI &&
-      frame.node.localName === 'object'
-    )
-      continue;
     const legacy = projectLegacyVml(frame.node, ownerPartName);
     if (legacy) {
       out.push(legacy);
@@ -1745,6 +1669,7 @@ function collectDrawingsInPartBounded(
         resolveRelationship: ctx.resolveRelationship,
         resolveSchemeColor: ctx.resolveSchemeColor,
         resolveStyleMatrixReference: ctx.resolveStyleMatrixReference,
+        resolveDiagramParts: ctx.resolveDiagramParts,
         retainWrapFootprint: atomIndex !== undefined,
       });
       if (projected) {
@@ -1772,7 +1697,6 @@ function collectDrawingsInPartBounded(
           namespaceScope: scope,
           depth: frame.depth + 1,
           storyDepth: frame.storyDepth,
-          framed,
         });
       }
     }
@@ -1791,6 +1715,7 @@ export function projectDrawingsInPart(
     resolveRelationship: context?.resolveRelationship,
     resolveSchemeColor: context?.resolveSchemeColor,
     resolveStyleMatrixReference: context?.resolveStyleMatrixReference,
+    resolveDiagramParts: context?.resolveDiagramParts,
   };
   const out: DrawingProjection[] = [];
   collectDrawingsInPartBounded(part.root, part.name, ctx, out);
@@ -1810,6 +1735,7 @@ export function indexInlineDrawingProjectionsInPart(
     resolveRelationship: context?.resolveRelationship,
     resolveSchemeColor: context?.resolveSchemeColor,
     resolveStyleMatrixReference: context?.resolveStyleMatrixReference,
+    resolveDiagramParts: context?.resolveDiagramParts,
   };
   const out: DrawingProjection[] = [];
   const atomIndex = new Map<string, DrawingProjection>();
@@ -1839,6 +1765,7 @@ export function projectDrawingsInPackage(
       resolveRelationship: createDrawingRelationshipResolver(pkg, partName),
       resolveSchemeColor: theme.resolveSchemeColor,
       resolveStyleMatrixReference: theme.resolveStyleMatrixReference,
+      resolveDiagramParts: createDiagramPartResolver(pkg, partName),
     });
     for (const projection of inPart) projections.push(projection);
   }

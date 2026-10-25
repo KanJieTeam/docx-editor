@@ -8,7 +8,9 @@ import {
 import type { InlineDrawingLayoutContext } from './drawing-layout.ts';
 import type { PendingLine } from './paragraph-flow.ts';
 import { holdsOnlyPageBreak } from './pending-line.ts';
+import { drawingModelOffsetsInParagraph } from './drawing-atom-walk.ts';
 import { marginInset } from './page-body-margins.ts';
+import { hasCompatibilityRule } from './compatibility/compatibility-rules.ts';
 import type { ParagraphBorders } from './paragraph-style.ts';
 import type { LayoutBox } from './semantic-records.ts';
 
@@ -30,6 +32,7 @@ interface BodyAnchorFrameInput {
   readonly contentWidth: number;
   readonly contentHeight: number;
   readonly ownerPartName: string;
+  readonly compatibilityMode?: number;
 }
 
 /** Build the drawing/table anchor facts for the current body sheet. */
@@ -51,6 +54,9 @@ export function bodyAnchorFrameBase(input: BodyAnchorFrameInput): BodyAnchorFram
     contentBandHeight: insets.height,
     ownerPartName: input.ownerPartName,
     storyKind: 'body',
+    ...(hasCompatibilityRule(input.compatibilityMode, 'wrappedAnchorsStayBelowTopMargin')
+      ? { wrappedParagraphAnchorsBelowContentTop: true }
+      : {}),
   });
 }
 
@@ -124,7 +130,9 @@ const lineFollowsBreak = (line: PendingLine): boolean =>
 export function opensWithPageBreak(
   entry: PaintableParagraph,
   lines: readonly PendingLine[],
-  drawingContext: InlineDrawingLayoutContext | undefined
+  drawingContext: InlineDrawingLayoutContext | undefined,
+  /** Admit a paragraph that holds only the page break: its line fits and stays at the page end. */
+  breakOnly = false
 ): boolean {
   const first = lines[0];
   return (
@@ -132,7 +140,8 @@ export function opensWithPageBreak(
     first.start === 0 &&
     (holdsOnlyColumnBreak(first) ||
       (holdsOnlyPageBreak(first) &&
-        lines.some((line, index) => index > 0 && lineFollowsBreak(line)))) &&
+        ((breakOnly && lines.length === 1) ||
+          lines.some((line, index) => index > 0 && lineFollowsBreak(line))))) &&
     !(drawingContext && anchoredDrawingAtomsInParagraph(entry.paragraph, drawingContext).length > 0)
   );
 }
@@ -154,4 +163,23 @@ export function atKeptBreakY(
   if (kept === undefined) return box;
   const height = Math.min(box.height, kept.clip.y + kept.clip.height - kept.y);
   return { ...box, y: kept.y, height: Math.max(height, 0) };
+}
+
+/**
+ * The model offsets of a paragraph's anchors, to publish with this fragment; null when the
+ * fragment ends at an explicit page break and every anchor comes after it. Those anchors
+ * belong with the text that follows the break and take their paragraph origin there.
+ */
+export function publishableAnchors(
+  paragraph: OoxmlElement,
+  lines: readonly PendingLine[],
+  fragment: readonly { readonly range: { readonly end: number } }[]
+): number[] | null {
+  const offsets = [...drawingModelOffsetsInParagraph(paragraph).values()];
+  const end = fragment[fragment.length - 1]?.range.end;
+  if (end === undefined || offsets.length === 0) return offsets;
+  const afterBreak =
+    lines.find((line) => line.end === end)?.pageBreakAfter === true &&
+    offsets.every((offset) => offset >= end);
+  return afterBreak ? null : offsets;
 }

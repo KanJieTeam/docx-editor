@@ -31,6 +31,8 @@ import {
   type LayoutDocumentViewOptions,
 } from '../layout/document-layout-coordinator.ts';
 import { createFixedMeasurer } from '../layout/fixed-measurer.ts';
+import { sniffImageMime } from '../store/package/image-resources.ts';
+import { IMAGE_RESOURCE_HARD_CEILINGS } from '../store/runtime/limits.ts';
 import { createInlineDrawingLayoutBundle } from '../layout/inline-drawing-source.ts';
 import { releasePageFieldProjectionState } from '../layout/field-page-furniture.ts';
 import { createParagraphLayoutCache } from '../layout/layout-cache.ts';
@@ -209,6 +211,16 @@ export interface ExportSession {
   validatedImageBytes(
     source: InlineDrawingRecord | AnchoredDrawingRecord | ListMarkerPictureRecord
   ): Uint8Array | null;
+  /**
+   * A defensive copy of the original bytes of an EMF or WMF picture that has no raster in this
+   * session, for an exporter that draws the metafile itself. Null for any other resource, and
+   * when the part's signature does not match the metafile format it claims.
+   *
+   * @internal
+   */
+  metafileBytes?(
+    source: InlineDrawingRecord | AnchoredDrawingRecord
+  ): { readonly mime: 'image/x-emf' | 'image/x-wmf'; readonly bytes: Uint8Array } | null;
   /**
    * Release per-document caches, pending resource work, and image-byte capabilities. Idempotent.
    * Previously resolved layout snapshots remain immutable and traversable after disposal.
@@ -720,6 +732,22 @@ export function openDocumentForExport(
           .mintValidatedBytes(source.resource.validatedHandle, source.resource.contentId)
           ?.slice() ?? null
       );
+    },
+    metafileBytes(source) {
+      const state = activeState;
+      const resource = source.resource;
+      if (!state || resource.kind !== 'unrenderable' || resource.partName === null) return null;
+      // Only a format refusal falls back to the vector replay; a resource-limit or signature
+      // refusal stays refused, so the replay never sees bytes the image pipeline turned away.
+      if (resource.reason !== 'unsupported-format' && resource.reason !== 'decode-failed') {
+        return null;
+      }
+      const mime = resource.mime;
+      if (mime !== 'image/x-emf' && mime !== 'image/x-wmf') return null;
+      const bytes = state.view.currentPackage().partBytes.get(resource.partName);
+      if (!bytes || bytes.byteLength > IMAGE_RESOURCE_HARD_CEILINGS.maxEncodedBytes) return null;
+      if (sniffImageMime(bytes) !== mime) return null;
+      return { mime, bytes: bytes.slice() };
     },
     dispose: disposeSession,
   };

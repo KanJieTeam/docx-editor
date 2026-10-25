@@ -15,6 +15,7 @@ import { textboxStoriesInPart } from '../package/textbox-stories.ts';
 import { paragraphLength } from '../store/tree-op-segments.ts';
 import { paragraphTextOf } from '../store/tree-ops.ts';
 import { TreeDocumentStore } from '../store/tree-store.ts';
+import { expectRefused } from './legacy-vml-refusal.ts';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const V = 'urn:schemas-microsoft-com:vml';
@@ -241,7 +242,7 @@ describe('drawings inside a VML text box story', () => {
 });
 
 describe('VML text box refusals', () => {
-  const refused = (content: string) => expect(projectDrawingsInPart(parse(content))).toEqual([]);
+  const refused = (content: string) => expectRefused(projectDrawingsInPart(parse(content)));
 
   test('unknown children, an extrusion, and malformed insets refuse the shape', () => {
     refused(floatingBox({ children: '<o:extrusion v:ext="view" on="t"/>' }));
@@ -299,7 +300,7 @@ describe('VML text box refusals', () => {
     expect(textOf(stories[0]!.root)).toBe('Modern');
   });
 
-  test('pictures and word art keep their existing projections', () => {
+  test('pictures keep their projection and word art needs its renderer', () => {
     const picture = only(
       parse(
         '<w:pict><v:shape style="width:72pt;height:36pt" type="#_x0000_t75"><v:imagedata r:id="rPhoto"/></v:shape></w:pict>'
@@ -307,27 +308,14 @@ describe('VML text box refusals', () => {
     );
     expect(picture.textboxStory).toBeNull();
     expect(picture.picture?.embeddedRelationshipId).toBe('rPhoto');
-    const art = only(
-      parse(
-        '<w:pict><v:shape type="#_x0000_t136" style="position:absolute;width:300pt;height:60pt;z-index:-1;' +
-          'mso-position-horizontal:center;mso-position-horizontal-relative:margin;' +
-          'mso-position-vertical:center;mso-position-vertical-relative:margin" fillcolor="silver" stroked="f">' +
-          '<v:textpath style="font-family:serif;font-size:1pt" string="Draft"/></v:shape></w:pict>'
-      )
+    // A floating text path outside a watermark needs the text art renderer; without it the
+    // drawing is refused (the renderer's own tests cover its projection).
+    const art = parse(
+      '<w:pict><v:shape type="#_x0000_t136" style="position:absolute;width:300pt;height:60pt" ' +
+        'fillcolor="silver" stroked="f"><v:textpath style="font-family:serif;font-size:1pt" ' +
+        'string="Draft"/></v:shape></w:pict>'
     );
-    expect(art.textboxStory).toBeNull();
-    // A floating text path projects its text for layout to fit, not a preview graphic.
-    expect(art.legacyGraphic).toBeUndefined();
-    expect(art.textArt).toMatchObject({ text: 'Draft', fontFamily: 'serif', fillHex: 'C0C0C0' });
-    expect(art.wrap).toBe('behind');
-    // A translucent watermark fill is part of the text art subset.
-    const translucent = only(
-      parse(
-        '<w:pict><v:shape type="#_x0000_t136" style="position:absolute;width:300pt;height:60pt" fillcolor="silver" stroked="f">' +
-          '<v:fill opacity=".5"/><v:textpath style="font-family:serif;font-size:1pt" string="Draft"/></v:shape></w:pict>'
-      )
-    );
-    expect(translucent.textArt?.fillAlpha).toBe(0.5);
+    expect(projectDrawingsInPart(art)).toEqual([]);
   });
 });
 
@@ -386,13 +374,33 @@ describe('VML lines and rectangles', () => {
     expect(component.arrowheadsEmu).toBeUndefined();
   });
 
-  test('a line without both points, inline, or flipped stays refused', () => {
+  test('a line without both points, or inline, stays refused', () => {
     for (const content of [
       '<w:pict><v:line style="position:absolute" from="0,0"/></w:pict>',
       '<w:pict><v:line style="width:10pt;height:10pt" from="0,0" to="10pt,10pt"/></w:pict>',
-      '<w:pict><v:line style="position:absolute;flip:x" from="0,0" to="10pt,10pt"/></w:pict>',
     ])
-      expect(projectDrawingsInPart(parse(content))).toEqual([]);
+      expectRefused(projectDrawingsInPart(parse(content)));
+  });
+
+  test('a flip mirrors a line inside the box its points span', () => {
+    const ends = (flip: string) =>
+      only(
+        parse(
+          `<w:pict><v:line style="position:absolute;${flip}" from="0,0" to="100pt,50pt"/></w:pict>`
+        )
+      ).vectorShape!.components[0]!.subpathsEmu[0]!.map((p) => [p.x / 12_700, p.y / 12_700]);
+    expect(ends('')).toEqual([
+      [0, 0],
+      [100, 50],
+    ]);
+    expect(ends('flip:x')).toEqual([
+      [100, 0],
+      [0, 50],
+    ]);
+    expect(ends('flip:y')).toEqual([
+      [0, 50],
+      [100, 0],
+    ]);
   });
 
   test('a rectangle with short hex and named colors paints', () => {
@@ -403,13 +411,20 @@ describe('VML lines and rectangles', () => {
           'fillcolor="#339" strokecolor="yellow"/></w:pict>'
       )
     );
-    // The outline's reach widens the graphic so the stroke stays inside its image.
+    // The outline's reach widens the drawing so the stroke stays inside its box.
     expect(projection.extentEmu).toEqual({ cx: 20.75 * EMU, cy: 10.75 * EMU });
-    expect(projection.legacyGraphic).toMatchObject({ width: 20.75, height: 10.75 });
+    expect(projection.vectorShape?.extentEmu).toEqual({ cx: 20.75 * EMU, cy: 10.75 * EMU });
     expect(projection.position?.horizontal.offsetEmu).toBe(Math.round(-0.375 * EMU));
-    expect(projection.legacyGraphic?.fragments[0]).toBe(
-      '<rect x="0.375" y="0.375" width="20" height="10" fill="#333399" stroke="#ffff00" stroke-width="0.75"/>'
-    );
+    expect(projection.vectorShape?.components[0]).toMatchObject({
+      fillHex: '333399',
+      strokeHex: 'FFFF00',
+      strokeWidthEmu: 0.75 * EMU,
+    });
+    const xs = projection.vectorShape!.components[0]!.subpathsEmu.flat().map((p) => p.x);
+    expect([Math.min(...xs), Math.max(...xs)]).toEqual([
+      Math.round(0.375 * EMU),
+      Math.round(20.375 * EMU),
+    ]);
   });
 
   test('an arrow on a closed shape does not widen it', () => {
@@ -429,11 +444,12 @@ describe('VML lines and rectangles', () => {
         '<w:pict><v:roundrect style="width:40pt;height:20pt" arcsize="0.5" fillcolor="red"/></w:pict>'
       )
     );
-    // The outline's reach widens the graphic so the stroke stays inside its image.
+    // The outline's reach widens the drawing so the stroke stays inside its box.
     expect(projection.extentEmu).toEqual({ cx: 40.75 * EMU, cy: 20.75 * EMU });
-    expect(projection.legacyGraphic?.fragments[0]).toContain(
-      '<rect x="0.375" y="0.375" width="40" height="20" rx="5" ry="5"'
-    );
+    const points = projection.vectorShape!.components[0]!.subpathsEmu.flat();
+    // A 5pt corner radius: the top edge starts 5pt in from the left side.
+    const top = points.filter((p) => Math.abs(p.y - 0.375 * EMU) <= 1).map((p) => p.x);
+    expect(Math.abs(Math.min(...top) - 5.375 * EMU)).toBeLessThanOrEqual(1);
   });
 });
 

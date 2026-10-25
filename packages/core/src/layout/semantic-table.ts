@@ -1,4 +1,5 @@
 import { cachedTableStructure } from './table-structure-cache.ts';
+import { hiddenRowCollapses } from './table-hidden-row.ts';
 import { tableHasHidableRevisions } from './table-revision-markup.ts';
 import { readConditionalCellBorders } from './conditional-cell-borders.ts';
 import {
@@ -89,6 +90,7 @@ import {
   DEFAULT_CELL_MARGINS,
   MAX_CELL_MARGIN_PT,
   mergeMargins,
+  raiseRowTopMargins,
   readMarginSides,
   type CellMarginsPt,
 } from './table-cell-margins.ts';
@@ -238,8 +240,6 @@ export interface SemanticTableCell {
   readonly contentBottomIsOuter?: boolean;
   /** Clearance this AUTHORED ROW reserves above its content for its own top rule, in points. */
   readonly topBandClearancePt?: number;
-  /** The CELL declares `w:tcBorders/w:top` as `nil`, rather than a table style doing so. */
-  readonly suppressesTopBand?: true;
   /** Row-local clearance in points for authored minima, before vMerge combines content boxes. */
   readonly minimumContentInsets?: { readonly top: number; readonly bottom: number };
   /** Validated 6-hex shading fill, absent for none/auto. */
@@ -559,7 +559,8 @@ function readTableStructureUncached(
         : displayMode;
     if (
       (projectedMode === 'proposed' && revisionKind === 'del') ||
-      (projectedMode === 'original' && revisionKind === 'ins')
+      (projectedMode === 'original' && revisionKind === 'ins') ||
+      hiddenRowCollapses(rowNode, properties, projectedMode, authorFilter)
     ) {
       hasOmittedRows = true;
       continue;
@@ -742,13 +743,13 @@ function readTableStructureUncached(
         margins: cellMargins,
         borders: mergeCellBorders(conditionalBorders, ownBorders),
         ...(rowTableBorders ? { rowTableBorders } : {}),
-        ...(ownBorders.top.state === 'none' ? { suppressesTopBand: true as const } : {}),
         ...(shading === undefined ? {} : { shading }),
         preferredWidth,
         styleFormatting: styleFormattingFor(conditions),
         blocks,
       });
     }
+    raiseRowTopMargins(cells);
     mergedAbove = mergedHere;
     cellsAbove = cells;
     const rowRevision = plan.revision;

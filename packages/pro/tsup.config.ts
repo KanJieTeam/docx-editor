@@ -25,6 +25,8 @@ const shared = {
     'y-protocols/awareness',
     'y-webrtc',
     '@hocuspocus/provider',
+    // Loaded on first use by the metafile renderer, never bundled.
+    'emf-converter',
   ],
 };
 
@@ -36,6 +38,7 @@ const REACT_ENTRIES = {
   'collaboration/index': 'src/collaboration/index.ts',
   'collaboration/webrtc': 'src/collaboration/webrtc.ts',
   'collaboration/hocuspocus': 'src/collaboration/hocuspocus.ts',
+  'drawing/index': 'src/drawing/index.ts',
 };
 
 const VUE_ENTRIES = {

@@ -223,6 +223,17 @@ export interface ModelRange {
 
 export type MutableModelRange = { start: number; end: number };
 
+/** The ranges overlapping `[start, end)`, clipped to it. */
+export function rangesWithin(
+  ranges: readonly ModelRange[],
+  start: number,
+  end: number
+): ModelRange[] {
+  return ranges
+    .filter((range) => range.start < end && range.end > start)
+    .map((range) => ({ start: Math.max(range.start, start), end: Math.min(range.end, end) }));
+}
+
 /**
  * A model range whose content a resolved view removed, with the revisions that removed it.
  *
@@ -396,6 +407,8 @@ export interface PieceEmitExtras {
  * `piecesOfParagraph`.
  */
 export interface PendingFieldProjection {
+  /** Set from the instruction: ASK and SET display no result. */
+  hidesResult?: boolean;
   hasNestedField?: boolean;
   characterStyleSpec?: import('./field-character-style.ts').CharacterStyleField | null;
   /** Allowlisted kind when live-projecting; null paints inert cached text at the atom. */

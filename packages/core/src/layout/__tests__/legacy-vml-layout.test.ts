@@ -1,4 +1,5 @@
-import { expect, test } from 'bun:test';
+import { isLegacyPlaceholder } from '../../store/__tests__/legacy-vml-refusal.ts';
+import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { strToU8, zipSync } from 'fflate';
 import { readOoxmlPackage } from '../../store/package/ooxml-package.ts';
 import {
@@ -15,10 +16,17 @@ import {
   anchoredDrawingAtomsInParagraph,
   drawingModelOffsetsInParagraph,
   lineLayoutAtoms,
+  type InlineDrawingLayoutContext,
 } from '../drawing-layout.ts';
 import { paragraphTextOf } from '../../store/store/tree-ops.ts';
 import { createFixedMeasurer, layoutSemanticDocument } from '../semantic-layout.ts';
 import { linesOf } from '../semantic-records.ts';
+import { buildStyleCascadeTable } from '../style-cascade.ts';
+import {
+  drawingRenderers,
+  installDrawingRenderers,
+} from '../../store/package/drawing-renderers.ts';
+import { legacyTextArt } from '../../store/package/legacy-vml-text-art.ts';
 import { MAX_INLINE_CONTAINER_DEPTH } from '../../store/package/ooxml-shared.ts';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -30,6 +38,12 @@ const metadata = {
   name: '/word/document.xml',
   contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml',
 };
+
+// The fixture drawing is WordArt, which projects through an installed text art renderer; the
+// engine's watermark reader stands in for it.
+const installed = drawingRenderers().legacyTextArt;
+beforeAll(() => installDrawingRenderers({ legacyTextArt }));
+afterAll(() => installDrawingRenderers({ legacyTextArt: installed }));
 
 function xml(text = 'Old', width = 120, floating = false): string {
   return `<w:document xmlns:w="${W}" xmlns:v="${V}"><w:body><w:p><w:r><w:t>A</w:t><w:pict><v:shape type="#_x0000_t136" style="width:${width}pt;height:30pt;${floating ? 'position:absolute;left:20pt;top:10pt;' : ''}" stroked="f"><v:textpath on="t" style="font-family:serif;font-size:24pt" string="${text}"/></v:shape></w:pict><w:t>Z</w:t></w:r></w:p></w:body></w:document>`;
@@ -47,6 +61,19 @@ function paragraphOf(part: OoxmlPart): OoxmlParagraphNode {
   const paragraph = body.children.find((n) => n.kind === 'paragraph');
   if (!paragraph || paragraph.kind !== 'paragraph') throw new Error('missing paragraph');
   return paragraph;
+}
+
+/** The context with every picture a metafile preview the exporter draws itself. */
+function withDrawablePreview(context: InlineDrawingLayoutContext): InlineDrawingLayoutContext {
+  return {
+    ...context,
+    resourceOf: () => ({
+      kind: 'unrenderable',
+      partName: '/word/media/preview.wmf',
+      mime: 'image/x-wmf',
+      reason: 'unsupported-format',
+    }),
+  };
 }
 
 function setup(source = xml()) {
@@ -280,7 +307,7 @@ test('direct vanish suppresses VML anchors and preserves existing DrawingML beha
   }
 });
 
-test('model-only WordArt text and geometry edits invalidate the drawing cache and preview', async () => {
+test('model-only WordArt text and geometry edits invalidate the drawing cache and projection', () => {
   const { reader, bundle, replace } = setup();
   try {
     const token = () => bundle.drawingTokenForParagraph(paragraphOf(reader.part()), metadata.name);
@@ -290,27 +317,16 @@ test('model-only WordArt text and geometry edits invalidate the drawing cache an
       if (!value) throw new Error('Expected drawing projection');
       return value;
     };
-    const preview = async () => {
-      let state = bundle.bodyContext.resourceOf(projection());
-      for (let attempt = 0; attempt < 20 && state.kind === 'pending'; attempt++) {
-        await Promise.resolve();
-        state = bundle.bodyContext.resourceOf(projection());
-      }
-      expect(state.kind).toBe('ready');
-      if (state.kind !== 'ready') throw new Error('Expected ready preview');
-      return new TextDecoder().decode(
-        bundle.mintValidatedBytes(state.validatedHandle, state.contentId)!
-      );
-    };
-    expect(await preview()).toContain('>Old</text>');
+    // WordArt on the line projects its text for layout to fit, as floating WordArt does.
+    expect(projection().textArt?.text).toBe('Old');
     const before = token();
     replace(xml('New'));
     expect(token()).not.toBe(before);
-    expect(await preview()).toContain('>New</text>');
+    expect(projection().textArt?.text).toBe('New');
     const afterText = token();
     replace(xml('New', 240));
     expect(token()).not.toBe(afterText);
-    expect(await preview()).toContain('viewBox="0 0 240 30"');
+    expect(projection().extentEmu.cx).toBe(240 * 12_700);
     const result = layoutSemanticDocument(reader.part(), 3, {
       measurer: createFixedMeasurer(6, 14),
       inlineDrawingLayout: bundle.bodyContext,
@@ -339,10 +355,13 @@ test('an outlined VML picture reserves its picture size plus the outline on each
   } finally {
     outlined.bundle.dispose();
   }
-  // One side is not a supported outline: the drawing stays refused, not drawn without it.
+  // One side is not a supported outline: the drawing stays refused, not drawn without it. It
+  // keeps its box on the line as a placeholder that paints nothing.
   const partial = setup(shape(['top']));
   try {
-    expect(drawingAtomIdentities(partial.reader.part())?.size ?? 0).toBe(0);
+    const ids = [...(drawingAtomIdentities(partial.reader.part())?.keys() ?? [])];
+    expect(ids).toHaveLength(1);
+    expect(isLegacyPlaceholder(partial.bundle.bodyContext.projectionForAtom!(ids[0]!)!)).toBe(true);
   } finally {
     partial.bundle.dispose();
   }
@@ -388,7 +407,7 @@ test('an embedded object reserves its cached preview height, as the same w:pict 
   expect(linked.tops[2]! - linked.tops[1]!).toBe(linked.tops[1]! - linked.tops[0]!);
 });
 
-test('framed object previews keep atom offsets without adding ordinary flow height', async () => {
+test('framed object previews keep atom offsets and draw out of the ordinary flow', async () => {
   const object =
     '<w:object><v:shape type="#_x0000_t75" style="width:52.5pt;height:56.25pt"><v:imagedata r:id="preview"/></v:shape></w:object>';
   const content = `<w:r><w:t>A</w:t>${object}<w:t>Z</w:t></w:r>`;
@@ -417,11 +436,13 @@ test('framed object previews keep atom offsets without adding ordinary flow heig
     const current = paragraphOf(reader.part());
     const layout = layoutSemanticDocument(reader.part(), 1, {
       measurer: createFixedMeasurer(6, 12),
-      inlineDrawingLayout: context,
+      inlineDrawingLayout: withDrawablePreview(context),
     });
     expect(paragraphTextOf(reader.part(), current.id)).toBe('A\uFFFCZ');
-    expect(linesOf(layout)[0]!.box.height).toBeLessThan(56.25);
-    expect(linesOf(layout)[0]!.drawings ?? []).toHaveLength(0);
+    // The frame takes the paragraph out of the flow and draws the preview inside it.
+    const fragment = layout.pages[0]!.fragments[0]!;
+    expect(fragment.kind === 'paragraph' && fragment.positionedFrame).toBeTruthy();
+    expect(linesOf(layout)[0]!.drawings).toHaveLength(1);
   } finally {
     bundle.dispose();
   }
@@ -433,15 +454,19 @@ test('inherited frame changes invalidate preview geometry without changing atom 
   const part = reader.part();
   const paragraph = paragraphOf(part);
   const atoms = drawingAtomIdentities(part)!;
+  let styleCascade: ReturnType<typeof buildStyleCascadeTable> | undefined;
   const draw = () =>
-    linesOf(
-      layoutSemanticDocument(reader.part(), 1, {
-        measurer: createFixedMeasurer(6, 12),
-        inlineDrawingLayout: bundle.bodyContext,
-      })
-    )[0]!;
+    layoutSemanticDocument(reader.part(), 1, {
+      measurer: createFixedMeasurer(6, 12),
+      inlineDrawingLayout: withDrawablePreview(bundle.bodyContext),
+      styleCascade,
+    }).pages[0]!.fragments[0]!;
+  const framed = () => {
+    const fragment = draw();
+    return fragment.kind === 'paragraph' && fragment.positionedFrame !== undefined;
+  };
   try {
-    expect(draw().box.height).toBeGreaterThan(56.25);
+    expect(framed()).toBe(false);
     for (const frame of [true, false, true]) {
       const read = readOoxmlPart(
         `<w:styles xmlns:w="${W}"><w:style w:type="paragraph" w:styleId="Child"><w:basedOn w:val="Base"/></w:style><w:style w:type="paragraph" w:styleId="Base"><w:pPr>${frame ? '<w:framePr w:y="-854" w:vAnchor="text"/>' : ''}</w:pPr></w:style></w:styles>`,
@@ -452,10 +477,11 @@ test('inherited frame changes invalidate preview geometry without changing atom 
       );
       if (!read.ok) throw new Error(read.reason);
       setPart(read.part);
+      styleCascade = buildStyleCascadeTable(read.part.root);
       expect(reader.part()).toBe(part);
       expect(drawingAtomIdentities(part)).toBe(atoms);
       expect(paragraphTextOf(part, paragraph.id)).toBe('A\uFFFCZ');
-      expect(draw().box.height > 56.25).toBe(!frame);
+      expect(framed()).toBe(frame);
     }
   } finally {
     bundle.dispose();

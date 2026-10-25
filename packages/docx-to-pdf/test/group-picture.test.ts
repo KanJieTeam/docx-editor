@@ -15,8 +15,8 @@ const PNG_1X1 = Uint8Array.from(
   ),
   (c) => c.charCodeAt(0)
 );
-const GIF_1X1 = Uint8Array.from(
-  atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'),
+const BMP_1X1 = Uint8Array.from(
+  atob('Qk06AAAAAAAAADYAAAAoAAAAAQAAAAEAAAABABgAAAAAAAQAAAATCwAAEwsAAAAAAAAAAAAA////AA=='),
   (c) => c.charCodeAt(0)
 );
 const IMAGE_RELATIONSHIP =
@@ -49,16 +49,16 @@ interface GroupInput {
   readonly bodyLines?: number;
 }
 
-/** Move the picture to a valid GIF part: ready in the editor, but not embeddable in PDF. */
-function withGifPicture(bytes: Uint8Array): Uint8Array {
+/** Move the picture to a valid BMP part: ready in the editor, but not embeddable in PDF. */
+function withBmpPicture(bytes: Uint8Array): Uint8Array {
   const files = unzipSync(bytes);
   delete files['word/media/image1.png'];
-  files['word/media/image1.gif'] = GIF_1X1;
+  files['word/media/image1.bmp'] = BMP_1X1;
   const rels = strFromU8(files['word/_rels/document.xml.rels']!);
-  files['word/_rels/document.xml.rels'] = strToU8(rels.replace('image1.png', 'image1.gif'));
+  files['word/_rels/document.xml.rels'] = strToU8(rels.replace('image1.png', 'image1.bmp'));
   const types = strFromU8(files['[Content_Types].xml']!);
   files['[Content_Types].xml'] = strToU8(
-    types.replace('<Default', '<Default Extension="gif" ContentType="image/gif"/><Default')
+    types.replace('<Default', '<Default Extension="bmp" ContentType="image/bmp"/><Default')
   );
   return zipSync(files);
 }
@@ -146,9 +146,48 @@ test('a group with only a picture paints it at its offset inside the group', asy
   expect(commands).toMatch(/100 0 0 50 72 620 cm \/Im\d+ Do Q/);
 });
 
-test('a group with two pictures still exports no image', async () => {
-  const { imageCount } = await pageCommands(input(pictureMember(0) + pictureMember(635000)));
+const PLAIN_TEXTBOX_MEMBER =
+  '<wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr><a:xfrm><a:off x="0" y="1905000"/>' +
+  '<a:ext cx="1270000" cy="635000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>' +
+  '<a:noFill/><a:ln><a:noFill/></a:ln></wps:spPr><wps:txbx><w:txbxContent><w:p><w:r>' +
+  '<w:t>Label</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp>';
+
+test('a group with two pictures paints both in order, with their crops, under the vector members', async () => {
+  const cropped = pictureMember(
+    635000,
+    0,
+    '<a:blip r:embed="rIdImg2"/><a:srcRect t="20000" b="5000"/>'
+  );
+  const bytes = input(PLAIN_TEXTBOX_MEMBER + pictureMember(0) + cropped + BAR_MEMBER, {
+    relationships:
+      `<Relationship Id="rIdImg" Type="${IMAGE_RELATIONSHIP}" Target="media/image1.png"/>` +
+      `<Relationship Id="rIdImg2" Type="${IMAGE_RELATIONSHIP}" Target="media/image1.png"/>`,
+  });
+  const { imageCount, commands } = await pageCommands(bytes);
+  expect(imageCount).toBe(1);
+  // The first picture fills its 100pt x 50pt member at the top of the group.
+  const first = commands.search(/100 0 0 50 72 670 cm \/Im\d+ Do Q/);
+  // The second sits 50pt lower. Its 20% top and 5% bottom crop stretch the image to
+  // 50 / 0.75 points and move it down by 5% of that height.
+  const second = commands.search(/100 0 0 66\.66\d* 72 616\.66\d* cm \/Im\d+ Do Q/);
+  const bar = commands.indexOf('1 0 0 rg');
+  expect(first).toBeGreaterThan(-1);
+  expect(second).toBeGreaterThan(first);
+  expect(bar).toBeGreaterThan(second);
+  // The text box member keeps its text.
+  expect(commands).toContain('/ActualText <FEFF004c006100620065006c>');
+});
+
+test('an MC-wrapped group whose second picture is missing exports without the group', async () => {
+  const second = pictureMember(635000, 0, '<a:blip r:embed="rIdMissing"/>');
+  const bytes = input(pictureMember(0) + second + BAR_MEMBER, {
+    relationships:
+      `<Relationship Id="rIdImg" Type="${IMAGE_RELATIONSHIP}" Target="media/image1.png"/>` +
+      `<Relationship Id="rIdMissing" Type="${IMAGE_RELATIONSHIP}" Target="media/none.png"/>`,
+  });
+  const { imageCount, commands } = await pageCommands(bytes);
   expect(imageCount).toBe(0);
+  expect(commands).not.toContain('1 0 0 rg');
 });
 
 const LINKED = {
@@ -178,10 +217,10 @@ test('an MC-wrapped group with a picture PDF cannot embed is left out with a not
   const notice = {
     code: 'drawing',
     severity: 'information' as const,
-    message: 'Shape group left out: picture format not embeddable: image/gif',
+    message: 'Shape group left out: picture format not embeddable: image/bmp',
   };
   for (const members of [pictureMember(0), pictureMember(0) + BAR_MEMBER]) {
-    const { imageCount, commands } = await pageCommands(withGifPicture(input(members)), 'strict', [
+    const { imageCount, commands } = await pageCommands(withBmpPicture(input(members)), 'strict', [
       notice,
     ]);
     expect(imageCount).toBe(0);
@@ -194,7 +233,7 @@ test('a bare group whose picture cannot paint is refused as a whole', async () =
     input(pictureMember(0) + BAR_MEMBER, { alternateContent: false, media });
   for (const [bare, message] of [
     [bareGroup(null), 'Image has no validated raster bytes'],
-    [withGifPicture(bareGroup()), 'Unsupported PDF image format: image/gif'],
+    [withBmpPicture(bareGroup()), 'Unsupported PDF image format: image/bmp'],
   ] as const) {
     const error = await exportPdf(bare, { useSystemFonts: false }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(PdfFidelityError);
@@ -228,7 +267,7 @@ test('a picture offset far outside the group exports under both policies', async
     alternateContent: false,
   });
   const { imageCount } = await pageCommands(bare, 'best-effort', [
-    { code: 'drawing', severity: 'unsupported', message: 'Unsupported drawing: graphic' },
+    { code: 'drawing', severity: 'unsupported', message: 'Unsupported drawing: group' },
   ]);
   expect(imageCount).toBe(0);
 });

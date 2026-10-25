@@ -13,5 +13,31 @@ export function freezeVectorShapeComponent(component: VectorShapeComponent): Vec
       ? { subpathsClosed: Object.freeze([...component.subpathsClosed]) }
       : {}),
     ...(component.arrowheadsEmu ? { arrowheadsEmu: freezePaths(component.arrowheadsEmu) } : {}),
+    ...(component.shadow ? { shadow: Object.freeze({ ...component.shadow }) } : {}),
+    ...(component.strokeDash ? { strokeDash: Object.freeze([...component.strokeDash]) } : {}),
+    ...(component.clipEmu ? { clipEmu: freezePaths(component.clipEmu) } : {}),
+    ...(component.fillPattern
+      ? {
+          fillPattern: Object.freeze({
+            rows: Object.freeze([...component.fillPattern.rows]),
+            foreground: Object.freeze({ ...component.fillPattern.foreground }),
+            background: Object.freeze({ ...component.fillPattern.background }),
+          }),
+        }
+      : {}),
+    ...(component.fillGradient
+      ? {
+          fillGradient: Object.freeze({
+            ...component.fillGradient,
+            stops: Object.freeze(
+              component.fillGradient.stops.map((stop) => Object.freeze({ ...stop }))
+            ),
+            coords: Object.freeze([...component.fillGradient.coords]),
+            matrix: Object.freeze([
+              ...component.fillGradient.matrix,
+            ]) as typeof component.fillGradient.matrix,
+          }),
+        }
+      : {}),
   });
 }

@@ -35,6 +35,7 @@ import type { RevisionAuthorFilter, RevisionDisplayMode } from './revision-proje
 import { flowBlocksInBox, type HostedStoryFlowDeps } from './semantic-table-layout.ts';
 import type { BlockFragmentRecord, TextMeasurer } from './semantic-records.ts';
 import type { StyleCascadeTable } from './style-cascade.ts';
+import { drawingTextCascade } from './drawing-text-cascade.ts';
 import { textboxStoryBlocks } from './story-roots.ts';
 import { fitTextboxFrame, textboxContentFrame } from './textbox-frame-layout.ts';
 import type { TextboxOutlineProjection } from '../store/package/legacy-vml-textbox-geometry.ts';
@@ -126,6 +127,13 @@ export interface TextboxStoryLayout {
   }>;
   /** True when layout hit a named bound and returned a truncated / empty story. */
   readonly fallbackReason?: TextboxStoryFallbackReason;
+  /** DrawingML shape text: lines past the box paint outside it, not clipped at the drawing. */
+  readonly overflowVisible?: true;
+  /**
+   * The drawing's `vectorShape` paints the box; the fill, outline and shadow fields here only
+   * describe it, and painters draw just the text.
+   */
+  readonly chromeByVector?: true;
   /**
    * Resource identities of the drawings the clip DROPPED, in flow order.
    *
@@ -147,6 +155,11 @@ export interface TextboxStoryLayoutOptions {
   readonly styleCascade?: StyleCascadeTable;
   readonly defaultTabStopPt?: number;
   readonly compatibilityMode?: number;
+  /**
+   * Widest box, in points, that unwrapped text may grow to: the host column. A longer line
+   * wraps at this width less the insets. Absent, unwrapped text grows to its widest line.
+   */
+  readonly maxUnwrappedBoxWidthPt?: number;
   /** Host story's page-field context; PAGE-family fields inside the story project against it. */
   readonly pageContext?: FieldPageContext;
   readonly displayMode?: RevisionDisplayMode;
@@ -584,6 +597,7 @@ export function layoutTextboxStory(
     ...(legacy?.outline ? { outline: legacy.outline } : {}),
     ...(legacy?.rotationDegrees ? { chromeRotationDegrees: legacy.rotationDegrees } : {}),
     ...(story.strokeCentered ? { strokeCentered: true as const } : {}),
+    ...(story.chromeByVector ? { chromeByVector: true as const } : {}),
     ...(story.strokeCap && story.strokeHex !== null ? { strokeCap: story.strokeCap } : {}),
     ...(story.strokeDash && story.strokeHex !== null
       ? { strokeDashPt: dashLengths(story.strokeDash, strokeWidthPt, story.strokeCap) }
@@ -619,6 +633,10 @@ export function layoutTextboxStory(
     };
   }
 
+  // Lowered DrawingML text lays out under its own cascade: no document styles or defaults.
+  const styleCascade = story.drawingText
+    ? drawingTextCascade(options.styleCascade)
+    : options.styleCascade;
   const blocks: readonly OoxmlElement[] = textboxStoryBlocks(
     story.content,
     options.displayMode,
@@ -627,7 +645,7 @@ export function layoutTextboxStory(
   const listItems = textboxStoryListItems(
     story.content,
     options.numberingIndex,
-    options.styleCascade,
+    styleCascade,
     options.displayMode,
     options.revisionAuthorFilter
   );
@@ -642,7 +660,7 @@ export function layoutTextboxStory(
       cache: options.cache,
       producer: `${withFieldResultsProducer(options.producer)}${options.showFieldCodes ? '|field-codes' : ''}|txbx:${projection.drawingNodeId}`,
       nextLineId: () => `${prefix}-line-${lineCounter++}`,
-      styleCascade: options.styleCascade,
+      styleCascade,
       ...(listItems ? { listItems } : {}),
       ...(options.pageContext ? { pageContext: options.pageContext } : {}),
       ...(options.documentProperties ? { documentProperties: options.documentProperties } : {}),
@@ -684,7 +702,14 @@ export function layoutTextboxStory(
     !(legacy && legacy.rotationDegrees !== 0);
   let contentWidth = extentContentWidth;
   let flow = flowAt(noWrap ? UNWRAPPED_MEASURE_PT : contentWidth);
-  const unwrappedWidth = noWrap ? widestLineWidth(flow.blocks) : 0;
+  const widestUnwrapped = noWrap ? widestLineWidth(flow.blocks) : 0;
+  const unwrappedWidth =
+    options.maxUnwrappedBoxWidthPt === undefined
+      ? widestUnwrapped
+      : Math.min(
+          widestUnwrapped,
+          Math.max(1, options.maxUnwrappedBoxWidthPt - insetLeft - insetRight)
+        );
   if (unwrappedWidth > 0) {
     contentWidth = unwrappedWidth;
     flow = flowAt(contentWidth);
@@ -744,7 +769,9 @@ export function layoutTextboxStory(
 
   // Word clips overflow at the box. Keep fragments that START inside the content height so a
   // partially visible line still paints (the container clips precisely); drop fully-below ones.
-  if (fit === undefined && flowHeight > contentHeight + 0.001) {
+  // DrawingML shape text does not clip: lines past the box keep painting around it.
+  const overflows = story.drawingText === true;
+  if (fit === undefined && !overflows && flowHeight > contentHeight + 0.001) {
     const kept = fragments.filter((fragment) => fragment.box.y < contentHeight - 0.001);
     if (kept.length < fragments.length) {
       collectDrawingResourceTokens(
@@ -758,7 +785,12 @@ export function layoutTextboxStory(
 
   // Vertical anchoring positions the flowed content inside the box; overflow pins to the top
   // (offsets never go negative, matching Word's clip-from-top behaviour).
-  const slack = fit === undefined ? Math.max(0, contentHeight - flowHeight) : 0;
+  const slack =
+    fit === undefined
+      ? overflows
+        ? contentHeight - flowHeight
+        : Math.max(0, contentHeight - flowHeight)
+      : 0;
   const anchorOffset =
     story.verticalAnchor === 'center' ? slack / 2 : story.verticalAnchor === 'bottom' ? slack : 0;
 
@@ -769,6 +801,10 @@ export function layoutTextboxStory(
       ? { x: fit.frame.x, y: fit.frame.y }
       : { x: frame.x, y: frame.y + anchorOffset },
     ...chrome,
+    // An overflowing DrawingML story reports the box its lines cover, so paint keeps them.
+    ...(overflows && fit === undefined
+      ? { contentHeight: Math.max(contentHeight, flowHeight), overflowVisible: true as const }
+      : {}),
     contentWidth,
     ...(unwrappedWidth > 0 ? { extentWidth: unwrappedWidth + insetLeft + insetRight } : {}),
     ...(fit

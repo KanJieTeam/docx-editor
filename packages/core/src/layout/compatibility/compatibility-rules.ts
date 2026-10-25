@@ -115,9 +115,25 @@ export const MODE_RULES = {
     'Note reference bands in table rows honor cell widow control and keep-lines cuts',
     'ECMA-376 Part 1 §17.11 Footnotes and Endnotes'
   ),
+  openingColumnBreakTakesNoLine: legacy(
+    'A column break that opens a paragraph leaves no line in the column it ends',
+    'ECMA-376 Part 1 §17.3.3.1 br'
+  ),
+  inlineObjectStaysBesideFloat: legacy(
+    'An inline object that opens its line stays on it beside a float even when it is wider than the gap there, and runs past the margin or over the float. In modern modes it moves below the float',
+    'ECMA-376 Part 1 §20.4.2.3 anchor'
+  ),
+  leftTabStopsPastMargin: legacy(
+    'A custom left tab stop past the margin is honoured, and the text after it may run past the margin. In modern modes the stop reaches the margin and its text wraps there',
+    'ECMA-376 Part 1 §17.3.1.37 tabs'
+  ),
   oversizedRowKeepGroupReleases: legacy(
     'A kept row group that exceeds a fresh page starts beside preceding content, except directly below authored headers',
     'ECMA-376 Part 1 §17.3.1.15 keepNext'
+  ),
+  wrapIgnoresMultipleSpacingExtra: modern(
+    'A wrap band moves a line only where it crosses the text or picture of the line, not the extra space an auto line-spacing multiple adds below it',
+    'ECMA-376 Part 1 §17.3.1.33 spacing'
   ),
   positionedTableBreaksAtMargin: modern(
     'A page- or margin-positioned table that breaks ends its first fragment at the bottom margin, not the page edge',
@@ -142,6 +158,10 @@ export const MODE_RULES = {
   vMergeTextMovesPastHeadRow: modern(
     'Merged cell text moves whole into the next row when the head row cannot hold it',
     'ECMA-376 Part 1 §17.4.84 vMerge'
+  ),
+  wrappedAnchorsStayBelowTopMargin: modern(
+    'A wrapping object positioned from its paragraph never starts above the top margin',
+    'ECMA-376 Part 1 §20.4.2.11 positionV'
   ),
 } as const satisfies Record<string, ModeRule>;
 
@@ -182,6 +202,12 @@ export const PROFILE_RULES = {
       const declared = p.settings.enableOpenTypeFeatures;
       return declared === 'ambiguous' ? false : (declared ?? p.modeClass === 'modern');
     },
+  },
+  pageBreakMarkOnNextPage: {
+    behavior:
+      'A paragraph mark after a page break takes a line at the top of the next page. Only legacy modes read the option',
+    source: 'ECMA-376 Part 4 §14.8.3 splitPgBreakAndParaMark',
+    applies: (p) => p.legacy.splitPgBreakAndParaMark === true && p.modeClass === 'legacy',
   },
   preserveExactLineBaseline: {
     behavior:

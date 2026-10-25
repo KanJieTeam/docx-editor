@@ -1,12 +1,18 @@
-// Floating VML text art (a text watermark) laid out for paint.
+// VML text art (a text watermark, or WordArt on the line) laid out for paint.
 //
 // The text path stretches the string's glyph ink to fill the shape box inside the VML default
-// text inset: 0.1in left and right, 0.05in top and bottom. Layout fits the outlines once, so
+// text inset: 0.1in left and right, 0.05in top and bottom. A trimmed text path (`trim`) fills
+// the whole box. Layout fits the outlines once, so
 // the screen and every exporter paint the same ink. The box is the unrotated shape; paint
 // turns it about its centre.
 import { DEFAULT_RUN_STYLE, type ResolvedRunStyle } from './run-style.ts';
+import { textArtOutline } from './text-art-outline.ts';
 import type { LayoutBox, TextMeasurer, TextOutline } from './semantic-records.ts';
 import type { LegacyTextArtProjection } from '../store/package/legacy-vml-text-art.ts';
+import type { VectorShapeComponent } from '../store/package/drawing-shape-projection.ts';
+import { drawingRenderers } from '../store/package/drawing-renderers.ts';
+import type { TextArtOutline } from '../store/package/text-art-layout-hook.ts';
+import type { TextboxOutlineProjection } from '../store/package/legacy-vml-textbox-geometry.ts';
 
 /** Size the string is measured and, without outlines, drawn at; the fit scales it to the box. */
 export const TEXT_ART_FONT_SIZE_PT = 100;
@@ -45,6 +51,13 @@ export interface DrawingTextArtRecord {
   readonly path: string | null;
   /** Null when the measurer could not bound the string's ink: nothing paints. */
   readonly fit: TextArtFit | null;
+  /**
+   * The geometry an installed text art layout drew, in EMU from the box's top-left corner,
+   * unrotated. When present, paint draws these in place of `path`.
+   */
+  readonly components?: readonly VectorShapeComponent[];
+  /** Box-local bounds of the components' ink in points, when it reaches past the box. */
+  readonly inkBounds?: Readonly<{ left: number; top: number; right: number; bottom: number }>;
 }
 
 /** The style the text is measured in. */
@@ -133,17 +146,20 @@ function fitTextArt(
   };
   const style = textArtRunStyle(textArt);
   const outlineOf = (runStyle: ResolvedRunStyle) =>
-    width > 0 && height > 0 ? usableOutline(measurer?.textOutline?.(textArt.text, runStyle)) : null;
+    width > 0 && height > 0
+      ? usableOutline(measurer && textArtOutline(textArt.text, runStyle, measurer))
+      : null;
   // A family no face resolves (a misspelled or garbled name) draws in the document's default
   // face, as a run of body text with that name does, rather than dropping the watermark.
+  const own = outlineOf(style);
   const outline =
-    outlineOf(style) ??
-    (style.fontFamily === null ? null : outlineOf({ ...style, fontFamily: null }));
+    own ?? (style.fontFamily === null ? null : outlineOf({ ...style, fontFamily: null }));
   const ink = outline?.ink;
   if (!outline || !ink) return Object.freeze({ ...base, path: null, fit: null });
-  // A box too small for the inset keeps its whole area for the ink.
-  const insetX = width > 4 * INSET_X_PT ? INSET_X_PT : 0;
-  const insetY = height > 4 * INSET_Y_PT ? INSET_Y_PT : 0;
+  const laidOut = rendererLayout(textArt, width, height, measurer, own !== null);
+  // A box too small for the inset keeps its whole area for the ink, and trimmed text fills it.
+  const insetX = !textArt.trim && width > 4 * INSET_X_PT ? INSET_X_PT : 0;
+  const insetY = !textArt.trim && height > 4 * INSET_Y_PT ? INSET_Y_PT : 0;
   const scaleX = (width - 2 * insetX) / (ink.right - ink.left);
   const scaleY = (height - 2 * insetY) / (ink.bottom - ink.top);
   const fit: TextArtFit = Object.freeze({
@@ -156,7 +172,39 @@ function fitTextArt(
     ...base,
     path: outline.path === null ? null : fittedPath(outline.path, fit),
     fit,
+    ...(laidOut
+      ? {
+          components: laidOut.components,
+          ...(laidOut.inkBounds ? { inkBounds: laidOut.inkBounds } : {}),
+        }
+      : {}),
   });
+}
+
+/**
+ * The installed text art layout's geometry for text art that carries renderer data, or null
+ * when none is installed, the projection carries none, or the layout declines it. `ownFace`
+ * says whether the text art's own face had outlines; otherwise the default face stands in.
+ */
+function rendererLayout(
+  textArt: LegacyTextArtProjection,
+  width: number,
+  height: number,
+  measurer: TextMeasurer | undefined,
+  ownFace: boolean
+) {
+  const layout = drawingRenderers().textArtLayout;
+  if (textArt.renderData === undefined || !layout || !measurer?.textOutline) return null;
+  const outline = (text: string, fontSizePt: number): TextArtOutline | null => {
+    if (!(fontSizePt > 0 && fontSizePt <= 10_000) || text.length > 4096) return null;
+    const style = { ...textArtRunStyle(textArt), fontSizePt };
+    const found = usableOutline(
+      textArtOutline(text, ownFace ? style : { ...style, fontFamily: null }, measurer)
+    );
+    return found && found.path !== null ? { path: found.path, ink: found.ink } : null;
+  };
+  const result = layout({ textArt, widthPt: width, heightPt: height, outline });
+  return result && result.components.length ? result : null;
 }
 
 /**
@@ -168,6 +216,7 @@ export function turnedTextboxBounds(
   story:
     | {
         readonly chromeRotationDegrees?: number;
+        readonly outline?: TextboxOutlineProjection;
         readonly strokeCentered?: true;
         readonly strokeHex: string | null;
         readonly strokeWidthPt: number;
@@ -177,16 +226,29 @@ export function turnedTextboxBounds(
     | undefined
 ): LayoutBox {
   if (!story) return bounds;
+  // An outline polygon can leave its box, as a callout's tail does.
+  let [left, top, right, bottom] = [0, 0, 1, 1];
+  if (story.outline?.kind === 'polygon') {
+    for (const subpath of story.outline.subpaths) {
+      for (const point of subpath) {
+        left = Math.min(left, point.x);
+        top = Math.min(top, point.y);
+        right = Math.max(right, point.x);
+        bottom = Math.max(bottom, point.y);
+      }
+    }
+  }
   const reach =
     story.strokeCentered && story.strokeHex !== null ? Math.max(0, story.strokeWidthPt) / 2 : 0;
-  const grown = reach
-    ? Object.freeze({
-        x: bounds.x - reach,
-        y: bounds.y - reach,
-        width: bounds.width + 2 * reach,
-        height: bounds.height + 2 * reach,
-      })
-    : bounds;
+  const grown =
+    reach || left < 0 || top < 0 || right > 1 || bottom > 1
+      ? Object.freeze({
+          x: bounds.x + left * bounds.width - reach,
+          y: bounds.y + top * bounds.height - reach,
+          width: (right - left) * bounds.width + 2 * reach,
+          height: (bottom - top) * bounds.height + 2 * reach,
+        })
+      : bounds;
   const degrees = story.chromeRotationDegrees;
   const turned = degrees ? rotatedBounds(grown, degrees) : grown;
   // A shadow repeats the shape at a page offset; the painted area holds both.
@@ -199,6 +261,45 @@ export function turnedTextboxBounds(
     y,
     width: turned.width + Math.abs(shadow.dx),
     height: turned.height + Math.abs(shadow.dy),
+  });
+}
+
+/**
+ * The paint bounds of text art in `box`: grown to the ink that reaches past the box, then
+ * turned about the box centre.
+ */
+export function textArtPaintBounds(box: LayoutBox, textArt: DrawingTextArtRecord): LayoutBox {
+  const ink = textArt.inkBounds;
+  if (!ink) return rotatedBounds(box, textArt.rotationDegrees);
+  const left = Math.min(0, ink.left),
+    top = Math.min(0, ink.top),
+    right = Math.max(box.width, ink.right),
+    bottom = Math.max(box.height, ink.bottom);
+  if (![left, top, right, bottom].every(Number.isFinite)) return box;
+  const radians = (textArt.rotationDegrees * Math.PI) / 180;
+  const cos = Math.cos(radians),
+    sin = Math.sin(radians);
+  const cx = box.width / 2,
+    cy = box.height / 2;
+  let [minX, minY, maxX, maxY] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const [x, y] of [
+    [left, top],
+    [right, top],
+    [right, bottom],
+    [left, bottom],
+  ] as const) {
+    const turnedX = cx + (x - cx) * cos - (y - cy) * sin,
+      turnedY = cy + (x - cx) * sin + (y - cy) * cos;
+    minX = Math.min(minX, turnedX);
+    maxX = Math.max(maxX, turnedX);
+    minY = Math.min(minY, turnedY);
+    maxY = Math.max(maxY, turnedY);
+  }
+  return Object.freeze({
+    x: box.x + minX,
+    y: box.y + minY,
+    width: maxX - minX,
+    height: maxY - minY,
   });
 }
 

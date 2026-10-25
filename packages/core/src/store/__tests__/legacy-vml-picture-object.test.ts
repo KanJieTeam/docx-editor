@@ -28,6 +28,7 @@ import {
   type OoxmlPart,
 } from '../package/ooxml-tree.ts';
 import { containsClipboardObject } from '../store/clipboard-object-policy.ts';
+import { expectRefused } from './legacy-vml-refusal.ts';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const V = 'urn:schemas-microsoft-com:vml';
@@ -163,7 +164,21 @@ describe('a picture with an embedded object beside it', () => {
     });
     expect(projection.legacyGraphic!.fragments).toHaveLength(1);
     expect(projection.legacyGraphic!.fragments[0]).toMatchObject({ relationshipId: 'rPreview' });
+    expect(projection.legacyGraphic!.soleImageRelationshipId).toBe('rPreview');
     expect(JSON.stringify(projection)).not.toContain('rOle');
+    // A cropped preview stays a composite: the crop lives in the generated graphic.
+    const cropped = projectDrawingsInPart(
+      parse(picture().replace('o:title=""', 'o:title="" croptop="0.25"'))
+    )[0]!;
+    expect(cropped.legacyGraphic!.soleImageRelationshipId).toBeUndefined();
+    // A sole preview picture keeps its colour adjustments, as a picture does.
+    const adjusted = projectDrawingsInPart(
+      parse(picture().replace('o:title=""', 'o:title="" gain="2147483647f" blacklevel="3932f"'))
+    )[0]!;
+    expect(adjusted.legacyGraphic!.soleImageRelationshipId).toBe('rPreview');
+    // The largest gain is full contrast; the black level lifts by twice its fraction.
+    expect(adjusted.effects.contrast).toBeCloseTo(100, 1);
+    expect(adjusted.effects.brightness).toBeCloseTo(12, 1);
     expect(serializeOoxmlPart(part)).toBe(before);
   });
 
@@ -194,7 +209,7 @@ describe('a picture with an embedded object beside it', () => {
     expect(projection.relationshipId).toBe('rPreview');
     expect(JSON.stringify(projection)).not.toContain('rExternal');
     expect(serializeOoxmlPart(part)).toContain('r:href="rExternal"');
-    expect(projectDrawingsInPart(parse(xml.replace('r:id="rPreview"', '')))).toHaveLength(0);
+    expectRefused(projectDrawingsInPart(parse(xml.replace('r:id="rPreview"', ''))));
   });
 
   test('never resolves the embedded part, and save keeps the object unchanged', () => {
@@ -234,7 +249,7 @@ describe('a picture with an embedded object beside it', () => {
     for (const sample of samples) {
       const part = parse(sample);
       expect(isLegacyVmlAtom(find(part.root, 'pict')!)).toBe(false);
-      expect(projectDrawingsInPart(part)).toHaveLength(0);
+      expectRefused(projectDrawingsInPart(part));
     }
   });
 });

@@ -18,6 +18,9 @@ export interface AbstractNumDefinition {
 export function activeReviewItem(items: readonly ReviewItem[], position: ReviewPosition, order: ReadonlyMap<string, number>): ReviewItem | null;
 
 // @public
+export type AffineMatrix = readonly [number, number, number, number, number, number];
+
+// @public
 export type AnchoredDrawingLayoutFallback = 'unresolvable-frame' | 'page-defer-exhausted';
 
 // @public (undocumented)
@@ -87,6 +90,9 @@ export interface AutofitFieldContext {
     readonly showFieldCodes?: boolean;
     readonly tocLinkStyleRanges?: TocLinkRanges;
 }
+
+// @internal
+export function automaticTextColor(background: string | null | undefined): 'FFFFFF' | null;
 
 // @public (undocumented)
 export type AutonumFieldKind = 'AUTONUM' | 'AUTONUMLGL' | 'AUTONUMOUT';
@@ -462,6 +468,15 @@ export interface CompoundBorderMetrics {
     readonly strokePt: number;
 }
 
+// @internal
+export interface CompoundBorderStroke {
+    readonly offsetPt: number;
+    readonly widthPt: number;
+}
+
+// @internal
+export function compoundBorderStrokesForExtentPt(val: string, extentPt: number): readonly CompoundBorderStroke[] | null;
+
 // @public
 export function computeDoubleBorderMetricsPt(widthPt: number): CompoundBorderMetrics;
 
@@ -816,6 +831,15 @@ export interface DrawingAccessibility {
     readonly label: string | null;
 }
 
+// @public
+export type DrawingChartPlotType = 'area' | 'area3D' | 'bar' | 'bar3D' | 'bubble' | 'doughnut' | 'line' | 'line3D' | 'ofPie' | 'pie' | 'pie3D' | 'radar' | 'scatter' | 'stock' | 'surface' | 'surface3D';
+
+// @public
+export interface DrawingChartSummary {
+    readonly plotTypes: readonly DrawingChartPlotType[];
+    readonly title: string | null;
+}
+
 // @public (undocumented)
 export type DrawingClipFallback = 'none' | 'unsupported-preset';
 
@@ -836,6 +860,18 @@ export interface DrawingGeometry {
     readonly paintBounds: LayoutBox;
     // (undocumented)
     readonly transformedCorners: readonly DrawingPoint[];
+}
+
+// @public
+export interface DrawingGroupPictureLayerRecord {
+    readonly crop: SourceCrop;
+    readonly frameUnit: Readonly<{
+        height: number;
+        width: number;
+        x: number;
+        y: number;
+    }>;
+    readonly resource: ImageResourceState;
 }
 
 // @public
@@ -886,6 +922,9 @@ export interface DrawingOverlayFrame {
     readonly y: number;
 }
 
+// @public
+export type DrawingPlaceholderKind = 'chart' | 'diagram' | 'shape' | 'group' | 'textbox' | 'canvas' | 'graphic';
+
 // @public (undocumented)
 export interface DrawingPoint {
     // (undocumented)
@@ -898,6 +937,7 @@ export interface DrawingPoint {
 export interface DrawingTextArtRecord {
     // (undocumented)
     readonly bold: boolean;
+    readonly components?: readonly VectorShapeComponent[];
     // (undocumented)
     readonly fillAlpha: number;
     readonly fillHex: string | null;
@@ -905,6 +945,12 @@ export interface DrawingTextArtRecord {
     // (undocumented)
     readonly fontFamily: string;
     readonly fontSizePt: number;
+    readonly inkBounds?: Readonly<{
+        bottom: number;
+        left: number;
+        right: number;
+        top: number;
+    }>;
     // (undocumented)
     readonly italic: boolean;
     readonly path: string | null;
@@ -1343,6 +1389,13 @@ export interface GlyphOutline {
 export function glyphSizeFactorOf(style: ResolvedRunStyle): number;
 
 // @public
+export interface GradientStop {
+    readonly alpha: number;
+    readonly hex: string;
+    readonly offset: number;
+}
+
+// @public
 export const GRAPHEME_SEGMENTER_LOCALE: 'und';
 
 // @public
@@ -1381,6 +1434,9 @@ export interface GraphemeWordSegmentRecord {
     // (undocumented)
     readonly wordLike: boolean;
 }
+
+// @internal
+export function groupPictureLayerDrawing<D extends InlineDrawingRecord | AnchoredDrawingRecord>(drawing: D, layer: DrawingGroupPictureLayerRecord): D;
 
 // @public
 export interface GroupTextboxStoryRecord {
@@ -1584,6 +1640,7 @@ export interface InlineDrawingRecord {
     // (undocumented)
     readonly baselineOffset: number;
     readonly bidiLevel?: number;
+    readonly chart?: DrawingChartSummary;
     // (undocumented)
     readonly crop: SourceCrop;
     // (undocumented)
@@ -1598,9 +1655,11 @@ export interface InlineDrawingRecord {
     readonly drawingNodeId: string;
     // (undocumented)
     readonly effects: DrawingImageEffects;
+    readonly frameEffects?: PictureFrameEffects;
     // (undocumented)
     readonly geometry: DrawingGeometry;
     readonly groupPicture?: DrawingGroupPictureRecord;
+    readonly groupPictureLayers?: readonly DrawingGroupPictureLayerRecord[];
     readonly groupTextboxStories?: readonly GroupTextboxStoryRecord[];
     // (undocumented)
     readonly height: number;
@@ -1615,12 +1674,13 @@ export interface InlineDrawingRecord {
     readonly paintBounds: LayoutBox;
     // (undocumented)
     readonly paragraphId: string;
-    readonly placeholderGraphicKind: string | null;
+    readonly placeholderGraphicKind: DrawingPlaceholderKind | null;
     // (undocumented)
     readonly resource: ImageResourceState;
     readonly revisions?: readonly RevisionAttribution[];
     // (undocumented)
     readonly start: number;
+    readonly textArt?: DrawingTextArtRecord;
     readonly textboxStory?: TextboxStoryLayout;
     // (undocumented)
     readonly transform: DrawingTransform;
@@ -2653,6 +2713,7 @@ export interface ParagraphFragmentRecord {
         readonly dropCapLines?: number;
         readonly groupId: string;
         readonly hSpace: number;
+        readonly pageFramed?: true;
         readonly sourceOrder: number;
         readonly vSpace: number;
         readonly wrap: 'auto' | 'around' | 'tight' | 'through' | 'none' | 'notBeside';
@@ -2760,11 +2821,15 @@ export function paragraphLayoutKey(inputs: ParagraphKeyInputs): ParagraphLayoutK
 
 // @public
 export interface ParagraphLineSpacing {
+    // @internal
+    readonly descentAnchored?: true;
     readonly gridPitch?: number;
     readonly preserveExactBaseline?: true;
     // (undocumented)
     readonly rule: LineSpacingRule;
     readonly value: number;
+    // @internal
+    readonly wrapsContentOnly?: true;
 }
 
 // @public
@@ -2828,6 +2893,12 @@ export function parseRefInstruction(raw: string): RefFieldSpec | null;
 
 // @public
 export function parseSectionProperties(sectPr: OoxmlNode | null | undefined): SectionProperties;
+
+// @public
+export interface PictureFrameEffects {
+    readonly reflection?: ShapeReflection;
+    readonly softEdgeEmu?: number;
+}
 
 // @public
 export interface PlacedCell {
@@ -3931,7 +4002,6 @@ export interface SemanticTableCell {
     readonly rowTableBorders?: TableBorderBox;
     readonly shading?: string;
     readonly styleFormatting: TableCellStyleFormatting;
-    readonly suppressesTopBand?: true;
     readonly textDirection: 'horizontal' | 'btLr';
     readonly topBandClearancePt?: number;
     readonly vAlign: CellVerticalAlign;
@@ -4020,6 +4090,12 @@ export const sha256FontBytes: (bytes: Uint8Array) => string;
 
 // @public
 export function shadingFillFromElement(shd: OoxmlElement | undefined): string | undefined;
+
+// @public
+export interface ShapeColor {
+    readonly alpha: number;
+    readonly hex: string;
+}
 
 // @public
 export interface ShapedCluster {
@@ -4139,6 +4215,9 @@ export interface ShapedRunComparatorInputs {
 // @public
 export const shapedRunComparatorInputs: (input: ShapedRun, environment: ShapingEnvironmentInput) => ShapedRunComparatorInputs;
 
+// @internal
+export function shapedRunOutline(run: ShapedRun, pointSize: number, fixedPointScale: number): TextOutline | undefined;
+
 // @public
 export interface ShapedVerticalMetrics {
     // (undocumented)
@@ -4159,6 +4238,24 @@ export interface ShapeInput {
     readonly fontSizeHalfPoints: number;
     // (undocumented)
     readonly text: string;
+}
+
+// @public
+export interface ShapeReflection {
+    readonly blurEmu: number;
+    readonly distanceEmu: number;
+    readonly endAlpha: number;
+    readonly endPosition: number;
+    readonly startAlpha: number;
+}
+
+// @public
+export interface ShapeShadow {
+    readonly alpha: number;
+    readonly blurEmu: number;
+    readonly dxEmu: number;
+    readonly dyEmu: number;
+    readonly hex: string;
 }
 
 // @public
@@ -4344,6 +4441,8 @@ export interface StyleCascadeTable {
     readonly ignoreIndentAsNumberingTabStop?: true;
     readonly noColumnBalance?: true;
     readonly pageBreakLinesStretch?: true;
+    // @internal
+    readonly pageBreakMarkOnNextPage?: true;
     readonly preserveExactLineBaseline?: true;
     readonly strictTableStyleHierarchy?: boolean;
     // (undocumented)
@@ -4721,6 +4820,7 @@ export type TextboxStoryFallbackReason = 'textbox-nesting-limit' | 'textbox-frag
 
 // @public
 export interface TextboxStoryLayout {
+    readonly chromeByVector?: true;
     readonly chromeRotationDegrees?: number;
     readonly clippedResourceToken?: string;
     readonly contentHeight: number;
@@ -4743,6 +4843,7 @@ export interface TextboxStoryLayout {
     readonly flowHeight: number;
     readonly fragments: readonly BlockFragmentRecord[];
     readonly outline?: TextboxOutlineProjection;
+    readonly overflowVisible?: true;
     readonly shadow?: Readonly<{
         alpha: number;
         dx: number;
@@ -4857,24 +4958,55 @@ export class UnsupportedScriptError extends Error {
 // @public
 export function utf16OffsetToGrapheme(text: string, utf16Offset: number): number;
 
-// @public (undocumented)
+// @public
+export interface VectorGradient {
+    readonly coords: readonly number[];
+    // (undocumented)
+    readonly kind: 'linear' | 'radial';
+    readonly matrix: AffineMatrix;
+    readonly stops: readonly GradientStop[];
+}
+
+// @public
+export interface VectorPattern {
+    // (undocumented)
+    readonly background: ShapeColor;
+    // (undocumented)
+    readonly foreground: ShapeColor;
+    readonly rows: readonly number[];
+}
+
+// @public
 export interface VectorShapeComponent {
     readonly arrowheadsEmu?: readonly (readonly Readonly<{
         x: number;
         y: number;
     }>[])[];
+    readonly belowPicture?: true;
+    readonly clipEmu?: readonly (readonly Readonly<{
+        x: number;
+        y: number;
+    }>[])[];
     // (undocumented)
     readonly fillAlpha: number;
+    readonly fillGradient?: VectorGradient;
     // (undocumented)
     readonly fillHex: string | null;
+    readonly fillPattern?: VectorPattern;
+    readonly fillRule?: 'nonzero';
+    readonly shadow?: ShapeShadow;
+    readonly shadowOnly?: true;
     // (undocumented)
     readonly strokeAlpha: number;
     readonly strokeCap?: 'butt' | 'round' | 'square';
+    readonly strokeDash?: readonly number[];
     // (undocumented)
     readonly strokeHex: string | null;
     readonly strokeInset?: boolean;
     // (undocumented)
-    readonly strokeJoin?: 'round' | 'bevel';
+    readonly strokeJoin?: 'round' | 'bevel' | 'miter';
+    readonly strokeMiterLimit?: number;
+    readonly strokeOutsetEmu?: number;
     // (undocumented)
     readonly strokeWidthEmu: number;
     readonly subpathsClosed?: readonly boolean[];
@@ -4898,6 +5030,7 @@ export interface VectorShapeProjection {
     // (undocumented)
     readonly fillAlpha?: number;
     readonly fillHex: string | null;
+    readonly overflowVisible?: true;
     // (undocumented)
     readonly strokeAlpha?: number;
     readonly strokeHex: string | null;

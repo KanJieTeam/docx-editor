@@ -32,7 +32,7 @@ import {
 import { DRAWINGML_MAIN_NAMESPACE_URI, type OoxmlElement } from './ooxml-tree.ts';
 import { WML_NAMESPACE_URI } from './ooxml-shared.ts';
 
-/** One text box member of a drawing group. */
+/** One text box member of a drawing group. @internal */
 export interface GroupTextboxProjection {
   /** Canonical node id of the member `wps:wsp`; namespaces the story's line ids. */
   readonly memberNodeId: string;
@@ -58,7 +58,7 @@ const XSD_INT_MAX = 2_147_483_647;
  * The text keeps its reading direction under `flipH` and turns upside down under `flipV`, so
  * a flip adds either nothing or a half turn to the authored rotation.
  */
-function memberTextRotation(member: OoxmlElement): number | null {
+export function memberTextRotation(member: OoxmlElement): number | null {
   const spPr = findDirectChild(member.children, {
     namespaceUri: WPS_NAMESPACE_URI,
     localName: 'spPr',

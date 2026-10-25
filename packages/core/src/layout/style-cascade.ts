@@ -53,6 +53,7 @@ import {
   type ParagraphBorders,
   type ParagraphLineSpacing,
   type ParagraphSpacing,
+  cascadeLineSpacingFlags,
 } from './paragraph-style.ts';
 import { paragraphShading } from './ooxml-shading.ts';
 import { cascadedTabStops, tabStopsFingerprint, type ResolvedTabStops } from './paragraph-tabs.ts';
@@ -106,16 +107,15 @@ export interface StyleCascadeTable {
    * spacing is a fixed 5pt before and 10pt after.
    */
   readonly fixedParagraphSpacing?: true;
-  /**
-   * `w:doNotExpandShiftReturn`: a justified line ending in a manual line break keeps its
-   * natural spacing, as a last line does.
-   */
+  /** `w:doNotExpandShiftReturn`: a justified line before a manual break keeps natural spacing. */
   readonly unstretchedManualBreakLines?: true;
   /**
    * Legacy modes: a justified line ending in a page or column break stretches to the measure
    * unless it is the last line of its paragraph.
    */
   readonly pageBreakLinesStretch?: true;
+  /** `w:splitPgBreakAndParaMark` in a legacy mode: the mark after a page break takes a line. @internal */
+  readonly pageBreakMarkOnNextPage?: true;
   /** Explicit compatibility opt-in to the unmodified ISO table style hierarchy. */
   readonly strictTableStyleHierarchy?: boolean;
   readonly typography?: CjkTypographySettings;
@@ -976,9 +976,7 @@ export function resolveParagraphLayoutInputs(
     lineSpacing: withLineGrid(
       {
         ...paragraphLineSpacing(props),
-        ...(styleCascade?.preserveExactLineBaseline
-          ? { preserveExactBaseline: true as const }
-          : {}),
+        ...cascadeLineSpacingFlags(styleCascade),
       },
       props,
       lineUnitPt,

@@ -1,11 +1,8 @@
 import { appendUnsupportedContent } from './unsupported-content-flow.ts';
-import { paragraphContinuationPieces } from './paragraph-continuation-pieces.ts';
+import { besideFloatWidth } from './legacy-inline-beside-float.ts';
+import { continuationPiecesWithRules } from './paragraph-continuation-pieces.ts';
 import { paragraphOwnAnchorStarts } from './paragraph-own-anchors.ts';
-import {
-  cellTabReplayScope,
-  shouldReplayCellTab,
-  tabDestinationForFlow,
-} from './paragraph-tab-flow.ts';
+import { cellTabReplayScope, tabClosesLine, tabDestinationForFlow } from './paragraph-tab-flow.ts';
 import { growRunBorderLineMetrics, textBandHeightWithBorders } from './run-border-strokes.ts';
 import {
   clipLineDrawingsAtTop,
@@ -26,7 +23,7 @@ import {
   endsAtHyphenBreak,
   fitsWithSpaceShrink,
   opensWithHangingSpace,
-  paragraphEndAt,
+  lineEndAt,
 } from './paragraph-space-shrink.ts';
 import { piecesOfParagraphForDisplay } from './field-projection-walk.ts';
 import { bidiSourceBoundaries } from './bidi-piece-coalescing.ts';
@@ -44,7 +41,6 @@ import {
   propertiesOfRunContainer as propertiesOf,
   type FieldAwarePiece,
   type FieldPageContext,
-  type ModelRange,
   type RunPropertyCascader,
 } from './field-projection.ts';
 import { DEFAULT_REVISION_DISPLAY_MODE, revisionsVisible } from './revision-projection.ts';
@@ -86,7 +82,7 @@ import {
   exclusionZoneAppliesToLine,
 } from './line-exclusion-clearance.ts';
 import type { StyleSpanRecord, TextMeasurer } from './semantic-records.ts';
-import type { MutableChangeSite } from './field-pieces.ts';
+import { rangesWithin, type MutableChangeSite } from './field-pieces.ts';
 import {
   buildInlineDrawingRecord,
   inlineDrawingVerticalLayout,
@@ -144,6 +140,7 @@ import {
   holdsOnlyPageBreak,
   lineBandText,
   isHeightlessWhitespace,
+  onlyLeadingBreaksBefore,
   onlyPageBreaksBefore,
   pendingLineFlowExtent,
   pendingLineFlowExtentAtPlacement,
@@ -231,12 +228,14 @@ export function breakParagraph(
   // The first line starts `firstLineOffset` from the paragraph's left indent — right for
   // `w:firstLine`, left (negative) for `w:hanging`. Every later line starts at the indent. A
   // continuation from `startOffset` is no first line, unless only leading breaks precede it.
-  const firstLineOffset = slotOpen ? (flow?.firstLineOffset ?? 0) : 0;
+  // Text after page or column breaks that open the paragraph keeps the first-line indent.
+  const indentOpen = slotOpen || onlyLeadingBreaksBefore(allPieces, startOffset);
+  const firstLineOffset = indentOpen ? (flow?.firstLineOffset ?? 0) : 0;
   const markerBaselineFloor = slotOpen ? (flow?.firstLineMinimumBaseline ?? 0) : 0;
   const markerAscent = slotOpen ? Math.max(0, flow?.firstLineMarkerAscent ?? 0) : 0;
   const typography = flow?.typography ?? resolveCjkTypography(paragraphProperties());
   const visiblePieces = splitAtAutomaticSpacing(
-    paragraphContinuationPieces(allPieces, startOffset, flow?.showFieldCodes),
+    continuationPiecesWithRules(allPieces, startOffset, flow?.showFieldCodes, available),
     typography,
     measurer
   );
@@ -245,7 +244,7 @@ export function breakParagraph(
   const seamNaturalWidths = cjkSeamNaturalWidths(pieces, visiblePieces, measurer);
   const placeableSuffixes = placeableContentSuffixes(pieces, pageBreaksIgnored);
   const replayScope = cellTabReplayScope(flow?.cellAnchorScope, rawPieces);
-  const endsParagraph = paragraphEndAt(pieces);
+  const endsParagraph = lineEndAt(pieces);
   const endSpacesAt = lineEndSpaces.paragraphEndSpacesOf(pieces, paragraphRtl, measurer);
   const cjkBreaks = cjkParagraphBreaks(pieces, typography);
   const { opticalParagraph, opticalCompression, fitCjkOptically } = createParagraphCjkOpticalFitter(
@@ -715,12 +714,6 @@ export function breakParagraph(
     return true;
   };
 
-  /** The deleted ranges overlapping one line, clipped to it. */
-  const deletedWithin = (start: number, end: number): ModelRange[] =>
-    deletedRanges
-      .filter((range) => range.start < end && range.end > start)
-      .map((range) => ({ start: Math.max(range.start, start), end: Math.min(range.end, end) }));
-
   const { changeSitesOn, claimTrailingChangeSites } = collectLineChangeSites(changeSites);
 
   /**
@@ -885,7 +878,7 @@ export function breakParagraph(
     // Mark wrap advances after merging, using the shape paint receives.
     coalesceIdeographicSpans(line);
     markPendingLineWrapAdvances(line);
-    const deleted = deletedWithin(line.start, line.end);
+    const deleted = rangesWithin(deletedRanges, line.start, line.end);
     if (deleted.length > 0) line.deletedRanges = deleted;
     const sites = changeSitesOn(line, line.spans, line.changeSites);
     if (sites.length > 0) line.changeSites = sites;
@@ -963,6 +956,7 @@ export function breakParagraph(
   for (let pieceIndex = 0; pieceIndex < pieces.length; pieceIndex += 1) {
     const piece = pieces[pieceIndex]!;
     if (piece.breakKind === 'column') {
+      const opensParagraph: boolean = firstLineOpen && !line.spans.length && !line.drawings.length;
       const breakMetrics = measurer.lineMetrics(piece.style);
       line.spans.push({
         range: { paragraphId, start: piece.start, end: piece.end },
@@ -977,6 +971,7 @@ export function breakParagraph(
       line.end = piece.end;
       closeLine();
       lines[lines.length - 1]!.columnBreakAfter = true;
+      firstLineOpen = opensParagraph;
       // Like a trailing hard break, NOT like a page break: Word still lays out the
       // paragraph's remainder after the column advance. The common authoring form
       // `<w:p><w:r><w:br w:type="column"/></w:r></w:p>` therefore opens one empty line
@@ -1082,11 +1077,15 @@ export function breakParagraph(
       }
       exclusionProbe.setMetrics(
         { height: measure.lineContribution, baseline: measure.lineContribution },
-        atomWidth
+        atomWidth,
+        true
       );
       const jumpedLine = line;
-      if (!jumps) applyInlineObjectSkipIfNeeded(atomWidth, measure.lineContribution);
-      if (!ensurePlacementWidth(atomWidth)) continue;
+      // A horizontal rule spans the line wherever it sits, so floats beside it do not move it.
+      const rule = !!piece.inlineDrawing.projection.horizontalRule;
+      const placeWidth = besideFloatWidth(atomWidth, flow, holdsContent(), activeExclusionZones);
+      if (!jumps && !rule) applyInlineObjectSkipIfNeeded(placeWidth, measure.lineContribution);
+      if (!rule && !ensurePlacementWidth(placeWidth)) continue;
       if (jumps && line !== jumpedLine) {
         // Placement refused the jump at the picture's own height and closed the line.
         applyInlineObjectSkipIfNeeded(atomWidth, measure.lineContribution);
@@ -1108,6 +1107,7 @@ export function breakParagraph(
           ...(piece.revisions ? { revisions: piece.revisions } : {}),
           ...(piece.style.shaping ? { bidiLevel: piece.style.shaping.level } : {}),
           layoutTextboxStory: flow?.layoutTextboxStory,
+          measurer,
         })
       );
       // A picture a resolved view kept has no span to carry its site; the line takes it.
@@ -1138,11 +1138,11 @@ export function breakParagraph(
       closeLine();
       const closed = lines[lines.length - 1]!;
       closed.pageBreakAfter = true;
-      firstLineOpen = carriesSlot && slotLine && holdsOnlyPageBreak(closed);
+      firstLineOpen = slotLine && holdsOnlyPageBreak(closed);
       // NOT `trailingLineBreak`: an empty remainder publishes no line on the page the break
       // opened, so the following block sits at its top (`paragraph-spacing-borders` and
       // `section-aware-pagination` pin it). A click beside the mark resolves BEFORE it.
-      trailingLineBreak = false;
+      trailingLineBreak = flow?.pageBreakMarkOnNextPage === true;
       continue;
     }
     if (piece.text === '\n') {
@@ -1203,19 +1203,21 @@ export function breakParagraph(
         : { paragraphId, start: piece.start + consumed, end: piece.start + boundary };
 
       if (candidate === '\t') {
-        const pastCellEdge = shouldReplayCellTab(
-          replayScope,
-          paragraphRtl,
-          Boolean(piece.positionalTab),
-          activeExclusionZones().length,
-          tabStops,
-          lineOrigin() + line.width,
-          rightEdge
-        );
         if (
           holdsContent() &&
-          (line.width >= lineAvailable() || pastCellEdge) &&
-          placeableSuffixes[pieceIndex]![boundary] === 1
+          tabClosesLine(
+            replayScope,
+            pageBreaksIgnored,
+            !paragraphRtl &&
+              !piece.positionalTab &&
+              (activeExclusionZones().length === 0 ||
+                lineOrigin() + lineAvailable() >= contentOriginX + rightEdge - 0.5),
+            tabStops,
+            lineOrigin() + line.width,
+            rightEdge,
+            line.width >= lineAvailable(),
+            placeableSuffixes[pieceIndex]![boundary] === 1
+          )
         )
           closeLine();
         const currentX = lineOrigin() + line.width;
@@ -1252,11 +1254,12 @@ export function breakParagraph(
           tabEdge,
           currentX,
           rightEdge,
-          positional
+          positional,
+          flow?.leftTabsPastMargin,
+          paragraphRtl,
+          alignedTabRight
         );
-        if (destination.alignment !== 'left' && !paragraphRtl) {
-          alignedTabRight = Math.max(alignedTabRight, Math.min(destination.positionPt, tabEdge));
-        }
+        alignedTabRight = destination.segmentRight;
         const width = tabAdvanceWidth(
           destination.alignment,
           positional === null ? stopX : currentX,
@@ -1284,8 +1287,6 @@ export function breakParagraph(
               }
             : {}),
           ...(piece.link ? { link: piece.link } : {}),
-          // destination rather than re-derived from the paragraph at paint time.
-          ...(destination.leader ? { tabLeader: destination.leader } : {}),
           ...(layoutOwned && !piece.positionalTab ? { projected: true as const } : {}),
           ...(piece.noteNav ? { noteNav: piece.noteNav } : {}),
           ...paragraphSpanMetadata(piece),

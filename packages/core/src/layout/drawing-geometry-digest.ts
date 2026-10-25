@@ -45,6 +45,15 @@ export function vectorShapeLayoutToken(
       // Line ends and joins change the painted outline and its ink clip, not the points.
       component.strokeCap ?? '',
       component.strokeJoin ?? '',
+      // Gradient stops and placement are file-derived numbers and names: JSON is stable.
+      component.fillGradient ? JSON.stringify(component.fillGradient) : '',
+      component.fillPattern ? JSON.stringify(component.fillPattern) : '',
+      component.clipEmu ? JSON.stringify(component.clipEmu) : '',
+      component.shadow ? JSON.stringify(component.shadow) : '',
+      component.shadowOnly ? 'shadow-only' : '',
+      component.strokeDash ? component.strokeDash.join(' ') : '',
+      component.belowPicture ? 'below-picture' : '',
+      String(component.strokeOutsetEmu ?? ''),
       String(component.subpathsEmu.length)
     );
     const subpaths = component.subpathsEmu;

@@ -363,7 +363,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Paragraph shading (w:shd) is editable. Borders render the common ST_Border styles: single, double, dashed, and dotted. Thick, 3-D, inset, and outset styles use CSS approximations, and art borders paint as a solid rule. A border box starts where the first line starts, so a hanging indent moves its edge outward. Adjacent paragraphs with identical borders draw one box when their box edges match. Borders round-trip, but you cannot add, change, or remove them in the editor yet.',
+      'Paragraph shading (w:shd) is editable. Borders render the common ST_Border styles: single, double, dashed, and dotted. Triple and the thin-thick styles draw each stroke and gap at its authored width, also on page borders. Thick, 3-D, inset, and outset styles use CSS approximations, and art borders paint as a solid rule. A border box starts where the first line starts, so a hanging indent moves its edge outward. Adjacent paragraphs with identical borders draw one box when their box edges match. Borders round-trip, but you cannot add, change, or remove them in the editor yet.',
   },
   {
     id: 'paragraphs.tabs',
@@ -624,7 +624,7 @@ export const wordFeatures: WordFeature[] = [
     tier: 'community',
     docsLink: '/docs/2.x/guides/images',
     notes:
-      'The browser rasterizes the metafile and the editor paints it at the authored extent. A metafile that will not convert keeps its extent and shows a labelled placeholder. The original bytes round-trip untouched.',
+      'The browser rasterizes the metafile and the editor paints it at the authored extent. The drawingModule from @docx-editor.dev/pro/drawing, under the EigenPal Pro License, places metafiles that set their own drawing origin correctly. PDF export includes the module. PDF export draws the metafile as vector paths, text, and embedded bitmaps in the picture frame, with its crop and clip. Metafile text uses the named font when the document uses it, and the default font otherwise. In the editor, a metafile that will not convert keeps its extent and shows a labeled placeholder; PDF export leaves it out and reports a diagnostic. The original bytes round-trip untouched.',
   },
   {
     id: 'images.tiff',
@@ -636,7 +636,7 @@ export const wordFeatures: WordFeature[] = [
     tier: 'community',
     docsLink: '/docs/2.x/guides/images',
     notes:
-      'The browser decodes baseline TIFF and the editor paints it at the authored extent. A multi-page file shows its first page. A flavour that will not decode keeps its extent and shows a labelled placeholder. Inserting a new TIFF is not supported yet.',
+      'The browser decodes baseline TIFF and the editor paints it at the authored extent. PDF export decodes the same TIFF flavors, including CCITT Group 4 black and white scans, and embeds the picture. A multi-page file shows its first page. A flavour that will not decode keeps its extent and shows a labeled placeholder. Inserting a new TIFF is not supported yet.',
   },
   {
     id: 'images.tracked',
@@ -659,7 +659,7 @@ export const wordFeatures: WordFeature[] = [
     tier: 'community',
     docsLink: '/docs/2.x/guides/images',
     notes:
-      'Anchored text boxes render their content clipped inside the authored extent. Empty anchor paragraphs flow around preceding floating objects. An empty paragraph keeps its place beside a floating object that leaves a passage, and moves below one that covers the whole column. This works in the body, in headers, and in footers, including page-relative anchors. PAGE, NUMPAGES, and SECTIONPAGES fields inside a header or footer text box are evaluated per page. Insert → Text Box creates an editable rectangular box from a body paragraph. Unrotated body text boxes support typing, paragraph editing, text formatting, plain-text paste, undo, deletion, dragging, and resizing. These edits synchronize during collaboration, with remote cursors and text selections. Clicking text shows the caret and frame handles. Text boxes in headers and footers support the same text editing. Double-clicking one opens its header or footer and enters the box, and a single click enters it while that header or footer is open. Leaving the box returns to that header or footer. A frame outlines the box being edited, and a header or footer box drags, resizes, and deletes from that frame. Escape leaves a box with the box selected, and Enter on a selected box goes back into its text. Text boxes with tables remain read-only. The automation API reads, searches, and edits floating and inline text box stories in the body, headers, and footers through Shape.body. Saving writes edited text box text into the legacy VML copy too. Inline text boxes take their extent on the line, stand on the baseline, and render their content clipped inside the extent, in the body, in table cells, and in headers and footers. Inline text boxes in the body, headers, and footers support the same text editing as anchored ones, and these edits synchronize during collaboration. Inline text boxes move with their line: they resize from their frame but cannot be dragged. Half of a text box outline width also insets its content. Legacy VML text boxes on rectangles, rounded rectangles, ovals, text box shapes, and straight-sided preset shapes such as arrows and diamonds render the same way, floating or inline, with their inset margins, solid fill, and outline. Their text stays inside the text area of a rounded rectangle, an oval, or a preset. VML outlines are centered on the shape edge, or lie inside it with an inset pen, and support dash patterns, round or square dash ends, and solid shadows that paint outside the shape. A turned VML text box keeps its text upright unless the text turns with the shape, and wrapped text keeps off both the box and its turned outline. Vertical VML text runs top to bottom or bottom to top, and a VML text box that fits its text takes the text height. Find reaches them, and boxes with upright text in the body, headers, and footers take the same text editing, and an upright VML text box moves, resizes, and deletes like a modern one, writing its VML position and size. Vertical text and text that turns with its shape stay read-only, and vertical text that keeps East Asian characters upright stays opaque. Perspective shadows do not paint, and VML text boxes with curved custom outlines stay opaque. A text box inside another text box, linked chains, DrawingML autofit, and DrawingML rotation render as a placeholder or clip.',
+      'Anchored text boxes render their content clipped inside the authored extent. Empty anchor paragraphs flow around preceding floating objects. An empty paragraph keeps its place beside a floating object that leaves a passage, and moves below one that covers the whole column. This works in the body, in headers, and in footers, including page-relative anchors. PAGE, NUMPAGES, and SECTIONPAGES fields inside a header or footer text box are evaluated per page. Insert → Text Box creates an editable rectangular box from a body paragraph. Unrotated body text boxes support typing, paragraph editing, text formatting, plain-text paste, undo, deletion, dragging, and resizing. These edits synchronize during collaboration, with remote cursors and text selections. Clicking text shows the caret and frame handles. Text boxes in headers and footers support the same text editing. Double-clicking one opens its header or footer and enters the box, and a single click enters it while that header or footer is open. Leaving the box returns to that header or footer. A frame outlines the box being edited, and a header or footer box drags, resizes, and deletes from that frame. Escape leaves a box with the box selected, and Enter on a selected box goes back into its text. Text boxes with tables remain read-only. The automation API reads, searches, and edits floating and inline text box stories in the body, headers, and footers through Shape.body. Saving writes edited text box text into the legacy VML copy too. Inline text boxes take their extent on the line, stand on the baseline, and render their content clipped inside the extent, in the body, in table cells, and in headers and footers. Inline text boxes in the body, headers, and footers support the same text editing as anchored ones, and these edits synchronize during collaboration. Inline text boxes move with their line: they resize from their frame but cannot be dragged. Half of a text box outline width also insets its content. Legacy VML text boxes on rectangles, rounded rectangles, ovals, text box shapes, and straight-sided preset shapes such as arrows and diamonds render the same way, floating or inline, with their inset margins, solid fill, and outline. Their text stays inside the text area of a rounded rectangle, an oval, or a preset. VML outlines are centered on the shape edge, or lie inside it with an inset pen, and support dash patterns, round or square dash ends, and solid shadows that paint outside the shape. A turned VML text box keeps its text upright unless the text turns with the shape, and wrapped text keeps off both the box and its turned outline. Vertical VML text runs top to bottom or bottom to top, and a VML text box that fits its text takes the text height. Find reaches them, and boxes with upright text in the body, headers, and footers take the same text editing, and an upright VML text box moves, resizes, and deletes like a modern one, writing its VML position and size. Vertical text and text that turns with its shape stay read-only, and vertical text that keeps East Asian characters upright stays opaque. Perspective shadows do not paint, and VML text boxes with curved custom outlines stay opaque. DrawingML text boxes in any preset or custom shape paint that outline, including parts outside the box such as the tail of a callout, and lay their text out in the text area the shape names. DrawingML text boxes also paint gradient and pattern fills, outer shadows, and compound outlines, and glows with the drawingModule. A turned DrawingML text box turns its outline and text, or keeps its text upright when the box asks for it, and vertical text runs top to bottom or bottom to top. A text box inside another text box, linked chains, and DrawingML autofit render as a placeholder or clip.',
   },
   {
     id: 'images.shapes',
@@ -671,11 +671,11 @@ export const wordFeatures: WordFeature[] = [
     tier: 'community',
     docsLink: '/docs/2.x/guides/images',
     notes:
-      'Solid rectangles, ellipses, diagonal lines, bounded polygon geometry, and grouped shapes render with sRGB or theme colors. An outline keeps its full width past the edge of the drawing. An inset outline (algn=in) draws inside its geometry. Outlines keep authored flat, round, and square line ends and round and bevel joins, in the editor and in PDF export. Vertical and horizontal lines render, standalone or inside a group. A shape group can also hold one embedded picture below its shapes. The picture must be visible, unrotated, unflipped, and rectangular. It must have no fill rectangle offsets, image effects, visible outline, shape effects, or 3D properties. It renders in its own frame, in the editor and in PDF export. Groups and their members must have supported visibility, effects, and 3D settings. A group renders completely or not at all: when any member cannot render, it follows the rule for unsupported groups. Other payloads reserve their extent with a placeholder. In mc:AlternateContent, an unsupported payload shows no placeholder and no part of itself, for example a group that holds a nested group. If it floats with square, tight, through, or top-and-bottom wrapping, text still flows around its wrap area. Text box members of a group render their text in the editor and in PDF export, in the scaled member box with their own insets, vertical anchor, and wrapping. Find reaches that text and selects the group. The text is read-only. A rotated member turns its text with it, a vertical flip turns the text upside down, and a horizontal flip does not mirror it. A rotated or flipped group still follows the rule for unsupported groups.',
+      'All preset shapes and bounded custom geometry, including arcs and curves, render with solid, gradient, or preset pattern fills in sRGB or theme colors. Faces of shaded presets, such as cubes and cans, render lighter or darker. Outer shadows render with their offset, blur, and color. Glow, inner shadow, reflection, soft edge, and the rim of a dark-edged bevel require the drawingModule from @docx-editor.dev/pro/drawing. Grouped shapes can turn and flip; a turned shape outside a group follows the rule for unsupported payloads. Drawing canvases render their background, outline, shapes, connectors, nested groups, and text box text, read-only. A canvas that holds a picture or ink keeps its placeholder. An outline keeps its full width past the edge of the drawing. An inset outline (algn=in) draws inside its geometry. Outlines keep authored flat, round, and square line ends and round and bevel joins, in the editor and in PDF export. Outlines render preset and custom dash patterns, and double, thick-thin, thin-thick, and triple compound lines. Lines render triangle, stealth, diamond, oval, and open arrow ends at their authored sizes, and the line stops short under the end. Vertical and horizontal lines render, standalone or inside a group. A shape filled with a picture paints it stretched over the shape and clipped to its outline, with an optional crop. A shape group can also hold embedded pictures below its shapes. The pictures render in document order, each in its own frame with its own crop, in the editor and in PDF export. A picture after a shape that paints follows the rule for unsupported groups. Each picture must be visible, unrotated, unflipped, and rectangular. It must have no fill rectangle offsets, image effects, visible outline, shape effects, or 3D properties. Groups and their members must have supported visibility, effects, and 3D settings. A group renders completely or not at all: when any member cannot render, it follows the rule for unsupported groups. Other payloads reserve their extent with a placeholder. In mc:AlternateContent, an unsupported payload shows no placeholder and no part of itself, for example a group that holds a nested group. If it floats with square, tight, through, or top-and-bottom wrapping, text still flows around its wrap area. Text box members of a group render their text in the editor and in PDF export, in the scaled member box with their own insets, vertical anchor, and wrapping. Find reaches that text and selects the group. The text is read-only. A rotated member turns its text with it, a vertical flip turns the text upside down, and a horizontal flip does not mirror it. A rotated or flipped group still follows the rule for unsupported groups.',
   },
   {
     id: 'images.legacy-vml',
-    name: 'Legacy VML pictures, annotation groups & straight WordArt',
+    name: 'Legacy VML pictures & annotation groups',
     category: 'images',
     editing: 'none',
     rendering: 'partial',
@@ -683,7 +683,7 @@ export const wordFeatures: WordFeature[] = [
     tier: 'community',
     docsLink: '/docs/2.x/guides/images',
     notes:
-      'Standalone w:pict supports bounded unrotated photos and groups of photos, inline photos with one uniform single-line border on all four sides, simple solid geometry including rounded rectangles, arrowed lines, and straight fit-to-box WordArt. Floating lines drawn between from and to points render in the editor and in PDF export. Floating shape paths with two explicit points and one zero extent also render as native lines. Invalid zero coordinate axes remain opaque. Aligned positions (left, center, right, top, bottom, inside, outside) are supported. A shape without absolute positioning is inline. Previews do not replace canonical VML or add media parts. Unknown templates, unsupported members, rotation, and clipped groups remain opaque as a whole. VML-only MC fallbacks are unchanged.',
+      'Standalone w:pict supports bounded unrotated photos and groups of photos, inline photos with one uniform single-line border on all four sides, simple solid geometry including rounded rectangles and arrowed lines. Floating lines drawn between from and to points render in the editor and in PDF export. Floating shape paths with two explicit points and one zero extent also render as native lines. Invalid zero coordinate axes remain opaque. Aligned positions (left, center, right, top, bottom, inside, outside) are supported. A shape without absolute positioning is inline. Previews do not replace canonical VML or add media parts. Unknown templates, unsupported members, rotation, and clipped groups remain opaque as a whole. VML-only MC fallbacks are unchanged.',
   },
   {
     id: 'images.crop',
@@ -710,14 +710,37 @@ export const wordFeatures: WordFeature[] = [
   },
   {
     id: 'images.effects',
-    name: 'Picture effects (shadow, glow, reflection)',
+    name: 'Picture frames and outer shadows',
     category: 'images',
     editing: 'none',
-    rendering: 'none',
+    rendering: 'partial',
     roundTrip: 'preserved',
     tier: 'community',
     notes:
-      'Not painted and not editable. Authored effect markup and effectExtent spacing are preserved.',
+      'Pictures render their outer shadow under the picture, and their outline, dash pattern, and single or compound line outside the picture, in the editor and in PDF export. A picture takes the shape of any preset geometry with its adjust values. Above an inline picture, its outline and shadow stop at the top of the picture. A rotated picture keeps its shape but paints no outline or shadow. Glow, soft edges, reflections, and the rim of a dark-edged bevel require the drawingModule from @docx-editor.dev/pro/drawing. Lit bevel faces and other 3-D materials are not painted. Effects are not editable. Authored effect markup and effectExtent spacing are preserved.',
+  },
+  {
+    id: 'images.drawing-effects',
+    name: 'Shape and picture effects (glow, inner shadow, reflection, soft edge, bevel rim)',
+    category: 'images',
+    editing: 'none',
+    rendering: 'partial',
+    roundTrip: 'preserved',
+    tier: 'premium',
+    notes:
+      'These effects require the drawingModule from @docx-editor.dev/pro/drawing and the EigenPal Pro License. PDF export includes it. Without the module, shapes and pictures paint without these effects. Glows render as a soft halo of their color and radius, under shapes, lines, and pictures. Inner shadows render inside the shape. An upright picture fades out at soft edges and paints a reflection below itself. A dark-edged bevel paints a dark rim inside the shape. Skewed or sideways reflections, lit bevel faces, and other 3-D materials are not painted. Effects are not editable. Authored effect markup is preserved.',
+  },
+  {
+    id: 'images.wordart',
+    name: 'WordArt (VML text paths)',
+    category: 'images',
+    editing: 'none',
+    rendering: 'partial',
+    roundTrip: 'preserved',
+    tier: 'premium',
+    docsLink: '/docs/2.x/pro/drawing',
+    notes:
+      'WordArt requires the drawingModule from @docx-editor.dev/pro/drawing and the EigenPal Pro License. PDF export includes it. Without the module, inline WordArt keeps its extent with a placeholder, and floating WordArt does not render. WordArt renders its text as glyph outlines fitted to the shape: straight, between the two guides of a shape such as a triangle, or along an arch. It paints its fill (solid or vertical gradient), outline, shown shadow, rotation, and a parallel 3-D extrusion with lit sides. Gradients at other angles, perspective extrusion, and shape types whose drawing does not include their definition (other than plain text, triangle, and arch) do not render. Text watermarks render without the module.',
   },
   {
     id: 'images.charts',
@@ -726,10 +749,10 @@ export const wordFeatures: WordFeature[] = [
     editing: 'none',
     rendering: 'partial',
     roundTrip: 'preserved',
-    tier: 'community',
-    docsLink: '/docs/2.x/guides/images',
+    tier: 'premium',
+    docsLink: '/docs/2.x/pro/drawing',
     notes:
-      'The extent is reserved with a labelled placeholder. React and Vue DocxEditor.UnsupportedElement declarations replace the fallback with an application component. The original chart payload and layout remain preserved.',
+      'Charts require the drawingModule from @docx-editor.dev/pro/drawing and the EigenPal Pro License. PDF export includes it. Without the module, a chart keeps a labeled placeholder. Charts render read-only from the values cached in the chart part, in the editor and in PDF export: column and bar charts (clustered, stacked, and percent stacked), line, area, scatter, bubble, radar, stock, pie, doughnut, pie-of-pie, bar-of-pie, surface, and contour charts. 3-D column, bar, line, area, pie, and surface charts render in 3-D with shaded faces, walls, gridlines, and axis labels, with right-angle axes or in perspective. A chart with a series axis places each series in its own row. Axes, including logarithmic value axes, tick label number and date formats, gridlines, chart and axis titles, legends, data labels (with best-fit pie labels that move outside crowded slices and spread around the pie on bent leader lines), trendlines with their equations, error bars, series colors, markers, smoothed lines, exploded slices, and manual plot layouts render. Surface and contour charts fill their value bands, and wireframe surfaces draw the band edges. The embedded workbook is never read, and external data is never loaded. Charts that combine a pie or radar plot with other plot types, and surfaces of more than 20,000 points, keep a labeled placeholder that React and Vue DocxEditor.UnsupportedElement declarations can replace. The chart parts are preserved on save.',
   },
   {
     id: 'images.smartart',
@@ -739,9 +762,9 @@ export const wordFeatures: WordFeature[] = [
     rendering: 'partial',
     roundTrip: 'preserved',
     tier: 'community',
-    docsLink: '/docs/2.x/guides/images',
+    docsLink: '/docs/2.x/pro/drawing',
     notes:
-      'Same customizable placeholder policy as charts. Application components can replace the visible fallback without changing the preserved payload or layout.',
+      'SmartArt diagrams render read-only from the drawing saved with the document, in the editor, in headers and footers, and in PDF export. Shapes, solid and gradient fills, outlines, the diagram background, text, bullets, and quarter-turned vertical text render. The diagram data, layout, colors, styles, and drawing parts are preserved on save. A diagram saved without its drawing is laid out from its data, layout, style, and color parts by the drawingModule from @docx-editor.dev/pro/drawing, which requires the EigenPal Pro License. PDF export includes it. Without the module, such a diagram keeps its labeled placeholder. A diagram with picture fills, or with a text mode that cannot render, keeps its labeled placeholder, and application components can replace that fallback as for charts. Outer shadows render. With the drawingModule, glow, inner shadow, reflection, and soft edge render too; lit bevel faces and other 3-D materials do not. A changed diagram layout is not recalculated: the saved drawing is shown as stored.',
   },
   {
     id: 'images.ink',

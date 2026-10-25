@@ -4,7 +4,6 @@ import { groupTextboxesLayoutToken } from './group-textbox-layout.ts';
 import { stylesPartOf } from '../store/package/ooxml-indexes.ts';
 import { drawingInputsUnchangedByParagraphEdit } from './drawing-paragraph-change.ts';
 // Package-backed inline drawing layout source (typed-drawings-and-images task 6).
-//
 // Precomputes run-level drawing / MC atom projections from a bounded part traversal with
 // ancestor xmlns bindings. Field projection consumes the atom-id map; it never re-walks MC
 // with an empty namespace scope.
@@ -20,7 +19,6 @@ import type {
   OoxmlPart,
 } from '../store/package/ooxml-tree.ts';
 import {
-  createDrawingRelationshipResolver,
   DEFAULT_DRAWING_PROJECTION_LIMITS,
   indexInlineDrawingProjectionsInPart,
   isRunLevelMcAlternateContent,
@@ -42,12 +40,18 @@ import {
   type ValidatedImageBytesReleaseToken,
 } from '../store/package/validated-image-bytes.ts';
 import { createPackageShapeThemeResolvers } from '../store/package/theme-color-resolution.ts';
+import { packageDrawingProjectionContext } from '../store/package/drawing-projection-context.ts';
+import { diagramPartsToken } from '../store/package/diagram-parts.ts';
 import { wrapFootprintProjection } from '../store/package/drawing-wrap-footprint.ts';
 import { createPictureBulletResourceResolver } from './numbering-picture-bullet-resources.ts';
 import type { OoxmlPackage } from '../store/package/ooxml-package.ts';
 import type { InlineDrawingLayoutContext } from './drawing-layout.ts';
 import { walkDrawingAtoms } from './drawing-inline-walk.ts';
 import { framedTokenJoin } from './framed-token.ts';
+import {
+  groupPictureLayerResources,
+  groupPictureLayoutToken,
+} from './drawing-group-picture-layers.ts';
 import {
   aggregateParagraphTokensForTableBlock,
   createTableRowTokenStore,
@@ -310,6 +314,9 @@ function drawingProjectionLayoutToken(projection: DrawingProjection): string {
     wrap: projection.wrap,
     textboxStory: projection.textboxStory ? textboxLayoutToken(projection.textboxStory) : '',
     groupTextboxes: groupTextboxesLayoutToken(projection.groupTextboxes),
+    chartSummary: projection.chartSummary
+      ? framedTokenJoin([projection.chartSummary.title ?? '', ...projection.chartSummary.plotTypes])
+      : '',
     compatibilityBranchNodeId: projection.compatibilityBranchNodeId ?? '',
     footprintOnly: projection.footprintOnly ? 'footprint' : '',
     anchor: anchor
@@ -349,27 +356,18 @@ function drawingProjectionLayoutToken(projection: DrawingProjection): string {
           picture.embeddedRelationshipId ?? '',
           picture.linkedRelationshipId ?? '',
           picture.presetGeometry ?? '',
+          picture.clipUnit?.map((point) => `${point.x},${point.y}`).join(' ') ?? '',
+          picture.frameEffects ? JSON.stringify(picture.frameEffects) : '',
           picture.fillMode,
         ])
       : '',
-    groupPicture: groupPicture
-      ? framedTokenJoin([
-          String(groupPicture.crop.left),
-          String(groupPicture.crop.top),
-          String(groupPicture.crop.right),
-          String(groupPicture.crop.bottom),
-          String(groupPicture.frameEmu.x),
-          String(groupPicture.frameEmu.y),
-          String(groupPicture.frameEmu.cx),
-          String(groupPicture.frameEmu.cy),
-          groupPicture.embeddedRelationshipId ?? '',
-          groupPicture.linkedRelationshipId ?? '',
-          groupPicture.memberNodeId,
-          groupPicture.alternateContent ? 'mc' : '',
-        ])
-      : '',
+    groupPicture: groupPicture ? groupPictureLayoutToken(groupPicture) : '',
+    groupPictureLayers: framedTokenJoin(
+      (projection.groupPictureLayers ?? []).map(groupPictureLayoutToken)
+    ),
     legacyGraphic: projection.legacyGraphic ? JSON.stringify(projection.legacyGraphic) : '',
     textArt: JSON.stringify(projection.textArt) ?? '',
+    horizontalRule: JSON.stringify(projection.horizontalRule) ?? '',
     vectorShape: vector ? vectorShapeLayoutToken(vector) : '',
     wrapGeometry: wrap
       ? framedTokenJoin([
@@ -483,15 +481,13 @@ function createPartDrawingContextSlot(options: {
   let resourceEpoch = 0;
   let lastCompatiblePart = part;
 
-  const resolveRelationshipTarget = createDrawingRelationshipResolver(pkg, ownerPartName);
   const theme = createPackageShapeThemeResolvers(pkg);
+  const diagramToken = diagramPartsToken(pkg);
   const stylesPart = stylesPartOf(pkg);
-  const atomProjections = indexInlineDrawingProjectionsInPart(part, {
-    stylesPart,
-    resolveRelationship: resolveRelationshipTarget,
-    resolveSchemeColor: theme.resolveSchemeColor,
-    resolveStyleMatrixReference: theme.resolveStyleMatrixReference,
-  });
+  const atomProjections = indexInlineDrawingProjectionsInPart(
+    part,
+    packageDrawingProjectionContext(pkg, ownerPartName)
+  );
   const atomIdentities = drawingAtomIdentities(part);
   const hasObjects = atomIdentities
     ? Array.from(atomIdentities.values()).some(
@@ -541,7 +537,8 @@ function createPartDrawingContextSlot(options: {
     const cached = resourceByKey.get(key);
     if (cached) return cached;
 
-    const linked = (projection.picture ?? projection.groupPicture)?.linkedRelationshipId;
+    const shown = projection.picture ?? projection.groupPicture;
+    const linked = shown?.embeddedRelationshipId ? null : shown?.linkedRelationshipId;
     if (linked) {
       const linkedState = lookup.resolveLinked(ownerPartName, linked);
       resourceByKey.set(key, linkedState);
@@ -561,19 +558,22 @@ function createPartDrawingContextSlot(options: {
     return pending;
   };
 
-  // An MC-wrapped group whose picture cannot render paints nothing, the same as an MC
+  // An MC-wrapped group with a picture that cannot render paints nothing, as an MC
   // payload the projection cannot draw (`projectRunLevelMcDrawing`), and keeps only its wrap
   // footprint. A linked picture settles at once; an embedded one counts only after its decode
   // settles, so a pending group keeps its frame and paints its vector members.
   const projectionForAtom = (atomNodeId: string): DrawingProjection | null => {
     const projection = atomProjections.get(atomNodeId) ?? null;
     if (!projection?.groupPicture?.alternateContent) return projection;
-    const state = projection.groupPicture.linkedRelationshipId
-      ? resourceOf(projection)
-      : resourceByKey.get(pendingResourceKey(projection));
-    return state && state.kind !== 'ready' && state.kind !== 'pending'
-      ? wrapFootprintProjection(projection)
-      : projection;
+    const pictures = [projection.groupPicture, ...(projection.groupPictureLayers ?? [])];
+    const failed = pictures.some((picture) => {
+      const shown = { ...projection, groupPicture: picture };
+      const state = !picture.embeddedRelationshipId
+        ? resourceOf(shown)
+        : resourceByKey.get(pendingResourceKey(shown));
+      return state && state.kind !== 'ready' && state.kind !== 'pending';
+    });
+    return failed ? wrapFootprintProjection(projection) : projection;
   };
 
   const context: InlineDrawingLayoutContext = Object.freeze({
@@ -660,6 +660,7 @@ function createPartDrawingContextSlot(options: {
     isCompatibleWith: (nextPart, nextPkg) => {
       const nextTheme = createPackageShapeThemeResolvers(nextPkg);
       if (nextTheme.cacheToken !== theme.cacheToken) return false;
+      if (diagramPartsToken(nextPkg) !== diagramToken) return false;
       if (nextPart === part && stylesPartOf(nextPkg) === stylesPart) {
         lastCompatiblePart = nextPart;
         return true;
@@ -690,12 +691,10 @@ function createPartDrawingContextSlot(options: {
           return true;
         }
       }
-      const nextProjections = indexInlineDrawingProjectionsInPart(nextPart, {
-        stylesPart: stylesPartOf(nextPkg),
-        resolveRelationship: createDrawingRelationshipResolver(nextPkg, ownerPartName),
-        resolveSchemeColor: nextTheme.resolveSchemeColor,
-        resolveStyleMatrixReference: nextTheme.resolveStyleMatrixReference,
-      });
+      const nextProjections = indexInlineDrawingProjectionsInPart(
+        nextPart,
+        packageDrawingProjectionContext(nextPkg, ownerPartName)
+      );
       if (nextProjections.size !== atomProjections.size) return false;
       for (const [atomId, projection] of atomProjections) {
         const next = nextProjections.get(atomId);
@@ -941,6 +940,7 @@ function framedAtomToken(
     atomId,
     drawingProjectionLayoutToken(projection),
     drawingResourceLayoutToken(resourceOf(projection)),
+    ...(groupPictureLayerResources(projection, resourceOf) ?? []).map(drawingResourceLayoutToken),
   ];
   if (epochOf) parts.push(String(epochOf(projection)));
   return framedTokenJoin(parts);

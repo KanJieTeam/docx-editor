@@ -386,15 +386,6 @@ describe('group picture projection', () => {
       groupDrawing(pictureMember({ fill: '<a:stretch><a:fillRect l="unknown"/></a:stretch>' })),
     ],
     [
-      'a picture outline',
-      groupDrawing(
-        pictureMember().replace(
-          '</pic:spPr>',
-          '<a:ln w="127000"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></pic:spPr>'
-        )
-      ),
-    ],
-    [
       'a picture shadow',
       groupDrawing(
         pictureMember().replace(
@@ -411,7 +402,17 @@ describe('group picture projection', () => {
       'a hidden picture member',
       groupDrawing(pictureMember().replace('name="Picture"', 'name="Picture" hidden="1"')),
     ],
-    ['two picture members', groupDrawing(pictureMember() + pictureMember({ y: 1500 }))],
+    [
+      'a second picture above a vector member',
+      groupDrawing(pictureMember() + barMember(2100) + pictureMember({ y: 1500 })),
+    ],
+    [
+      'a second picture member that is hidden',
+      groupDrawing(
+        pictureMember() +
+          pictureMember({ y: 1500 }).replace('name="Picture"', 'name="Picture" hidden="1"')
+      ),
+    ],
     ['a picture above a vector member', groupDrawing(barMember(2100) + pictureMember())],
     ['a rotated picture', groupDrawing(pictureMember({ xfrmAttributes: ' rot="5400000"' }))],
     ['a flipped picture', groupDrawing(pictureMember({ xfrmAttributes: ' flipH="1"' }))],
@@ -462,11 +463,27 @@ describe('group picture projection', () => {
           barMember(
             2100,
             600,
-            '<a:ln w="7000"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln>'
+            // Line widths are absolute, so only a width past the group extent is wider.
+            '<a:ln w="20116800"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln>'
           )
       ),
     ],
   ];
+
+  test('a picture outline paints over the picture at its own width', () => {
+    const [projection] = projectionsOf(
+      groupDrawing(
+        pictureMember().replace(
+          '</pic:spPr>',
+          '<a:ln w="127000"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></pic:spPr>'
+        )
+      )
+    );
+    expect(projection!.groupPicture).not.toBeNull();
+    const stroke = projection!.vectorShape!.components[0]!;
+    expect(stroke.strokeHex).toBe('FF0000');
+    expect(stroke.strokeWidthEmu).toBe(127000);
+  });
 
   for (const [name, drawing] of refused) {
     test(`${name} stays unpainted`, () => {

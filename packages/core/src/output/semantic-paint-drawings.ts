@@ -29,7 +29,16 @@ import {
 } from '../layout/semantic-record-queries.ts';
 import type { SemanticLayout } from '@docx-editor.dev/core/layout';
 import { paintLayerOf } from '../layout/drawing-exclusion.ts';
-import { applyVectorInkReach, vectorShapeFrame } from './semantic-paint-vector-shape.ts';
+import {
+  groupPictureLayerDrawing,
+  type DrawingGroupPictureLayerRecord,
+} from '../layout/drawing-group-picture-layers.ts';
+import { appendReflection, applySoftEdge } from './semantic-paint-picture-effects.ts';
+import {
+  applyVectorInkReach,
+  isFramedPicture,
+  vectorShapeFrame,
+} from './semantic-paint-vector-shape.ts';
 import { paintGroupTextboxStories } from './semantic-paint-group-text.ts';
 import { paintTextArt } from './semantic-paint-text-art.ts';
 import { paintTextboxStory } from './semantic-paint-textbox.ts';
@@ -416,50 +425,36 @@ function paintPlaceholderCard(
   return outer;
 }
 
-function paintReadyImage(
+/**
+ * The positioned, clipped and cropped frame that shows one ready picture of `drawing` in
+ * `img`. A clip that belongs on the drawing's outer box comes back as `outerClipPath`.
+ */
+function imageFrameElement(
   document: Document,
   drawing: InlineDrawingRecord | AnchoredDrawingRecord,
+  resource: Extract<InlineDrawingRecord['resource'], { kind: 'ready' }>,
   ctx: DrawingPaintContext,
   url: string,
-  urlRegistry: UrlRegistry | null,
-  origin?: LayoutBox
-): HTMLElement {
-  const resource = drawing.resource;
-  if (resource.kind !== 'ready') {
-    return paintPlaceholderCard(document, drawing, ctx, origin);
-  }
-
-  const elementKey = drawingElementKey(drawing, ctx);
-  const outer = urlRegistry?.readyElementFor?.(elementKey) ?? document.createElement('div');
-  const paintSignature = readyImagePaintSignature(drawing, resource, ctx, url, origin);
-  // A group's vector members are rebuilt on every paint; only a lone image is reused.
-  const reusable = !drawing.vectorShape;
-  if (reusable && readyImagePaintSignatures.get(outer) === paintSignature) return outer;
-  outer.className = 'docx-drawing docx-drawing-ready';
-  outer.style.cssText = '';
-  if (!ctx.unbound) outer.dataset.drawingNodeId = drawing.drawingNodeId;
-  delete outer.dataset.docxDrawingLink;
-  delete outer.dataset.docxDrawingLinkKind;
-  delete outer.dataset.docxDrawingLinkHref;
-  outer.removeAttribute('aria-hidden');
-  outer.removeAttribute('aria-label');
-  outer.removeAttribute('role');
-  outer.removeAttribute('tabindex');
-  positionedBox(outer, drawing.paintBounds, ctx.scale, origin);
-
+  img: HTMLImageElement
+): { readonly inner: HTMLElement; readonly outerClipPath: string | null } {
   const inner = document.createElement('div');
   inner.className = 'docx-drawing-image-frame';
   inner.style.position = 'absolute';
   const content = imageFrameBounds(drawing);
   const paint = drawing.paintBounds;
   // Preset clip in authoritative paint space — xfrm rotation is already in clipPolygon. A
-  // group clips only its picture there: the vector members share the outer box, which
-  // clips at the paint bounds so strokes can use the effect extent, as a lone shape does.
+  // group, or a picture with its own frame, clips only its picture there: the vector paint
+  // shares the outer box, which clips at the paint bounds so strokes can use the effect
+  // extent, as a lone shape does.
+  const clipsPictureOnly =
+    drawing.groupPicture !== undefined ||
+    drawing.vectorShape !== null ||
+    drawing.frameEffects !== undefined;
   const clipPath = cssClipPathFromPolygon(
     drawing.geometry.clipPolygon ?? [],
-    drawing.groupPicture ? content : paint
+    clipsPictureOnly ? content : paint
   );
-  if (clipPath) (drawing.groupPicture ? inner : outer).style.clipPath = clipPath;
+  if (clipPath && clipsPictureOnly) inner.style.clipPath = clipPath;
   inner.style.left = `${(content.x - paint.x) * ctx.scale}px`;
   inner.style.top = `${(content.y - paint.y) * ctx.scale}px`;
   inner.style.width = `${content.width * ctx.scale}px`;
@@ -486,9 +481,6 @@ function paintReadyImage(
   cropViewport.style.height = '100%';
   cropViewport.style.overflow = 'hidden';
 
-  const img =
-    urlRegistry?.imageFor?.(elementKey, resource.resourceKey, document) ??
-    document.createElement('img');
   img.className = 'docx-drawing-image';
   img.setAttribute('draggable', 'false');
   // SAFE: `src` is a host-minted object URL from PaintImageUrlPort, never file-derived.
@@ -508,18 +500,110 @@ function paintReadyImage(
   cropViewport.append(img);
   transformStage.append(cropViewport);
   inner.append(transformStage);
-  outer.replaceChildren(inner);
+  return { inner, outerClipPath: clipPath && !clipsPictureOnly ? clipPath : null };
+}
+
+/** The URL of a group's later picture; null while it is not ready or cannot mint. */
+function layerUrl(
+  layer: DrawingGroupPictureLayerRecord,
+  ctx: DrawingPaintContext,
+  urlRegistry: UrlRegistry | null
+): string | null {
+  const resource = layer.resource;
+  return resource.kind === 'ready' && ctx.imageUrlPort && urlRegistry
+    ? urlRegistry.urlForReady(resource.validatedHandle, resource.mime)
+    : null;
+}
+
+/** The frames of a group's later pictures in paint order; one still pending is left out. */
+function groupPictureLayerFrames(
+  document: Document,
+  drawing: InlineDrawingRecord | AnchoredDrawingRecord,
+  ctx: DrawingPaintContext,
+  urlRegistry: UrlRegistry | null
+): HTMLElement[] {
+  const frames: HTMLElement[] = [];
+  for (const layer of drawing.groupPictureLayers ?? []) {
+    const url = layerUrl(layer, ctx, urlRegistry);
+    if (url === null || layer.resource.kind !== 'ready') continue;
+    const img = document.createElement('img');
+    const layered = groupPictureLayerDrawing(drawing, layer);
+    frames.push(imageFrameElement(document, layered, layer.resource, ctx, url, img).inner);
+  }
+  return frames;
+}
+
+function paintReadyImage(
+  document: Document,
+  drawing: InlineDrawingRecord | AnchoredDrawingRecord,
+  ctx: DrawingPaintContext,
+  url: string,
+  urlRegistry: UrlRegistry | null,
+  origin?: LayoutBox
+): HTMLElement {
+  const resource = drawing.resource;
+  if (resource.kind !== 'ready') {
+    return paintPlaceholderCard(document, drawing, ctx, origin);
+  }
+
+  const elementKey = drawingElementKey(drawing, ctx);
+  const outer = urlRegistry?.readyElementFor?.(elementKey) ?? document.createElement('div');
+  const paintSignature = readyImagePaintSignature(drawing, resource, ctx, url, origin);
+  // A group's vector members are rebuilt on every paint; only a lone image is reused.
+  const reusable = !drawing.vectorShape && !drawing.frameEffects && !drawing.groupPictureLayers;
+  if (reusable && readyImagePaintSignatures.get(outer) === paintSignature) return outer;
+  outer.className = 'docx-drawing docx-drawing-ready';
+  outer.style.cssText = '';
+  if (!ctx.unbound) outer.dataset.drawingNodeId = drawing.drawingNodeId;
+  delete outer.dataset.docxDrawingLink;
+  delete outer.dataset.docxDrawingLinkKind;
+  delete outer.dataset.docxDrawingLinkHref;
+  outer.removeAttribute('aria-hidden');
+  outer.removeAttribute('aria-label');
+  outer.removeAttribute('role');
+  outer.removeAttribute('tabindex');
+  positionedBox(outer, drawing.paintBounds, ctx.scale, origin);
+
+  const framed = imageFrameElement(
+    document,
+    drawing,
+    resource,
+    ctx,
+    url,
+    urlRegistry?.imageFor?.(elementKey, resource.resourceKey, document) ??
+      document.createElement('img')
+  );
+  const inner = framed.inner;
+  if (framed.outerClipPath) outer.style.clipPath = framed.outerClipPath;
+  outer.replaceChildren(inner, ...groupPictureLayerFrames(document, drawing, ctx, urlRegistry));
+  if (drawing.frameEffects) {
+    const softEdge = drawing.frameEffects.softEdgeEmu ?? 0;
+    applySoftEdge(inner, (softEdge / 12_700) * ctx.scale);
+    appendReflection(document, outer, inner, drawing, ctx.scale);
+  }
   if (drawing.vectorShape) {
-    const frame = vectorShapeFrame(document, drawing, ctx.scale);
-    const paintBounds = drawing.paintBounds;
-    applyVectorInkReach(
-      outer,
-      frame,
-      paintBounds,
-      vectorShapeInkClip(drawing, paintBounds),
-      ctx.scale
+    // A group's members drawn before its picture paint under it, as a frame's fill does.
+    const framed = isFramedPicture(drawing) || drawing.groupPicture !== undefined;
+    const ink = vectorShapeInkClip(drawing, drawing.paintBounds);
+    // A picture's frame paints its shadow and fill under the picture and its outline over it.
+    const frame = vectorShapeFrame(
+      document,
+      drawing,
+      ctx.scale,
+      framed ? (component) => component.belowPicture !== true : undefined
     );
+    applyVectorInkReach(outer, frame, drawing.paintBounds, ink, ctx.scale);
     outer.append(frame);
+    if (framed && drawing.vectorShape.components.some((component) => component.belowPicture)) {
+      const under = vectorShapeFrame(
+        document,
+        drawing,
+        ctx.scale,
+        (component) => component.belowPicture === true
+      );
+      under.style.pointerEvents = 'none';
+      outer.insertBefore(under, inner);
+    }
   }
   applyDrawingBilevelFilter(document, outer, inner, drawing.effects.bilevel);
 
@@ -660,7 +744,7 @@ function paintDrawingRecordElement(
   if (drawing.textboxStory !== undefined && ctx.paintStoryFragment !== undefined) {
     return paintTextboxStory(document, drawing, drawing.textboxStory, ctx, origin);
   }
-  if (drawing.kind === 'anchoredDrawing' && drawing.textArt) {
+  if (drawing.textArt) {
     return paintTextArt(
       document,
       { ...drawing, textArt: drawing.textArt },
@@ -690,11 +774,19 @@ function paintDrawingRecordElement(
   // picture is pending. A picture that cannot paint turns the whole group into the refusal
   // card of an unsupported group. Layout drops an MC-wrapped group whose resource fails, so
   // that group never reaches this card.
-  if (drawing.groupPicture && resource.kind !== 'pending' && !url) {
+  const layerFailed = drawing.groupPictureLayers?.some(
+    (layer) => layer.resource.kind !== 'pending' && layerUrl(layer, ctx, urlRegistry) === null
+  );
+  if (drawing.groupPicture && ((resource.kind !== 'pending' && !url) || layerFailed)) {
     return paintPlaceholderCard(document, drawing, ctx, origin);
   }
   const groupImageReady = drawing.groupPicture !== undefined && url !== null;
-  if (drawing.vectorShape && drawing.vectorShape.subpathsEmu.length > 0 && !groupImageReady) {
+  if (
+    drawing.vectorShape &&
+    drawing.vectorShape.subpathsEmu.length > 0 &&
+    !groupImageReady &&
+    !isFramedPicture(drawing)
+  ) {
     return paintVectorShape(document, drawing, ctx, painted, origin);
   }
 
@@ -801,6 +893,9 @@ function pageDrawingKeys(page: PageRecord): PageDrawingKeys {
       return;
     forEachStoryDrawing(host, (drawing) => {
       if (drawing.resource.kind === 'ready') resourceKeys.push(drawing.resource.resourceKey);
+      for (const layer of drawing.groupPictureLayers ?? []) {
+        if (layer.resource.kind === 'ready') resourceKeys.push(layer.resource.resourceKey);
+      }
       elementKeys.push(`p${page.index}|${drawing.drawingNodeId}`);
     });
     // A picture-bullet marker mints a blob URL from the same registry, so its resource has to

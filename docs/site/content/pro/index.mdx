@@ -13,6 +13,7 @@ order: 60
 - [Comments](/docs/2.x/pro/comments): Add threads and replies to a text range.
 - [Review colors and styling](/docs/2.x/pro/review-styling): Color review content by author or by change type.
 - [Custom nodes](/docs/2.x/pro/custom-nodes): Store your inline node types as Word content controls.
+- [Advanced drawing rendering](/docs/2.x/pro/drawing): Render charts, SmartArt layout, drawing effects, WordArt, and EMF and WMF pictures.
 - [DOCX collaboration reference](/docs/2.x/pro/collaboration): Configure rooms, providers, presence, and recovery.
 
 Both adapter entries export custom-node chip and context-menu chrome.
@@ -253,7 +254,7 @@ To arrange editor parts, see [Vue composition](/docs/2.x/vue/composition) or [Re
 
 This package uses the [EigenPal Pro License](https://github.com/eigenpal/docx-editor/blob/main/packages/pro/LICENSE.md). See [pricing](https://www.docx-editor.dev/pricing) for license and support options.
 
-`reviewModule`, `customNodesModule`, and `collaborationModule` accept an optional `licenseKey`.
+`reviewModule`, `customNodesModule`, `collaborationModule`, `drawingModule`, and `installDrawing` accept an optional `licenseKey`. Pass the key once, to any of them. The key is optional and is never validated or sent anywhere: every module works the same with or without it. Production use requires an EigenPal Pro License, and the key identifies yours when you contact support. The key is not a secret, so you can ship it in browser code. `@docx-editor.dev/docx-to-pdf` includes the drawing module and needs no separate key.
 
 Module construction does not validate the key or access the network. This example passes a key to `reviewModule`:
 

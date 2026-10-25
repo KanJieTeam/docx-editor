@@ -1,8 +1,9 @@
 import { inlinePictureExtent } from './inline-picture-extent.ts';
+import type { DrawingChartSummary } from '../store/package/chart-summary.ts';
 import { revisionMarkupHidesDrawing } from './revision-markup-projection.ts';
 // Drawing extents convert from EMUs to points here; intrinsic image dimensions do not resize layout.
 
-import { layoutTextArt, rotatedBounds, turnedTextboxBounds } from './drawing-text-art.ts';
+import { layoutTextArt, textArtPaintBounds, turnedTextboxBounds } from './drawing-text-art.ts';
 import type { DrawingTextArtRecord } from './drawing-text-art.ts';
 import { clipBoxToRegion, hitBoundsOf } from './drawing-clip-box.ts';
 export { clipBoxHorizontally, clipBoxToRegion } from './drawing-clip-box.ts';
@@ -21,6 +22,7 @@ import {
   type VectorShapeProjection,
 } from '../store/package/drawing-projection.ts';
 import type { OoxmlNode } from '../store/package/ooxml-tree.ts';
+import type { PictureFrameEffects } from '../store/package/drawing-picture-frame.ts';
 import { pageClipRegion } from './drawing-page-clip.ts';
 export { columnPaperClip, pageClipRegion } from './drawing-page-clip.ts';
 import type { ImageResourceState } from '../store/package/image-resources.ts';
@@ -42,6 +44,16 @@ import type { LayoutBox } from './semantic-records.ts';
 import { textboxPlacementProjection } from './textbox-placement.ts';
 import { withGroupTextboxStories } from './group-textbox-layout.ts';
 import {
+  drawingPaintFields,
+  type DrawingGroupPictureRecord,
+  type DrawingPlaceholderKind,
+} from './drawing-paint-fields.ts';
+import {
+  groupPictureLayerFields,
+  groupPictureLayerResources,
+} from './drawing-group-picture-layers.ts';
+import { wrappedParagraphAnchorTop } from './anchor-content-top.ts';
+import {
   anchoredDrawingAtomsInParagraph,
   drawingModelOffsetsInParagraph,
 } from './drawing-atom-walk.ts';
@@ -49,64 +61,6 @@ import {
 export { anchoredDrawingAtomsInParagraph, drawingModelOffsetsInParagraph };
 
 export type { DrawingGeometry } from './drawing-geometry.ts';
-
-// A Map, not an object literal: the key is a `graphicData@uri` out of the file, so a value
-// of `__proto__` or `constructor` must answer undefined, not a prototype member.
-const GRAPHIC_URI_KIND: ReadonlyMap<string, string> = new Map([
-  ['http://schemas.openxmlformats.org/drawingml/2006/chart', 'chart'],
-  ['http://schemas.openxmlformats.org/drawingml/2006/diagram', 'diagram'],
-  ['http://schemas.microsoft.com/office/word/2010/wordprocessingGroup', 'group'],
-  ['http://schemas.microsoft.com/office/word/2010/wordprocessingShape', 'textbox'],
-  ['http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas', 'canvas'],
-]);
-
-const EMPTY_TRANSFORM: DrawingTransform = Object.freeze({
-  rotationDegrees: 0,
-  flipHorizontal: false,
-  flipVertical: false,
-  offsetEmu: Object.freeze({ x: 0, y: 0 }),
-  extentEmu: Object.freeze({ cx: 0, cy: 0 }),
-});
-
-const EMPTY_CROP: SourceCrop = Object.freeze({ left: 0, top: 0, right: 0, bottom: 0 });
-
-function drawingPaintFields(projection: DrawingProjection): {
-  readonly hyperlinkHref: string | null;
-  readonly effects: DrawingImageEffects;
-  readonly crop: SourceCrop;
-  readonly transform: DrawingTransform;
-  readonly placeholderGraphicKind: string | null;
-  readonly vectorShape: VectorShapeProjection | null;
-  readonly groupPicture?: DrawingGroupPictureRecord;
-} {
-  const picture = projection.picture;
-  let placeholderGraphicKind: string | null = null;
-  if (!picture) {
-    for (const diagnostic of projection.diagnostics) {
-      if (diagnostic.code !== 'unsupported-graphic') continue;
-      const uri = diagnostic.detail ?? '';
-      placeholderGraphicKind = GRAPHIC_URI_KIND.get(uri) ?? 'graphic';
-      break;
-    }
-    if (placeholderGraphicKind === null) placeholderGraphicKind = 'graphic';
-  }
-  return Object.freeze({
-    hyperlinkHref: projection.hyperlinkHref,
-    effects: projection.effects,
-    crop: picture?.crop ?? projection.groupPicture?.crop ?? EMPTY_CROP,
-    transform: picture?.transform ?? EMPTY_TRANSFORM,
-    placeholderGraphicKind:
-      picture || projection.legacyGraphic || projection.textArt ? null : placeholderGraphicKind,
-    vectorShape: projection.vectorShape,
-    ...(projection.groupPicture
-      ? {
-          groupPicture: Object.freeze({
-            alternateContent: projection.groupPicture.alternateContent,
-          }),
-        }
-      : {}),
-  });
-}
 
 /** EMUs per point (914400 EMU = 72pt = 1in). */
 export const EMU_PER_POINT = 12_700;
@@ -282,17 +236,6 @@ export function repositionInlineDrawingsForBaseline(
   });
 }
 
-/** Clip `box` to a horizontal content band; preserves authored size, zeroes clipped axes. */
-/** How a drawing record holds the picture member of a shape group. */
-export interface DrawingGroupPictureRecord {
-  /**
-   * Whether the group is the chosen branch of a run-level `mc:AlternateContent`. An output
-   * that cannot draw the picture leaves such a group out, as it leaves out other MC content
-   * it cannot draw. A group without it shows the output's unsupported-drawing result.
-   */
-  readonly alternateContent: boolean;
-}
-
 export interface InlineDrawingRecord {
   readonly kind: 'inlineDrawing';
   readonly drawingNodeId: string;
@@ -323,10 +266,16 @@ export interface InlineDrawingRecord {
   readonly effects: DrawingImageEffects;
   readonly crop: SourceCrop;
   readonly transform: DrawingTransform;
-  /** Fixed non-picture graphic kind for refusal labels (`chart`, `group`, …); null for pictures. */
-  readonly placeholderGraphicKind: string | null;
+  /** Graphic kind of a non-picture drawing, naming its placeholder; null for pictures. */
+  readonly placeholderGraphicKind: DrawingPlaceholderKind | null;
+  /** The title and plot types of a chart that does not paint, for its placeholder. */
+  readonly chart?: DrawingChartSummary;
   /** Typed solid-geometry payload for a renderable `wps:wsp` shape; null otherwise. */
   readonly vectorShape: VectorShapeProjection | null;
+  /** Legacy text art on the line, fitted to its box. */
+  readonly textArt?: DrawingTextArtRecord;
+  /** A picture's reflection and soft edges, in the extent's EMU; absent when it has none. */
+  readonly frameEffects?: PictureFrameEffects;
   /**
    * Present when the image is the picture member of a drawing group. The image then fills
    * the bounds of `geometry.imageTransformCorners`, not `geometry.contentBounds`, and paints
@@ -336,6 +285,11 @@ export interface InlineDrawingRecord {
    * shows no part of the group.
    */
   readonly groupPicture?: DrawingGroupPictureRecord;
+  /**
+   * The group's other picture members, in document order. Each paints above the record's
+   * own image and the layers before it, and below `vectorShape`. Absent for one picture.
+   */
+  readonly groupPictureLayers?: readonly import('./drawing-group-picture-layers.ts').DrawingGroupPictureLayerRecord[];
   /**
    * The revision wrappers enclosing the owning run, outermost first — the same stack spans
    * carry, so paint and review chrome give a tracked picture the same cues as tracked text.
@@ -415,6 +369,8 @@ export interface InlineDrawingLayoutInput {
   readonly ownerPartName: string;
   readonly projection: DrawingProjection;
   readonly resource: ImageResourceState;
+  /** The resources of the projection's `groupPictureLayers`, in the same order. */
+  readonly groupPictureLayerResources?: readonly ImageResourceState[];
 }
 
 export interface InlineDrawingLayoutContext {
@@ -470,6 +426,24 @@ export function clipInlineDrawingRecordToRegion(
     paintBounds,
     hitBounds,
     geometry: clipGeometryToRegion(shiftedGeometry, region),
+  });
+}
+
+/**
+ * Clip an inline drawing to the paper sideways and the body band vertically. Text art whose ink
+ * rises over its box (an arch) keeps that ink past the band.
+ */
+export function clipInlineDrawingToBodyBand(
+  drawing: InlineDrawingRecord,
+  paper: LayoutBox,
+  bandHeight: number
+): InlineDrawingRecord {
+  const art = drawing.textArt?.inkBounds !== undefined;
+  return clipInlineDrawingRecordToRegion(drawing, {
+    x: paper.x,
+    y: art ? -1e5 : 0,
+    width: paper.width,
+    height: art ? 2e5 : bandHeight,
   });
 }
 
@@ -540,8 +514,15 @@ export interface DrawingAnchorFrameContext {
   /** Cell text column, excluding padding; the physical cell still owns clipping. */
   readonly cellContentBox?: LayoutBox;
   readonly layoutInCell: boolean;
+  /** The cell box is a real table cell, not a header, footer or text-box story box. */
+  readonly inTableCell?: boolean;
   readonly ownerPartName: string;
   readonly storyKind: DrawingAnchorStoryKind;
+  /**
+   * A wrapping body object positioned from its paragraph never starts above the content box
+   * top (`wrappedAnchorsStayBelowTopMargin`). Set by the body frame base in modern modes.
+   */
+  readonly wrappedParagraphAnchorsBelowContentTop?: boolean;
   /**
    * Called whenever a frame or alignment resolution reads the parity of
    * {@link pageNumber}. Incremental layout listens so it knows a section's
@@ -964,7 +945,7 @@ export function resolveAnchoredDrawingPosition(
 
   return Object.freeze({
     x,
-    y,
+    y: wrappedParagraphAnchorTop(y, verticalFrame, projection.wrap, ctx),
     horizontalFrame,
     verticalFrame,
     horizontalFrameOrigin,
@@ -1019,7 +1000,7 @@ export function buildAnchoredDrawingRecord(options: {
   });
   // Turned text or a turned text box reaches past its box; the painted area holds the turn.
   const turned = textArt
-    ? rotatedBounds(geometry.paintBounds, textArt.rotationDegrees)
+    ? textArtPaintBounds(geometry.paintBounds, textArt)
     : turnedTextboxBounds(geometry.paintBounds, options.textboxStory);
   const paintBounds = options.clipRegion ? clipBoxToRegion(turned, options.clipRegion) : turned;
   const hitBounds = hitBoundsOf(paintBounds);
@@ -1053,6 +1034,7 @@ export function buildAnchoredDrawingRecord(options: {
     resource: options.input.resource,
     accessibility: drawingAccessibility(projection),
     ...drawingPaintFields(projection),
+    ...groupPictureLayerFields(projection, options.input.groupPictureLayerResources),
     ...(textArt ? { textArt } : {}),
   });
 }
@@ -1265,6 +1247,7 @@ export function publishAnchoredDrawingsForParagraph(
       cellBox: options.cellBox,
       cellContentBox: options.cellContentBox,
       layoutInCell,
+      inTableCell: options.cellAnchorScope?.inTableCell === true,
     });
     // An unwrapped text box sizes its own width, so its story lays out before placement.
     const textboxStory =
@@ -1293,6 +1276,10 @@ export function publishAnchoredDrawingsForParagraph(
         ownerPartName: options.drawingLayout.ownerPartName,
         projection: placed,
         resource: options.drawingLayout.resourceOf(projection),
+        groupPictureLayerResources: groupPictureLayerResources(
+          projection,
+          options.drawingLayout.resourceOf
+        ),
       }),
       anchorParagraphId: options.paragraphId,
       start: characterFrameOffset,
@@ -1328,6 +1315,8 @@ export function buildInlineDrawingRecord(options: {
   readonly bidiLevel?: number;
   /** Lays out a text-box story; called only for a drawing that carries one. */
   readonly layoutTextboxStory?: import('./inline-textbox-flow.ts').TextboxStoryLayouter;
+  /** Fits legacy text art; without it, text art on the line paints nothing. */
+  readonly measurer?: import('./semantic-records.ts').TextMeasurer;
 }): InlineDrawingRecord {
   // A hidden box paints nothing, so its story is never laid out or reported.
   const textboxStory =
@@ -1335,6 +1324,11 @@ export function buildInlineDrawingRecord(options: {
       ? options.layoutTextboxStory?.(options.input.projection)
       : undefined;
   const measure = measureInlineDrawing(options.input.projection);
+  const art = options.input.projection.textArt;
+  const textArt =
+    art && options.measurer
+      ? layoutTextArt(art, measure.width, measure.height, options.measurer)
+      : null;
   const extentX = options.slotX + measure.distL + measure.effectL;
   const geometry = drawingGeometryFromProjection({
     projection: options.input.projection,
@@ -1343,13 +1337,18 @@ export function buildInlineDrawingRecord(options: {
     extentWidth: measure.width,
     extentHeight: measure.height,
   });
-  // A turned, shadowed or outlined text box reaches past its extent; the clip keeps that reach.
-  const reach = turnedTextboxBounds(geometry.paintBounds, textboxStory);
+  // A turned, shadowed or outlined text box, or turned text art, reaches past its extent; the
+  // clip keeps that reach.
+  const reach = textArt
+    ? textArtPaintBounds(geometry.paintBounds, textArt)
+    : turnedTextboxBounds(geometry.paintBounds, textboxStory);
   const horizontalClip = options.deferHorizontalClip
     ? { x: reach.x, width: reach.width }
     : { x: options.contentLeft, width: Math.max(0, options.contentRight - options.contentLeft) };
+  // Text art draws its whole ink, as a floating shape does, even where it reaches over the
+  // content top or bottom.
   const clipRegion =
-    options.contentTop !== undefined && options.contentBottom !== undefined
+    options.contentTop !== undefined && options.contentBottom !== undefined && !textArt
       ? Object.freeze({
           ...horizontalClip,
           y: options.contentTop,
@@ -1385,9 +1384,11 @@ export function buildInlineDrawingRecord(options: {
     resource: options.input.resource,
     accessibility: drawingAccessibility(options.input.projection),
     ...drawingPaintFields(options.input.projection),
+    ...groupPictureLayerFields(options.input.projection, options.input.groupPictureLayerResources),
     ...(options.revisions && options.revisions.length > 0 ? { revisions: options.revisions } : {}),
     ...(options.bidiLevel !== undefined ? { bidiLevel: options.bidiLevel } : {}),
     ...(textboxStory ? { textboxStory } : {}),
+    ...(textArt ? { textArt } : {}),
   });
   return withGroupTextboxStories(record, options.input.projection, options.layoutTextboxStory);
 }

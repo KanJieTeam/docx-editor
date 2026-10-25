@@ -10,6 +10,7 @@ import type { RevisionAuthorFilter, RevisionDisplayMode } from './revision-proje
 import type { BlockFragmentRecord, TableFragmentRecord } from './semantic-records.ts';
 import { readTableStructure, type TableFloatPosition } from './semantic-table.ts';
 import type { StyleCascadeTable } from './style-cascade.ts';
+import type { ExclusionZone } from './drawing-exclusion.ts';
 
 type PositionedTableFragment = TableFragmentRecord & { readonly outOfFlow: true };
 
@@ -66,6 +67,9 @@ export function positionedTableAnchors(
 ): PositionedTableAnchor[] {
   const result: PositionedTableAnchor[] = [];
   let nextParagraphId: string | undefined;
+  // A text-positioned float follows the next block in flow, an in-flow table included; a
+  // page- or margin-positioned one keeps the next paragraph, which prices its earlier text.
+  let nextFlowId: string | undefined;
   for (let sourceIndex = blocks.length - 1; sourceIndex >= 0; sourceIndex -= 1) {
     const block = blocks[sourceIndex]!;
     if (
@@ -73,6 +77,7 @@ export function positionedTableAnchors(
       !block.props.some((property) => property.localName === 'framePr')
     ) {
       nextParagraphId = block.paragraph.id;
+      nextFlowId = block.paragraph.id;
       continue;
     }
     if (block.kind !== 'table') continue;
@@ -85,12 +90,16 @@ export function positionedTableAnchors(
       authorFilter,
       compatibilityMode
     )?.float;
-    if (!float || float.ySpec === 'inline') continue;
-    if (!nextParagraphId) continue;
+    if (!float || float.ySpec === 'inline') {
+      nextFlowId = block.table.id;
+      continue;
+    }
+    const anchorId = float.vertAnchor === 'text' ? nextFlowId : nextParagraphId;
+    if (!anchorId) continue;
     result.push({
       table: block.table,
       sourceIndex,
-      anchorId: nextParagraphId,
+      anchorId,
       float,
     });
   }
@@ -181,6 +190,30 @@ export function positionedTableFlow(
       if (!token) return;
       ids.add(id);
       append(token);
+    },
+    /**
+     * Note an in-flow table as the anchor of the floating tables before it, and return where
+     * the table itself starts: below those floats, or below a page-positioned float spanning
+     * the column, when their bands cross its top.
+     */
+    noteTable(
+      signals: PositionedTableAnchorSignal[],
+      tableId: string,
+      column: number,
+      fragmentIndex: number,
+      top: number,
+      zones: readonly ExclusionZone[]
+    ): number {
+      if (anchorIds.has(tableId))
+        signals.push({ anchorId: tableId, column, fragmentIndex, anchorY: top });
+      let start = top;
+      for (const zone of zones) {
+        const band = zone.verticalBand;
+        if (zone.sourceKind !== 'table') continue;
+        if (zone.anchorParagraphId !== tableId && zone.pageFramedBand !== true) continue;
+        if (band.y <= start + 0.001 && band.y + band.height > start) start = band.y + band.height;
+      }
+      return start;
     },
     note(
       signals: PositionedTableAnchorSignal[],
