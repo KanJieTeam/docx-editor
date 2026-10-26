@@ -11,6 +11,10 @@
 //
 //   - `paragraphAddressesOf` maps paraId to node id for ONE part and remembers it against
 //     the part ROOT. A header nobody edits keeps its map for the life of that tree.
+//   - `createBodyParagraphLookup` keeps the reverse map, node id to paraId, for the LAST body
+//     root only: every edit makes a new body root, and the shared cache above would otherwise
+//     fill with body maps that undo history keeps alive. So an edit can cost two body walks,
+//     one per direction, when both lookups run on the new tree; neither builds the other's map.
 //   - `createParagraphAddressResolver` remembers where each paraId resolved last time, then
 //     re-checks the hint through the store's own node index, which is O(1). A paragraph
 //     that did not move survives every keystroke elsewhere in the document.
@@ -19,11 +23,11 @@
 // dropped and the part maps decide. Presence painted on the wrong paragraph is worse than
 // presence that costs a rebuild.
 //
-// One nuance the hint does not reproduce. A full scan reads body first and story parts
-// after, so a paraId that two parts share resolves to the body copy. A hint that named a
-// header keeps naming it if the BODY later acquires the same id. Reaching that needs a
-// cross-part paraId collision minted after a resolution, presence is ephemeral, and the
-// cost is which of two same-named paragraphs a remote caret sits on.
+// The re-check cannot see that ANOTHER paragraph took the id first: an earlier paragraph
+// renamed to it, a pasted copy, a text box added inside an earlier paragraph, or a body
+// paragraph that now shadows a header's. So before each lookup the owner of the store passes the
+// change since the last one (`forgetChangedParagraphIds`), and every hint is dropped unless the
+// change was typing that could not move an id; the part maps then decide.
 
 import { findNode, type OoxmlNode, type OoxmlPart } from '../store/package/index.ts';
 import { isValidParaId, normalizeParagraphIdentity, paraIdOf } from '../store/package/para-id.ts';
@@ -47,6 +51,9 @@ const MAX_MEMOIZED_PARTS = 24;
  */
 const MAX_ADDRESS_HINTS = 512;
 
+/** Which map an identity walk builds. */
+type WalkDirection = 'byParagraphId' | 'byNodeId';
+
 const partAddresses = createRecentRootCache<ReadonlyMap<string, string>>(MAX_MEMOIZED_PARTS);
 
 let paragraphEnumerations = 0;
@@ -55,7 +62,9 @@ let paragraphVisits = 0;
 /**
  * @internal Warm-path recorder for collaboration paragraph enumerations.
  *
- * Presence address resolution must not enumerate paragraphs. This counts the enumerations
+ * Presence address resolution must not enumerate paragraphs per caret move: one walk per
+ * body tree for each lookup direction (node id to paraId, paraId to node id) is the expected
+ * cost. This counts the enumerations
  * that do happen so a test can assert the caret path stays off them.
  */
 export function collaborationParagraphScanRecorder(): {
@@ -131,11 +140,22 @@ export function paragraphSnapshot(part: OoxmlPart): readonly CollaborationParagr
 export function paragraphAddressesOf(part: OoxmlPart): ReadonlyMap<string, string> {
   const cached = partAddresses.get(part.root);
   if (cached) return cached;
+  const byParagraphId = identityWalk(part, 'byParagraphId');
+  partAddresses.set(part.root, byParagraphId);
+  return byParagraphId;
+}
+
+/**
+ * One walk of a part's paragraphs under the snapshot's own id rules: `normalizeParagraphIdentity`
+ * mints an id for a missing, invalid, or later duplicate one, and the first `w:p` to carry an id
+ * claims it (a demoted generic `w:p` too, which then has no address). Builds the one map its
+ * caller keeps: `byParagraphId`, stable paraId to node id for the first claimant, or
+ * `byNodeId`, node id to the stable paraId a snapshot lists it under. Not memoized here.
+ */
+function identityWalk(part: OoxmlPart, direction: WalkDirection): Map<string, string> {
   const identified = normalizeParagraphIdentity(part);
   paragraphEnumerations += 1;
   const addresses = new Map<string, string>();
-  // An id a demoted-generic `w:p` claims is still taken, even though that node has no
-  // addressable text. The snapshot this replaces claimed it the same way.
   const claimed = new Set<string>();
   const visit = (node: OoxmlNode): void => {
     if (node.kind === 'textValue') return;
@@ -146,14 +166,16 @@ export function paragraphAddressesOf(part: OoxmlPart): ReadonlyMap<string, strin
         const paragraphId = authoredId.toUpperCase();
         if (!claimed.has(paragraphId)) {
           claimed.add(paragraphId);
-          if (node.kind === 'paragraph') addresses.set(paragraphId, node.id);
+          if (node.kind === 'paragraph') {
+            if (direction === 'byParagraphId') addresses.set(paragraphId, node.id);
+            else addresses.set(node.id, paragraphId);
+          }
         }
       }
     }
     for (const child of node.children) visit(child);
   };
   visit(identified.root);
-  partAddresses.set(part.root, addresses);
   return addresses;
 }
 
@@ -177,15 +199,31 @@ function sameRoots(left: readonly OoxmlPart[], right: readonly OoxmlNode[]): boo
   return true;
 }
 
+/** Stable paragraph id to address, with the hint invalidation its owner drives. */
+export interface ParagraphAddressResolver {
+  (paragraphId: string): ParagraphAddress | null;
+  /**
+   * These paragraphs now carry these ids. A hint for one of the ids that names another node
+   * may no longer name the first claimant, so it is dropped; a hint that names the same node
+   * (typing in it) stays.
+   */
+  forgetIds(claims: Iterable<{ readonly paragraphId: string; readonly nodeId: string }>): void;
+  /** Any id may have a new first claimant (a structural or package-wide change). */
+  forgetAll(): void;
+  /** Whether any hint is held, so a change listener can skip work when none is. */
+  hasHints(): boolean;
+}
+
 /**
  * Resolve stable paragraph ids against the story parts a replica holds.
  *
  * `storyParts` returns body first and the remaining story parts after, which is the
- * precedence a duplicate id resolves by.
+ * precedence a duplicate id resolves by. The caller must report changes that can move an id
+ * to another paragraph through `forgetIds` or `forgetAll`; see the module header.
  */
 export function createParagraphAddressResolver(
   storyParts: () => readonly OoxmlPart[]
-): (paragraphId: string) => ParagraphAddress | null {
+): ParagraphAddressResolver {
   const hints = new Map<string, ParagraphAddressHint>();
   let absent: { readonly roots: readonly OoxmlNode[]; readonly ids: Set<string> } | null = null;
 
@@ -217,7 +255,7 @@ export function createParagraphAddressResolver(
     return { part, nodeId: hint.nodeId };
   };
 
-  return (paragraphId: string): ParagraphAddress | null => {
+  const resolve = (paragraphId: string): ParagraphAddress | null => {
     const parts = storyParts();
     const hinted = fromHint(paragraphId, parts);
     if (hinted) return hinted;
@@ -235,5 +273,77 @@ export function createParagraphAddressResolver(
     }
     if (absent.ids.size < MAX_ADDRESS_HINTS) absent.ids.add(paragraphId);
     return null;
+  };
+  return Object.assign(resolve, {
+    forgetIds(claims: Iterable<{ readonly paragraphId: string; readonly nodeId: string }>) {
+      for (const { paragraphId, nodeId } of claims) {
+        if (hints.get(paragraphId)?.nodeId !== nodeId) hints.delete(paragraphId);
+      }
+    },
+    forgetAll() {
+      hints.clear();
+    },
+    hasHints() {
+      return hints.size > 0;
+    },
+  });
+}
+
+/**
+ * Tell `resolver` which stable ids one store change may have given a new first claimant.
+ *
+ * Only a text-local change (typing, IME, a narrowed remote text edit) keeps hints, and only
+ * when every node it names is a paragraph: text moves no paraId, so a hint stays unless that
+ * paragraph now carries a hinted id another node held. Anything else forgets every hint:
+ * structure, properties, drawings, undo and redo, and a change whose node lists cannot be
+ * trusted to be complete (a package-channel write reports none, and may rename or add any
+ * paragraph, a text box's included). The next lookup of a forgotten id walks that part once.
+ */
+export function forgetChangedParagraphIds(
+  resolver: ParagraphAddressResolver,
+  parts: readonly OoxmlPart[],
+  change: {
+    readonly impact: string;
+    readonly dirty: readonly string[];
+    readonly created: readonly string[];
+  }
+): void {
+  if (!resolver.hasHints()) return;
+  const changed = [...change.dirty, ...change.created];
+  if (change.impact !== 'text-local' || changed.length === 0) return resolver.forgetAll();
+  const claims: { paragraphId: string; nodeId: string }[] = [];
+  for (const nodeId of changed) {
+    const part = parts.find((candidate) => nodeId.startsWith(`${candidate.name}#`));
+    const node = part ? findNode(part, nodeId) : null;
+    const authoredId = node?.kind === 'paragraph' ? paraIdOf(node) : null;
+    if (!authoredId) return resolver.forgetAll();
+    claims.push({ paragraphId: authoredId.toUpperCase(), nodeId });
+  }
+  resolver.forgetIds(claims);
+}
+
+/**
+ * The body paragraph with this canonical node id, as `paragraphSnapshot(body)` would list it,
+ * or null. A remote caret's character lookup asks this on every caret move. It reads a node id
+ * to paraId map from `identityWalk`, which applies the snapshot's own id rules, so it answers
+ * exactly what the snapshot does, then reads that one paragraph's text.
+ *
+ * The map is kept for the last body root only. Caret moves on an unchanged document are O(1);
+ * the first lookup after an edit walks the body once (no text), shared by every lookup on that
+ * tree. The snapshot it replaces listed every paragraph and its text on every call.
+ */
+export function createBodyParagraphLookup(
+  body: () => OoxmlPart
+): (nodeId: string) => CollaborationParagraph | null {
+  let last: { readonly root: OoxmlNode; readonly byNodeId: ReadonlyMap<string, string> } | null =
+    null;
+  return (nodeId) => {
+    const part = body();
+    if (last?.root !== part.root)
+      last = { root: part.root, byNodeId: identityWalk(part, 'byNodeId') };
+    const paragraphId = last.byNodeId.get(nodeId);
+    if (paragraphId === undefined) return null;
+    const text = paragraphTextOf(part, nodeId);
+    return text === null ? null : Object.freeze({ paragraphId, nodeId, text });
   };
 }

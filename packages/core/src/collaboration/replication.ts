@@ -67,6 +67,13 @@ export interface CollaborationDocumentPort {
    */
   readonly interactive?: boolean;
   paragraphs(): readonly CollaborationParagraph[];
+  /**
+   * The body paragraph with this canonical node id, exactly as `paragraphs()` lists it (the
+   * same stable id, minted when the paragraph's own is missing, invalid, or claimed by an
+   * earlier paragraph), or null for a node that is not a listed body paragraph. O(1) on an
+   * unchanged document, so presence can ask it on every caret move; the first call after an
+   * edit walks the body once.
+   */
   paragraphByNodeId(nodeId: string): CollaborationParagraph | null;
   /**
    * The model text of the paragraph with this node id in any story, or null when the editor
@@ -80,6 +87,8 @@ export interface CollaborationDocumentPort {
    * store. Presence may name a header, a footer, a note, or a cell, so this lookup covers
    * those parts too. It resolves through an index, not a scan, because a remote caret
    * resolves two addresses per selection on every caret move.
+   * A paraId two paragraphs share resolves to the first in document order, body first, as
+   * `paragraphs()` and `paragraphByNodeId` list it.
    */
   paragraphByStableId(paragraphId: string): CollaborationParagraph | null;
   applyParagraphText(
