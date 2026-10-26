@@ -2479,7 +2479,7 @@ export interface PaginatedSurface {
     convertNote(fromKind: 'footnote' | 'endnote', noteId: number): boolean;
     copyFlavours(): {
         readonly html: string | null;
-        readonly reason?: 'unsupported-content';
+        readonly reason?: 'unsupported-content' | 'chart-content';
         readonly text: string;
     };
     currentPage(mode?: 'viewport' | 'caret'): number;
@@ -4330,11 +4330,8 @@ export const twipsToInches: (twips: number) => number;
 // @public
 export interface UnsupportedElement {
     readonly bounds?: LayoutBox;
-    // (undocumented)
     readonly drawing?: InlineDrawingRecord | AnchoredDrawingRecord;
-    // (undocumented)
     readonly equation?: EquationSpanRecord;
-    // (undocumented)
     readonly label: string;
     // (undocumented)
     readonly localName: string;

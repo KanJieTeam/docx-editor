@@ -65,6 +65,13 @@ export const DISABLED_REASON_KEYS: Readonly<Record<string, TranslationKey>> = Ob
   // Keyed on `PICTURE_SELECTED_INSERT_REASON` in the engine's image lane.
   'a picture is selected; place the caret in text to insert a picture':
     'disabledReason.pictureSelected',
+  // Keyed on `CHART_DRAWING_REASON` in the engine's image lane (`image-state-rules.ts`).
+  'this drawing is a chart; only delete applies, and it removes the whole chart':
+    'disabledReason.chartDrawing',
+  // Keyed on `CHART_CLIPBOARD_REASON` in the engine's clipboard lane
+  // (`clipboard-object-selection.ts`).
+  'the selection contains a chart; a chart cannot be copied, cut or pasted':
+    'disabledReason.chartClipboard',
   'invalid table chrome value': 'disabledReason.invalidValue',
   'invalid value for toolbar command': 'disabledReason.invalidValue',
   'unsupported table command': 'disabledReason.unavailable',

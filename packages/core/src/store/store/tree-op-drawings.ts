@@ -42,6 +42,7 @@ import {
 } from '../package/ooxml-tree.ts';
 import { cloneWithNewIds, fromEdit, paragraphContainingNode, TEXT_DEPS } from './tree-op-nodes.ts';
 import { drawingEffect, drawingOpImpact, isValidXmlMetadata } from './tree-op-drawing-kinds.ts';
+import { chartDrawingOf } from './tree-op-chart-drawing.ts';
 import {
   applyLegacyVmlGeometryOp,
   legacyVmlDrawingOp,
@@ -305,6 +306,18 @@ function lockBlocks(anchor: OoxmlElement, op: DrawingTreeDocOp['op']): TreeOpRej
   return null;
 }
 
+/** A chart's locks, read from its chart drawing's anchor in every state; null without one. */
+export function chartDrawingLocks(chartDrawing: OoxmlElement): DrawingLocks | null {
+  const anchor = anchorRootOf(chartDrawing as OoxmlDrawingNode);
+  return anchor ? effectiveLocks(anchor) : null;
+}
+
+/** A chart's delete lock, read from its chart drawing's anchor: `@locked` or `noSelect`. */
+function chartLockBlocks(chartDrawing: OoxmlElement): TreeOpRejection | null {
+  const anchor = anchorRootOf(chartDrawing as OoxmlDrawingNode);
+  return anchor ? lockBlocks(anchor, 'deleteDrawing') : null;
+}
+
 function drawingContext(
   part: OoxmlPart,
   drawingNodeId: string,
@@ -312,6 +325,8 @@ function drawingContext(
 ):
   | { drawing: OoxmlDrawingNode; anchor: OoxmlElement; projection: DrawingProjection }
   | TreeOpRejection {
+  // A chart is no picture, whichever branch the page shows (`tree-op-chart-drawing.ts`).
+  if (operation !== 'deleteDrawing' && chartDrawingOf(part, drawingNodeId)) return 'chart-drawing';
   const original = findNode(part, drawingNodeId);
   const atomProjection =
     original?.kind === 'drawing' ? null : drawingAtomProjection(part, drawingNodeId);
@@ -344,9 +359,15 @@ function validateRelationshipId(value: string): boolean {
   return value.length > 0 && value.length <= 512 && /^[A-Za-z0-9._-]+$/.test(value);
 }
 
+/** A legacy VML op, unless it names a chart's VML fallback: a chart follows its own rule. */
+function legacyOpOf(part: OoxmlPart, op: DrawingTreeDocOp): ReturnType<typeof legacyVmlDrawingOp> {
+  if ('drawingNodeId' in op && chartDrawingOf(part, op.drawingNodeId)) return null;
+  return legacyVmlDrawingOp(part, op);
+}
+
 /** Validate a drawing op's extents, crops and positions before it reaches the store. */
 export function validateDrawingOp(part: OoxmlPart, op: DrawingTreeDocOp): TreeOpRejection | null {
-  const legacy = legacyVmlDrawingOp(part, op);
+  const legacy = legacyOpOf(part, op);
   if (legacy) return legacyVmlGeometryRejection(part, legacy);
   switch (op.op) {
     case 'insertDrawing': {
@@ -387,6 +408,8 @@ export function validateDrawingOp(part: OoxmlPart, op: DrawingTreeDocOp): TreeOp
     }
     case 'deleteDrawing': {
       if (op.revision) return 'trackedDrawingDeletionUnsupported';
+      const chart = chartDrawingOf(part, op.drawingNodeId);
+      if (chart) return chartLockBlocks(chart.chartDrawing);
       const ctx = drawingContext(part, op.drawingNodeId, op.op);
       if (typeof ctx === 'string') return ctx;
       return lockBlocks(ctx.anchor, op.op);
@@ -1463,7 +1486,7 @@ export function applyDrawingOp(
   op: DrawingTreeDocOp,
   options?: EditOptions
 ): TreeOpResult {
-  const legacy = legacyVmlDrawingOp(part, op);
+  const legacy = legacyOpOf(part, op);
   if (legacy) return applyLegacyVmlGeometryOp(part, legacy, options);
   const rejection = validateDrawingOp(part, op);
   if (rejection) return { ok: false, reason: rejection };
@@ -1521,9 +1544,14 @@ export function applyDrawingOp(
       return fromEdit(edited, effect);
     }
     case 'deleteDrawing': {
-      const ctx = drawingContext(part, op.drawingNodeId, op.op);
+      // A chart goes whole: the `mc:AlternateContent` with both branches, or its drawing.
+      const chart = chartDrawingOf(part, op.drawingNodeId);
+      const chartLock = chart ? chartLockBlocks(chart.chartDrawing) : null;
+      if (chartLock) return { ok: false, reason: chartLock };
+      const ctx = chart ? null : drawingContext(part, op.drawingNodeId, op.op);
       if (typeof ctx === 'string') return { ok: false, reason: ctx };
-      const targetId = ctx.projection.textboxStory ? op.drawingNodeId : ctx.drawing.id;
+      const targetId =
+        chart?.removeNodeId ?? (ctx!.projection.textboxStory ? op.drawingNodeId : ctx!.drawing.id);
       const paragraph = paragraphContainingNode(part, targetId);
       const effect: TreeOpEffect = {
         dirty: paragraph ? [paragraph.id, targetId] : [targetId],

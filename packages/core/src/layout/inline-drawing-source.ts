@@ -1,5 +1,4 @@
 import { sameResourceSubstrate } from './package-resource-substrate.ts';
-import { createSubtreeAggregateMemo } from '../store/package/subtree-memo-policy.ts';
 import { groupTextboxesLayoutToken } from './group-textbox-layout.ts';
 import { stylesPartOf } from '../store/package/ooxml-indexes.ts';
 import { drawingInputsUnchangedByParagraphEdit } from './drawing-paragraph-change.ts';
@@ -49,13 +48,20 @@ import type { InlineDrawingLayoutContext } from './drawing-layout.ts';
 import { walkDrawingAtoms } from './drawing-inline-walk.ts';
 import { framedTokenJoin } from './framed-token.ts';
 import {
+  chartRecordProjection,
+  replacesFailedChartFallback,
+  resolveChartFallbackResource,
+} from './drawing-chart-fallback.ts';
+import {
+  DECODE_FAILED_RESOURCE,
+  drawingResourceLayoutToken,
+  FOOTPRINT_RESOURCE,
+  pendingResourceKey,
+} from './drawing-resource-keys.ts';
+import {
   groupPictureLayerResources,
   groupPictureLayoutToken,
 } from './drawing-group-picture-layers.ts';
-import {
-  aggregateParagraphTokensForTableBlock,
-  createTableRowTokenStore,
-} from './table-paragraph-tokens.ts';
 
 /** Layout-owned read surface for inline drawing package state (no binding/session lane). */
 export interface InlineDrawingPackageReader {
@@ -72,6 +78,15 @@ export interface InlineDrawingLayoutBundle {
   drawingTokenForParagraph(paragraph: OoxmlNode, ownerPartName: string): string;
   /** Number of discovered image decodes that have not settled yet. */
   pendingResourceCount(): number;
+  /**
+   * The settled resource of the picture saved in a drawn chart's `mc:Fallback`, read on
+   * request. Layout never reads it, so it is never pending layout work. Undefined for a
+   * drawing without one.
+   */
+  resolveChartFallback(
+    ownerPartName: string,
+    atomId: string
+  ): Promise<ImageResourceState | undefined>;
   /** Mint validated bytes for a ready handle when contentId matches; null on stale/mismatch. */
   mintValidatedBytes(
     handle: ValidatedImageBytesHandle,
@@ -89,30 +104,13 @@ export interface CreateInlineDrawingLayoutBundleOptions {
   readonly resourceLookup?: ImageResourceLookup;
 }
 
-const FOOTPRINT_RESOURCE: ImageResourceState = Object.freeze({
-  kind: 'unrenderable',
-  partName: null,
-  mime: 'unknown',
-  reason: 'non-picture-graphic',
-});
-
-function pendingResourceKey(projection: DrawingProjection): string {
-  const picture = projection.picture ?? projection.groupPicture;
-  if (picture?.embeddedRelationshipId) {
-    return `embed:${projection.ownerPartName}:${picture.embeddedRelationshipId}`;
-  }
-  if (picture?.linkedRelationshipId) {
-    return `link:${projection.ownerPartName}:${picture.linkedRelationshipId}`;
-  }
-  return `nonpicture:${projection.drawingNodeId}`;
-}
-
 interface PartDrawingContextSlot {
   readonly context: InlineDrawingLayoutContext;
   readonly cacheTokenForPart: () => string;
   readonly drawingTokenForParagraph: (paragraph: OoxmlNode) => string;
   readonly isCompatibleWith: (part: OoxmlPart, pkg: OoxmlPackage) => boolean;
   readonly pendingResourceCount: () => number;
+  readonly resolveChartFallback: (atomId: string) => Promise<ImageResourceState | undefined>;
   readonly dispose: () => void;
 }
 
@@ -315,8 +313,16 @@ function drawingProjectionLayoutToken(projection: DrawingProjection): string {
     textboxStory: projection.textboxStory ? textboxLayoutToken(projection.textboxStory) : '',
     groupTextboxes: groupTextboxesLayoutToken(projection.groupTextboxes),
     chartSummary: projection.chartSummary
-      ? framedTokenJoin([projection.chartSummary.title ?? '', ...projection.chartSummary.plotTypes])
+      ? framedTokenJoin([
+          projection.chartSummary.title ?? '',
+          projection.chartSummary.shownAs,
+          ...projection.chartSummary.plotTypes,
+        ])
       : '',
+    chartFallbackPicture: framedTokenJoin([
+      projection.chartFallbackPicture?.embeddedRelationshipId ?? '',
+      projection.chartFallbackPicture?.linkedRelationshipId ?? '',
+    ]),
     compatibilityBranchNodeId: projection.compatibilityBranchNodeId ?? '',
     footprintOnly: projection.footprintOnly ? 'footprint' : '',
     anchor: anchor
@@ -397,30 +403,6 @@ function drawingProjectionLayoutToken(projection: DrawingProjection): string {
   return framedTokenJoin(Object.values(fields));
 }
 
-// Length-framed where a field embeds file text (resource keys carry relationship ids and
-// part names verbatim), so no crafted id can shift a field boundary.
-function drawingResourceLayoutToken(resource: ImageResourceState): string {
-  switch (resource.kind) {
-    case 'ready':
-      return framedTokenJoin([
-        'ready',
-        resource.resourceKey,
-        resource.contentId,
-        `${resource.pixelWidth}x${resource.pixelHeight}`,
-      ]);
-    case 'pending':
-      return framedTokenJoin(['pending', resource.resourceKey]);
-    case 'external':
-      return framedTokenJoin(['external', resource.relationshipId, resource.sinkSafe ? '1' : '0']);
-    case 'missing':
-      return 'missing';
-    case 'unrenderable':
-      return `unrenderable:${resource.reason}`;
-    default:
-      return (resource as ImageResourceState).kind;
-  }
-}
-
 /**
  * Story levels folded into a paragraph's drawing token.
  *
@@ -495,11 +477,13 @@ function createPartDrawingContextSlot(options: {
       )
     : true;
 
+  /** Settlement of each decode in flight, for a caller that awaits one picture. */
+  const settlements = new Map<string, Promise<void>>();
   const scheduleResolve = (projection: DrawingProjection, key: string): void => {
     if (disposed || inFlight.has(key)) return;
     inFlight.add(key);
     const startGeneration = generation;
-    void lookup
+    const settlement = lookup
       .resolveForProjection(projection)
       .then((state) => {
         if (disposed || startGeneration !== generation) return;
@@ -514,25 +498,39 @@ function createPartDrawingContextSlot(options: {
       })
       .catch(() => {
         if (disposed || startGeneration !== generation) return;
-        resourceByKey.set(
-          key,
-          Object.freeze({
-            kind: 'unrenderable',
-            partName: null,
-            mime: 'unknown',
-            reason: 'decode-failed',
-          })
-        );
+        resourceByKey.set(key, DECODE_FAILED_RESOURCE);
         resourceEpoch += 1;
         resourceEpochByKey.set(key, resourceEpoch);
         inFlight.delete(key);
         onResourceSettled(ownerPartName);
       });
+    settlements.set(key, settlement);
+    void settlement.finally(() => settlements.delete(key));
+  };
+
+  // A drawn chart's fallback picture, read only when an exporter asks: never pending layout
+  // work, and it never moves the resource epoch.
+  const resolveChartFallback = (atomId: string): Promise<ImageResourceState | undefined> => {
+    const startGeneration = generation;
+    return resolveChartFallbackResource({
+      projection: atomProjections.get(atomId),
+      cached: (key) => resourceByKey.get(key),
+      settlement: (key) => settlements.get(key),
+      resolve: (fallback) => lookup.resolveForProjection(fallback),
+      live: () => !disposed && startGeneration === generation,
+      store: (key, state) => {
+        resourceByKey.set(key, state);
+        if (state.kind === 'ready') rememberReadyHandle(state.validatedHandle);
+      },
+    });
   };
 
   const resourceOf = (projection: DrawingProjection): ImageResourceState => {
-    // A wrap footprint has nothing to resolve, and must never start a decode or a fetch.
-    if (projection.footprintOnly) return FOOTPRINT_RESOURCE;
+    // A wrap footprint, or a chart placeholder over a failed fallback, has nothing to
+    // resolve, and must never start a decode or a fetch.
+    if (projection.footprintOnly || replacesFailedChartFallback(projection)) {
+      return FOOTPRINT_RESOURCE;
+    }
     const key = pendingResourceKey(projection);
     const cached = resourceByKey.get(key);
     if (cached) return cached;
@@ -562,15 +560,24 @@ function createPartDrawingContextSlot(options: {
   // payload the projection cannot draw (`projectRunLevelMcDrawing`), and keeps only its wrap
   // footprint. A linked picture settles at once; an embedded one counts only after its decode
   // settles, so a pending group keeps its frame and paints its vector members.
+  //
+  // A chart shown by its fallback picture follows the same settlement: a picture that fails
+  // shows the chart placeholder instead (`drawing-chart-fallback.ts`).
+  const settledResource = (shown: DrawingProjection): ImageResourceState | undefined => {
+    const picture = shown.picture ?? shown.groupPicture;
+    return picture && !picture.embeddedRelationshipId
+      ? resourceOf(shown)
+      : resourceByKey.get(pendingResourceKey(shown));
+  };
   const projectionForAtom = (atomNodeId: string): DrawingProjection | null => {
     const projection = atomProjections.get(atomNodeId) ?? null;
+    if (projection?.chartFallbackPicture) {
+      return chartRecordProjection(projection, settledResource);
+    }
     if (!projection?.groupPicture?.alternateContent) return projection;
     const pictures = [projection.groupPicture, ...(projection.groupPictureLayers ?? [])];
     const failed = pictures.some((picture) => {
-      const shown = { ...projection, groupPicture: picture };
-      const state = !picture.embeddedRelationshipId
-        ? resourceOf(shown)
-        : resourceByKey.get(pendingResourceKey(shown));
+      const state = settledResource({ ...projection, groupPicture: picture });
       return state && state.kind !== 'ready' && state.kind !== 'pending';
     });
     return failed ? wrapFootprintProjection(projection) : projection;
@@ -657,6 +664,7 @@ function createPartDrawingContextSlot(options: {
       `${ownerPartName}|${resourceEpoch}|${generation}|${atomProjections.size}`,
     drawingTokenForParagraph,
     pendingResourceCount: () => inFlight.size,
+    resolveChartFallback,
     isCompatibleWith: (nextPart, nextPkg) => {
       const nextTheme = createPackageShapeThemeResolvers(nextPkg);
       if (nextTheme.cacheToken !== theme.cacheToken) return false;
@@ -716,6 +724,7 @@ function createPartDrawingContextSlot(options: {
       }
       resourceByKey.clear();
       inFlight.clear();
+      settlements.clear();
       resourceEpochByKey.clear();
     },
   };
@@ -870,6 +879,9 @@ export function createInlineDrawingLayoutBundle(
       for (const slot of slots.values()) count += slot.pendingResourceCount();
       return count;
     },
+    resolveChartFallback(ownerPartName: string, atomId: string) {
+      return slotFor(ownerPartName, options.session).resolveChartFallback(atomId);
+    },
     mintValidatedBytes(handle: ValidatedImageBytesHandle, expectedContentId: string) {
       // A validated handle is a capability owned by the bundle that discovered and retained
       // it. The process registry can still mint a live handle belonging to another export
@@ -946,55 +958,8 @@ function framedAtomToken(
   return framedTokenJoin(parts);
 }
 
-/**
- * `drawingTokenForTableBlock` memoized per (immutable table node, drawing epoch).
- *
- * The table token exists to VALIDATE the prepass memo, so it is recomputed before every
- * memo hit — which walked every row and cell of every table on every layout pass. The
- * token is a pure function of the table subtree (node identity) and the part's drawing
- * projection/resource state, and `drawingLayoutEpoch` already stands in for the latter
- * (it moves whenever any projection or resource in the part does). No epoch means the
- * caller cannot see resource moves, so the recompute path is kept — the same rule the
- * section prepass memo follows.
- */
-export function drawingTokenForTableBlockMemo(
-  table: OoxmlNode,
-  epoch: string | undefined,
-  drawingTokenForParagraph: (paragraph: OoxmlNode) => string
-): string {
-  if (epoch === undefined) return drawingTokenForTableBlock(table, drawingTokenForParagraph);
-  const cached = tableDrawingTokenCache.get(table);
-  if (cached && cached.epoch === epoch) return cached.token;
-  // Rows keep their identity across a cell edit, so their segments answer under the same epoch.
-  const reuse = { rows: rowDrawingTokens, scope: undefined, epoch };
-  const token = aggregateParagraphTokensForTableBlock(table, drawingTokenForParagraph, reuse);
-  // A token grows with the table: about one item per 64 characters.
-  tableDrawingTokenCache.set(table, { epoch, token }, token.length >> 6);
-  return token;
-}
-
-/** Aggregated drawing token per immutable table node, valid for one drawing epoch. */
-const tableDrawingTokenCache = createSubtreeAggregateMemo<{
-  readonly epoch: string;
-  readonly token: string;
-}>();
-const rowDrawingTokens = createTableRowTokenStore();
-
-/**
- * Aggregate per-paragraph drawing tokens for a table subtree (cache + incremental keys).
- *
- * The shared position-preserving walk (`aggregateParagraphTokensForTableBlock`): a
- * per-paragraph token embeds file-influenced values and its own printable separators, so a
- * printable join lets a token value shift a boundary, and sorting or skipping empties lets
- * two different paragraph-to-token ASSIGNMENTS over one byte-identical subtree concatenate
- * to the same string — and the table's prepared-block memo then serves a break with stale
- * drawing layout.
- */
-export function drawingTokenForTableBlock(
-  table: OoxmlNode,
-  drawingTokenForParagraph: (paragraph: OoxmlNode) => string
-): string {
-  return aggregateParagraphTokensForTableBlock(table, drawingTokenForParagraph);
-}
-
+export {
+  drawingTokenForTableBlock,
+  drawingTokenForTableBlockMemo,
+} from './drawing-table-tokens.ts';
 export { drawingProjectionLayoutToken, drawingResourceLayoutToken, vectorShapeLayoutToken };

@@ -4,7 +4,8 @@
 //
 // The engine reads a saved SmartArt drawing, shapes, groups, canvases and pictures on its own.
 // A chart, or a diagram it would have to lay out, keeps its labelled placeholder until a
-// renderer for it is installed. A shape paints without the effects no renderer projects, a
+// renderer for it is installed; a chart in `mc:AlternateContent` shows its fallback picture
+// instead when that paints. A shape paints without the effects no renderer projects, a
 // text path outside a watermark keeps the placeholder of a refused legacy drawing, and a
 // metafile picture keeps the placeholder of an image format the engine cannot decode.
 //
@@ -15,6 +16,7 @@
 // read, so documents without these drawings pay nothing for the hooks.
 
 import type { ChartPartResolver } from './chart-parts.ts';
+import type { ChartexPartResolver } from './chartex-parts.ts';
 import type {
   ShapeSchemeColorResolver,
   VectorShapeProjection,
@@ -134,6 +136,8 @@ export interface DrawingGraphicProjection {
  */
 export interface ChartRenderContext {
   readonly resolveChartPart?: ChartPartResolver;
+  /** The chartex part behind a `cx:chart` element (waterfall, funnel, histogram, ...). */
+  readonly resolveChartexPart?: ChartexPartResolver;
   readonly resolveSchemeColor?: ShapeSchemeColorResolver;
 }
 
@@ -180,8 +184,8 @@ export interface LegacyTextArtContext {
  */
 export interface DrawingRenderers {
   /**
-   * The shapes and labels of a chart drawing, or null when the drawing is not a chart or the
-   * chart is outside what the renderer paints.
+   * The shapes and labels of a chart drawing, classic (`c:chart`) or chartex (`cx:chart`), or
+   * null when the drawing is not a chart or the chart is outside what the renderer paints.
    */
   readonly chart?: (
     anchor: OoxmlElement,

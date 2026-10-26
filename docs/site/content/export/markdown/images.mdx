@@ -193,6 +193,23 @@ The resolver gets a separate byte copy. Mutations cannot corrupt returned assets
 
 `MarkdownBundleError.code` is `invalid-media-path`, `duplicate-output-path`, `non-portable-image-url`, `output-not-empty`, `write-failed`, or `archive-failed`. Filesystem failures preserve the cause and relevant path. Helpers remove only files they created during a failed write.
 
+## Charts
+
+Markdown cannot hold a drawn chart. A chart saved with a fallback picture in its `mc:AlternateContent` exports that picture as an image. This applies whether the page draws the chart, shows the fallback, or shows a placeholder, and whether or not the [drawing module](/docs/2.x/pro/drawing) is installed in the process. The fallback picture is the image saved with the document, so it can differ from the chart's cached values.
+
+The image's alternative text is the description or title that the author set on the chart drawing. If the drawing has neither, the image uses the chart title from `drawing.chart`. An image with no alternative text from either source is decorative: its `alt` is empty and its occurrence has `decorative: true`.
+
+A chart that exports no image gets an `omitted-drawing` warning. The message names the chart title when the chart has one, and it says why the chart is omitted:
+
+- `The chart "Net cash" is omitted from Markdown because image export is off.` The chart has a fallback picture, and `images` is not enabled.
+- `The chart "Net cash" is omitted from Markdown because it has no saved fallback picture.` The chart has no fallback picture.
+- `The chart "Net cash" is omitted from Markdown because its saved fallback is not a picture.` The page shows a fallback shape, group, or VML drawing.
+- `The chart "Net cash" is omitted from Markdown because its saved fallback picture could not be read (missing).` The fallback picture is missing, damaged, linked, or in a format that does not convert. The value in parentheses is the resource state.
+
+An untitled chart's message starts with `A chart`. Each page gets at most five chart warnings. If a page omits more charts, it gets one more warning that counts the rest, for example `2 more charts are omitted from Markdown on this page.`
+
+`exportMarkdownFrom()` applies the same rule to any session, including a session opened through `@docx-editor.dev/docx-to-pdf`. One session can export the drawn chart to PDF and its fallback picture to Markdown.
+
 ## Output limits
 
 Extraction covers validated ready images published by layout, including the body, headers, footers, tables, notes, separators, and nested text boxes. Hidden and revision-suppressed images are not published and are not extracted. Unsupported images, missing resources, external links, and shapes remain omitted with warnings. A shape group is omitted as one drawing, even when it holds a picture; extraction never fetches document-linked external images. Existing conversion hooks can supply raster replacements for preserved TIFF, EMF, and WMF files.

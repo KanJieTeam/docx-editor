@@ -8,12 +8,17 @@ import type { OoxmlElement, OoxmlNode } from './ooxml-tree.ts';
 
 const DRAWINGML_MAIN = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 const MAX_TITLE_UNITS = 200;
-const MAX_PLOT_TYPES = 8;
+/** @internal */
+export const MAX_PLOT_TYPES = 8;
 const MAX_TITLE_NODES = 2000;
 
 /**
- * A chart plot type, named by its element without the `Chart` suffix. Column and bar charts
- * are both `bar`; `ofPie` is a pie-of-pie or bar-of-pie chart.
+ * A chart plot type. A classic chart names it by its element without the `Chart` suffix:
+ * column and bar charts are both `bar`, and `ofPie` is a pie-of-pie or bar-of-pie chart. A
+ * chartex chart names it by its series layout: `waterfall`, `funnel`, `boxWhisker`,
+ * `treemap`, `sunburst` and `regionMap` by their layout id, `histogram` for a clustered
+ * column series, and `pareto` for a Pareto chart (a clustered column series with its
+ * Pareto line).
  *
  * @public
  */
@@ -33,7 +38,15 @@ export type DrawingChartPlotType =
   | 'scatter'
   | 'stock'
   | 'surface'
-  | 'surface3D';
+  | 'surface3D'
+  | 'waterfall'
+  | 'funnel'
+  | 'histogram'
+  | 'pareto'
+  | 'boxWhisker'
+  | 'treemap'
+  | 'sunburst'
+  | 'regionMap';
 
 const PLOT_TYPES: ReadonlySet<string> = new Set<DrawingChartPlotType>([
   'area',
@@ -55,7 +68,21 @@ const PLOT_TYPES: ReadonlySet<string> = new Set<DrawingChartPlotType>([
 ]);
 
 /**
- * The title and plot types of a chart, as text.
+ * How the page shows a chart: `chart` when the installed chart renderer draws it,
+ * `fallback` when it shows the content saved in its `mc:AlternateContent` fallback (a
+ * picture, a shape, a group or VML), and `placeholder` when it shows the labeled chart
+ * placeholder.
+ *
+ * @public
+ */
+export type DrawingChartShownAs = 'chart' | 'fallback' | 'placeholder';
+
+/**
+ * The title and plot types of a chart, as text, and how the page shows it.
+ *
+ * A drawing record carries it as `chart` whenever the drawing holds a chart whose chart part
+ * can be read, in each of the three states that `shownAs` names. A chart in an `mc:Choice`
+ * that the reader skips, with an empty `mc:Fallback`, has no drawing record.
  *
  * @public
  */
@@ -63,11 +90,28 @@ export interface DrawingChartSummary {
   /**
    * The title the chart shows, as plain text: its own title, typed or from a cell, or the name
    * of its only series for an automatic title. Null when it shows none, and when a title with
-   * no text of its own sits on a chart with several series.
+   * no text of its own sits on a chart with several series. Runs of white space collapse to one
+   * space, and the text is cut to at most 200 UTF-16 code units.
+   *
+   * A chartex chart (waterfall, funnel, histogram, Pareto, box and whisker, treemap, sunburst,
+   * region map) reads only its own title text. Its title is null when the title element has
+   * no text of its own and the chart shows its default caption, and a chartex chart never uses
+   * a series name as an automatic title.
    */
   readonly title: string | null;
-  /** The chart's plot types in document order; a combination chart has more than one. */
+  /**
+   * The chart's plot types in document order; a classic combination chart has more than one.
+   * A chartex chart reports exactly one plot type, or none when its series layout is not one
+   * of the chartex types.
+   */
   readonly plotTypes: readonly DrawingChartPlotType[];
+  /**
+   * How the page shows the chart. The projection sets it from the renderers installed when
+   * the document opened: `chart` (the record has a `vectorShape`), `fallback` (the record
+   * paints the fallback content, such as a picture `resource`), or `placeholder` (the record
+   * has `placeholderGraphicKind` `'chart'`). Read this field rather than the other fields.
+   */
+  readonly shownAs: DrawingChartShownAs;
 }
 
 function chartChild(element: OoxmlElement, localName: string): OoxmlElement | null {
@@ -80,9 +124,14 @@ function chartChild(element: OoxmlElement, localName: string): OoxmlElement | nu
 
 /**
  * The text under a title or series name: rich text runs (`a:t`, a space at each paragraph
- * and line break) and cached cell text (`c:v`), depth-first, bounded in nodes and length.
+ * and line break) and cached cell text (`v` in `valueNamespace`), depth-first, bounded in
+ * nodes and length.
  */
-function plainText(element: OoxmlElement, firstValueOnly = false): string | null {
+export function plainText(
+  element: OoxmlElement,
+  firstValueOnly = false,
+  valueNamespace = CHART_NAMESPACE_URI
+): string | null {
   let text = '';
   let visited = 0;
   const stack: OoxmlNode[] = [element];
@@ -94,7 +143,7 @@ function plainText(element: OoxmlElement, firstValueOnly = false): string | null
     if (drawing && (node.localName === 'p' || node.localName === 'br')) text += ' ';
     const textual =
       (drawing && node.localName === 't') ||
-      (node.namespaceUri === CHART_NAMESPACE_URI && node.localName === 'v');
+      (node.namespaceUri === valueNamespace && node.localName === 'v');
     if (textual) {
       for (const child of node.children) {
         if (child.kind === 'textValue') text += child.value.slice(0, MAX_TITLE_UNITS);
@@ -165,5 +214,6 @@ export function readChartSummary(
   return Object.freeze({
     title: chartTitle(chart, plotArea),
     plotTypes: Object.freeze(plotTypes),
+    shownAs: 'placeholder',
   });
 }

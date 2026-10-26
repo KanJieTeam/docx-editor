@@ -75,11 +75,15 @@ export interface DrawingAccessibility {
 }
 
 // @public
-export type DrawingChartPlotType = 'area' | 'area3D' | 'bar' | 'bar3D' | 'bubble' | 'doughnut' | 'line' | 'line3D' | 'ofPie' | 'pie' | 'pie3D' | 'radar' | 'scatter' | 'stock' | 'surface' | 'surface3D';
+export type DrawingChartPlotType = 'area' | 'area3D' | 'bar' | 'bar3D' | 'bubble' | 'doughnut' | 'line' | 'line3D' | 'ofPie' | 'pie' | 'pie3D' | 'radar' | 'scatter' | 'stock' | 'surface' | 'surface3D' | 'waterfall' | 'funnel' | 'histogram' | 'pareto' | 'boxWhisker' | 'treemap' | 'sunburst' | 'regionMap';
+
+// @public
+export type DrawingChartShownAs = 'chart' | 'fallback' | 'placeholder';
 
 // @public
 export interface DrawingChartSummary {
     readonly plotTypes: readonly DrawingChartPlotType[];
+    readonly shownAs: DrawingChartShownAs;
     readonly title: string | null;
 }
 
@@ -271,6 +275,8 @@ export interface ExportSemanticLayout extends SemanticLayout {
 
 // @public
 export interface ExportSession {
+    // @internal
+    chartFallbackResource?(source: InlineDrawingRecord | AnchoredDrawingRecord): Promise<InlineDrawingRecord['resource'] | undefined>;
     dispose(): void;
     layout(): Promise<ExportSemanticLayout>;
     layoutFor(displayMode: ReviewDisplayMode): Promise<ExportSemanticLayout>;
@@ -425,6 +431,8 @@ export interface InlineDrawingRecord {
     readonly baselineOffset: number;
     readonly bidiLevel?: number;
     readonly chart?: DrawingChartSummary;
+    // @internal
+    readonly chartFallbackResource?: ImageResourceState;
     // (undocumented)
     readonly crop: SourceCrop;
     // (undocumented)

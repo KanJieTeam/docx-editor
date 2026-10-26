@@ -832,11 +832,15 @@ export interface DrawingAccessibility {
 }
 
 // @public
-export type DrawingChartPlotType = 'area' | 'area3D' | 'bar' | 'bar3D' | 'bubble' | 'doughnut' | 'line' | 'line3D' | 'ofPie' | 'pie' | 'pie3D' | 'radar' | 'scatter' | 'stock' | 'surface' | 'surface3D';
+export type DrawingChartPlotType = 'area' | 'area3D' | 'bar' | 'bar3D' | 'bubble' | 'doughnut' | 'line' | 'line3D' | 'ofPie' | 'pie' | 'pie3D' | 'radar' | 'scatter' | 'stock' | 'surface' | 'surface3D' | 'waterfall' | 'funnel' | 'histogram' | 'pareto' | 'boxWhisker' | 'treemap' | 'sunburst' | 'regionMap';
+
+// @public
+export type DrawingChartShownAs = 'chart' | 'fallback' | 'placeholder';
 
 // @public
 export interface DrawingChartSummary {
     readonly plotTypes: readonly DrawingChartPlotType[];
+    readonly shownAs: DrawingChartShownAs;
     readonly title: string | null;
 }
 
@@ -1641,6 +1645,8 @@ export interface InlineDrawingRecord {
     readonly baselineOffset: number;
     readonly bidiLevel?: number;
     readonly chart?: DrawingChartSummary;
+    // @internal
+    readonly chartFallbackResource?: ImageResourceState;
     // (undocumented)
     readonly crop: SourceCrop;
     // (undocumented)
@@ -4909,11 +4915,8 @@ export function unionLayoutBoxes(boxes: readonly LayoutBox[]): LayoutBox | null;
 // @public
 export interface UnsupportedElement {
     readonly bounds?: LayoutBox;
-    // (undocumented)
     readonly drawing?: InlineDrawingRecord | AnchoredDrawingRecord;
-    // (undocumented)
     readonly equation?: EquationSpanRecord;
-    // (undocumented)
     readonly label: string;
     // (undocumented)
     readonly localName: string;
