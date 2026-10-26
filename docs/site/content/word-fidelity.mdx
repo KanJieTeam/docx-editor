@@ -118,6 +118,10 @@ Headers also support bounded page-anchored text frames with numeric positions an
 
 This subset requires a separate ordinary paragraph and clear space around the frame. Headers with fields or revisions retain ordinary flow for this subset. Frames with exact heights, negative positions, overlapping content, or unsupported properties also retain ordinary flow. The editor preserves source paragraphs and their text positions.
 
+#### Distributed alignment
+
+Distributed paragraphs (`w:jc` with `distribute`) stretch their final line. This also applies inside table cells and each passage beside a floating object. Ordinary justified paragraphs keep their final line at its natural width.
+
 ### Lists and numbering
 
 <FeatureMatrix category="lists" />
