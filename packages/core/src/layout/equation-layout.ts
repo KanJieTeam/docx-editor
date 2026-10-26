@@ -265,6 +265,8 @@ function layoutExpression(
       if (!formatted) {
         const face = Object.freeze({
           ...familyStyle,
+          fontSizePt:
+            expression.format?.fontSizePt ?? expression.fontSizePt ?? familyStyle.fontSizePt,
           // Mathematical alphanumeric glyphs already carry their style in this
           // regular face. Do not request a second italic or bold font program.
           bold:

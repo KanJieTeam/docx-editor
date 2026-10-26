@@ -1524,9 +1524,11 @@ export type EquationExpression = {
     readonly items: readonly EquationExpression[];
     readonly kind: 'row';
 } | {
+    readonly fontSizePt?: number;
     readonly format?: {
         readonly bold?: boolean;
         readonly fontFamily?: string;
+        readonly fontSizePt?: number;
         readonly italic?: boolean;
         readonly literal?: boolean;
         readonly mathStyle?: 'p' | 'b' | 'i' | 'bi';
