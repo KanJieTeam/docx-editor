@@ -1,13 +1,7 @@
 import { stylesPartOf } from './ooxml-indexes.ts';
 import type { DrawingChartSummary } from './chart-summary.ts';
 import { projectLegacyVml, type LegacyGraphicProjection } from './legacy-vml-projection.ts';
-import {
-  chartAuthorText,
-  holdsChartGraphic,
-  paintableMcChartFallback,
-  paintableMcFallback,
-  skippedChoiceChartProjection,
-} from './mc-fallback-projection.ts';
+import { projectMcDrawingContent } from './mc-drawing-content.ts';
 // Bounded semantic projection for typed `w:drawing` nodes and run-level MC wrappers (task 3).
 //
 // Reads the canonical tree without mutating it. `mc:AlternateContent` branch selection is
@@ -17,7 +11,6 @@ import { sanitizeHref } from './sinks.ts';
 import { readDistances } from './drawing-distances.ts';
 import { readBlipEffects, type DrawingImageEffects } from './drawing-image-effects.ts';
 import { freezeVectorShapeComponent } from './drawing-vector-freeze.ts';
-import { wrapFootprintProjection } from './drawing-wrap-footprint.ts';
 import { hostsTextboxStory } from './group-textbox-projection.ts';
 import type { GroupTextboxProjection } from './group-textbox-projection.ts';
 import { HYPERLINK_RELATIONSHIP_TYPE, type RelationshipTargetResolver } from './hyperlink.ts';
@@ -62,10 +55,7 @@ import {
   type OoxmlPart,
 } from './ooxml-tree.ts';
 import { readEffectExtentFromNode, readExtent } from './drawing-anchor-extent.ts';
-import {
-  withAlternateContentGroupPictures,
-  type GroupPictureProjection,
-} from './drawing-group-picture.ts';
+import type { GroupPictureProjection } from './drawing-group-picture.ts';
 import { createDiagramPartResolver, type DiagramPartResolver } from './diagram-parts.ts';
 import { CHARTEX_MC_NAMESPACES } from './chartex-parts.ts';
 import { projectDrawingContent, withPictureClip } from './drawing-content-projection.ts';
@@ -1551,7 +1541,7 @@ export function projectRunLevelMcDrawing(
     resolveSchemeColor?: ShapeSchemeColorResolver;
     resolveStyleMatrixReference?: ShapeStyleMatrixResolver;
     resolveDiagramParts?: DiagramPartResolver;
-    /** Answer an anchored payload that cannot paint with its wrap footprint (layout index). */
+    /** @deprecated Unsupported drawings retain visible placeholders; this option has no effect. */
     retainWrapFootprint?: boolean;
   }>
 ): DrawingProjection | null {
@@ -1561,78 +1551,23 @@ export function projectRunLevelMcDrawing(
     context.supportedMcRequires,
     context.limits
   );
-  if (atom.drawing === null) return null;
-  const projection = projectDrawing(atom.drawing, {
-    ...context,
-    namespaceScope: context.namespaceScope,
-  });
-  if (!projection) return null;
-  // A chart in a Choice the reader skipped still names the chart its fallback stands for.
-  const skipped = skippedChoiceChartProjection(
+  return projectMcDrawingContent(
     wrapper,
+    context,
     atom.drawing,
-    projection,
-    context.resolveDiagramParts,
+    () => {
+      const state = createWalkState();
+      const selected = selectCompatibilityBranch(
+        wrapper,
+        state,
+        context.limits,
+        context.namespaceScope,
+        context.supportedMcRequires
+      );
+      return { branch: selected.branch, refused: state.refused };
+    },
+    projectDrawing,
     (anchor) => readDocPrMetadata(anchor, true)
-  );
-  if (skipped) return skipped;
-  // An MC-wrapped payload the engine cannot draw (diagrams, unsupported groups) shows its VML
-  // fallback when that paints. Otherwise it stays invisible: a placeholder card over
-  // letterhead furniture would be noisier than either branch. Text boxes carry a renderable
-  // story and pass through. A chart shows its fallback when that paints and otherwise keeps
-  // its labelled placeholder (`mc-fallback-projection.ts`). Layout still reserves the extent
-  // or the anchor's wrap area.
-  if (
-    projection.picture === null &&
-    projection.vectorShape === null &&
-    projection.groupPicture === null &&
-    !hostsTextboxStory(projection)
-  ) {
-    if (projection.chartSummary || holdsChartGraphic(atom.drawing)) {
-      // A hidden chart stays hidden, whatever its fallback shows.
-      const chartFallback = projection.hidden ? null : chartFallbackOf(wrapper, context);
-      if (chartFallback) {
-        return Object.freeze({
-          ...chartFallback,
-          ...chartAuthorText(projection, chartFallback),
-          ...(projection.chartSummary
-            ? { chartSummary: { ...projection.chartSummary, shownAs: 'fallback' as const } }
-            : {}),
-          ...(chartFallback.picture ? { chartFallbackPicture: chartFallback.picture } : {}),
-        });
-      }
-      return withAlternateContentGroupPictures(projection);
-    }
-    const fallback = paintableMcFallback(wrapper, context.ownerPartName);
-    if (fallback) return fallback;
-    return context.retainWrapFootprint ? wrapFootprintProjection(projection) : null;
-  }
-  // A drawn chart keeps the picture saved in its fallback, for an output that exports it,
-  // and takes its author text by the same rule as a chart shown by its fallback.
-  if (projection.chartSummary && !projection.hidden) {
-    const fallback = chartFallbackOf(wrapper, context);
-    if (fallback?.picture) {
-      return Object.freeze({
-        ...projection,
-        ...chartAuthorText(projection, fallback),
-        chartFallbackPicture: fallback.picture,
-      });
-    }
-  }
-  // Layout applies the same rule to a group picture whose resource fails.
-  return withAlternateContentGroupPictures(projection);
-}
-
-/** The fallback content that stands for a chart in `wrapper`, when it paints. */
-function chartFallbackOf(
-  wrapper: OoxmlGenericElementNode,
-  context: Parameters<typeof projectRunLevelMcDrawing>[1]
-): DrawingProjection | null {
-  return paintableMcChartFallback(
-    wrapper,
-    context.namespaceScope,
-    context.ownerPartName,
-    (drawing, namespaceScope) => projectDrawing(drawing, { ...context, namespaceScope })
   );
 }
 
@@ -1737,7 +1672,6 @@ function collectDrawingsInPartBounded(
         resolveSchemeColor: ctx.resolveSchemeColor,
         resolveStyleMatrixReference: ctx.resolveStyleMatrixReference,
         resolveDiagramParts: ctx.resolveDiagramParts,
-        retainWrapFootprint: atomIndex !== undefined,
       });
       if (projected) {
         if (!projected.footprintOnly) out.push(projected);

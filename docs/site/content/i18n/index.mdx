@@ -43,11 +43,11 @@ In Vue, use `locale="pl-PL"` and `:i18n="pl"` on `<DocxEditor>`. For composed ed
 | `es`    | Spanish              | `es`         |
 | `fr`    | French               | `fr`         |
 | `pt-BR` | Brazilian Portuguese | `ptBR`       |
-| `ru`    | Russian              | `ru`         |
 | `he`    | Hebrew               | `he`         |
 | `hi`    | Hindi                | `hi`         |
 | `id`    | Indonesian           | `id`         |
 | `ja`    | Japanese             | `ja`         |
+| `ru`    | Russian              | `ru`         |
 | `tr`    | Turkish              | `tr`         |
 | `zh-CN` | Chinese (Simplified) | `zhCN`       |
 
@@ -63,6 +63,8 @@ Verify what your installed version ships:
 ```bash
 ls node_modules/@docx-editor.dev/i18n/
 ```
+
+For Japanese and Simplified Chinese interface examples, see [Chinese, Japanese, and Korean text](/docs/2.x/guides/cjk#interface-language). Korean document text does not require a Korean interface catalog.
 
 ## Set the editor language
 
@@ -85,6 +87,8 @@ import { es } from '@docx-editor.dev/i18n';
 <script setup lang="ts">
 import { DocxEditor } from '@docx-editor.dev/vue';
 import { es } from '@docx-editor.dev/i18n';
+
+defineProps<{ bytes: Uint8Array }>();
 </script>
 
 <template>
@@ -116,6 +120,8 @@ import { pl } from '@docx-editor.dev/i18n';
 <script setup lang="ts">
 import { DocxEditor, LocaleProvider } from '@docx-editor.dev/vue';
 import { pl } from '@docx-editor.dev/i18n';
+
+defineProps<{ bytes: Uint8Array }>();
 </script>
 
 <template>

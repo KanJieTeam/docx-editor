@@ -21,7 +21,7 @@ import {
 } from './drawing-placement-exclusion.ts';
 import { createParagraphDrawingWrap } from './paragraph-drawing-wrap.ts';
 import { continuedPageZones, continuedWrapFlags } from './continued-page-zones.ts';
-import { hasFurnitureDrawingExclusions } from './furniture-drawing-exclusion.ts';
+import { retainedFurnitureWrap } from './furniture-drawing-exclusion.ts';
 import { tocLinkRanges, tocLinkStyleToken } from './toc-link-formatting.ts';
 import { tocCodeRanges } from './field-code-toc.ts';
 import { tocIdsToken, type TocIdSets } from './toc-id-sets.ts';
@@ -226,7 +226,7 @@ import { sectionFlowKeys } from './section-flow-keys.ts';
 export type BlockLayoutOptions = ColumnBalanceBlockLayoutOptions<SemanticLayoutOptions> & {
   readonly disabledParagraphFrameIds?: ReadonlySet<string>;
   readonly paragraphFrameFallbackRound?: number;
-  /** Set by the one retry of `layoutBlocksWithGeometry`: hidden furniture zones yield. */
+  /** Set by the one retry of `layoutBlocksWithGeometry`: blocking unsupported furniture zones yield. */
   readonly yieldHiddenFurnitureZones?: boolean;
 };
 
@@ -633,7 +633,7 @@ function* layoutBlocksPass(
   const { pageBox, overflowShellAt, furnitureZonesFor, pageShell } = sectionFurniture;
 
   const { furnitureHasWrap, furnitureHoldsTables, admission } = continuedWrapFlags(
-    hasFurnitureDrawingExclusions(furniture, options.yieldHiddenFurnitureZones),
+    retainedFurnitureWrap(furniture, options.yieldHiddenFurnitureZones, furnitureZonesFor),
     continuedZones
   );
   let exclusionPageIndex = -1;
@@ -1528,6 +1528,7 @@ function* layoutBlocksPass(
       paragraphStartY,
       columnX,
       columnX + columnWidth(),
+      startOffset,
       omittedAnchor
     );
     const exclusionToken = exclusionLayoutToken(localPageZones, contentHeight());
