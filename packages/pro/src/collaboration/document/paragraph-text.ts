@@ -744,6 +744,19 @@ function repairItems(
       repaired.push(item);
       return;
     }
+    // The second half of a surrogate pair goes where its first half went: split between two
+    // text elements, neither half is a character XML can hold. Shared text never holds the
+    // halves apart, it replaces a pair a format splits, so the first half is repaired too.
+    const previous = items[at - 1];
+    if (
+      item.kind === 'char' &&
+      previous?.kind === 'char' &&
+      isLowSurrogate(item.value) &&
+      isHighSurrogate(previous.value)
+    ) {
+      repaired.push({ ...item, attributes: repaired[repaired.length - 1]!.attributes });
+      return;
+    }
     let attributes = item.attributes;
     if (item.kind === 'embed' && placements[at] === false) {
       repaired.push({ ...item, attributes: withoutRun(attributes) });
@@ -779,4 +792,14 @@ function repairItems(
     repaired.push({ ...item, attributes } as LinearItem);
   });
   return repaired;
+}
+
+function isHighSurrogate(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return value.length === 1 && code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return value.length === 1 && code >= 0xdc00 && code <= 0xdfff;
 }
