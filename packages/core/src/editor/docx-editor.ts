@@ -447,18 +447,18 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     },
     async (families, late?: LateFontDelivery) => {
       const target = preparedFontSession ? { session: preparedFontSession } : surface;
+      lateFonts.settle(late); // quietly; every install exit announces below, refused or thrown
       try {
         if (target) await resolveDocumentFonts(loadSeq, target, families, late?.full);
       } finally {
-        lateFonts.settle(late);
+        if (late && !destroyed) (bump(), emitSelectionChange());
       }
     }
   );
   let fontsResolving = false;
-  /** Faces an origin delivers after the first paint, until they install for this load. */
   const lateFonts = createLateFontArrival({
     deliver: (generation, delivery) => liveFonts.deliver(generation, delivery),
-    changed: () => bump(),
+    changed: () => (bump(), emitSelectionChange()),
     report: (cause) => reportFontError(toEditorFontError(cause)),
   });
   /**
@@ -467,6 +467,9 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
    * set, and headless (no container) honestly reports nothing substituted.
    */
   let localFontProbe: ((family: string) => boolean) | null = null;
+  const documentFontsNow = () => surface?.session.documentFonts() ?? [];
+  // Unfiltered until an on-demand answer says what is served; installed-only after that.
+  const listable = (f: string) => (!!configuredFonts && !fontConfiguration()) || probeLocalFont(f);
   const probeLocalFont = (family: string): boolean => {
     if (!localFontProbe) {
       localFontProbe = createLocalFontProbe(
@@ -886,6 +889,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       reviewAuthorSlots = createStableReviewAuthorSlots();
       reviewAuthorVisibility.showAll();
       forgetFonts();
+      lateFonts.clear();
       // BEFORE the mount, so the initial paint materializes the pages actually in view.
       // Only here, never in `mountBytes`: the font remount and `attach` re-enter that
       // function for the SAME document and must keep the reader's place.
@@ -916,7 +920,6 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     disposeShapedFonts();
     disposeShapedFonts = () => {};
     fontsResolving = false;
-    lateFonts.clear();
   }
 
   /** {@link forgetFonts}, then measure the mounted document with the fallback measurer. */
@@ -965,8 +968,6 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     // The zero-config, nothing-embedded common case does NO font work at all: no
     if (!configured && embedded.length === 0) return;
     if (late && lateFacesInstalled(late, resolvedFontConfiguration)) return;
-    // The first resolution of a load downloads the shaper alongside the faces, not after them.
-    // Failure reports where shaping needs it. Later resolutions find it loaded or failed.
     if (!late && !resolvedFontConfiguration) initializeHarfBuzz().catch(() => {});
     fontsResolving = true;
     bump();
@@ -1204,7 +1205,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         documentSubstitutedFamilies = admittedDocumentSubstitutions(
           fonts,
           documentFonts,
-          shaping.fonts
+          shaping.fonts,
+          explicit?.substitutions
         );
         // HarfBuzz can only shape faces whose bytes reached its resource snapshot. A run may
         // still name a locally installed browser face (Helvetica is the common macOS case):
@@ -2153,11 +2155,10 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
 
     // Real derivations from the canonical trees (session-memoized), no longer stubs.
     getDocumentStyles: () => surface?.session.documentStyles() ?? [],
-    getDocumentFonts: () => surface?.session.documentFonts() ?? [],
-    // The picker's list: the configured catalog is offerable with no document at all,
-    // and the document's declared families join it once one is mounted.
+    getDocumentFonts: documentFontsNow,
+    // The picker's list: configured and document families, and presets this platform has.
     getAvailableFonts: () =>
-      availableFontFamilies(fontConfiguration(), surface?.session.documentFonts() ?? []),
+      availableFontFamilies(fontConfiguration(), documentFontsNow(), listable),
     getDocumentThemeColors: () => surface?.session.documentThemeColors() ?? [],
     getOutline: () => surface?.session.documentOutline() ?? [],
     getComments: () => [],
@@ -2545,6 +2546,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       refreshHost?.invalidate();
       destroyed = true;
       fontLifetime.dispose();
+      lateFonts.clear();
       suggestingReporter.dispose();
       openScheduler.cancel();
       zoomLane.detach();

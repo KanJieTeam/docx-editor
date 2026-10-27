@@ -103,6 +103,8 @@ The optional `@docx-editor.dev/fonts` package provides open-licensed substitutes
 
 The first five match advance widths for the glyphs they cover. Kerning differences can still change line breaks.
 
+Helvetica has the same advance widths as Arial. `packagedFonts()` serves a document's Helvetica text with the Liberation Sans faces it already loads for Arial. Helvetica text then draws with Arial-shaped glyphs, and the editor shows no font notice for it. `defaultFonts()` does not map Helvetica.
+
 TeX Gyre Adventor has slightly narrower advance widths than Century Gothic. The measured difference stays within 1% in `bun run check:font-width-fidelity`, but can still change line breaks.
 
 Packaged faces do not cover every script. Liberation Sans has no Arabic glyphs. The editor preserves native family fallback for missing glyphs. Exact metrics still depend on the available font for that script.
@@ -323,7 +325,7 @@ const fonts = useFonts(packagedFonts(), googleFonts());
 
 Every argument to `useFonts` takes the same union: a resolver, a fragment, a configuration, or a promise for one. Arguments compose first-wins, in order.
 
-`googleFonts()` uses a generated catalog. Each face is pinned to an immutable `google/fonts` commit and includes a checked `sha256:` value. Most faces share one commit. A family whose current upstream version ships variable-only files is pinned to the last commit that carried static instances, so the catalog records more than one revision.
+`googleFonts()` uses a generated catalog. Each face is pinned to an immutable `google/fonts` commit and includes a checked `sha256:` value. Most faces share one commit. A family whose current upstream version ships variable-only files, such as Montserrat, Open Sans, or Roboto, is pinned to the last commit that carried static instances. The catalog therefore records more than one revision.
 
 ```ts
 googleFonts({

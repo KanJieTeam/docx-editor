@@ -47,6 +47,8 @@ import { paragraphFormattingEntry } from './surface-formatting-index.ts';
 import { paragraphAlignment } from '../layout/paragraph-flow.ts';
 import { paragraphLineSpacing } from '../layout/paragraph-style.ts';
 import { paragraphIsRtl } from '../layout/rtl-paragraph.ts';
+import { styleForFontSlot } from '../layout/script-itemization.ts';
+import { orderPositions } from '../layout/semantic-interaction.ts';
 import {
   cascadedParagraphAttributes,
   paragraphBreaksBefore,
@@ -451,22 +453,24 @@ export type InheritedRunDefaults = (
   runProperties: readonly SurfaceProperty[]
 ) => { readonly fontFamily: string | null; readonly fontSizeHalfPoints: number | null };
 
+/** A letter of any script; selected text without one does not decide the font box. */
+const LETTER = /\p{L}/u;
+
 /**
- * Whether a font pick at this selection must also set `w:eastAsia`: the selected text, or the
- * span beside a collapsed caret, paints East Asian characters through that slot. Without it
- * the pick changes nothing on screen and the font box keeps the old face. A complex-script
- * run needs no help here: the store writes its `w:cs` companion per run.
+ * The part of `span` the ordered range `from`-`to` covers. Layout spans are not clipped to the
+ * selection, so a selection that starts on the space after a Latin word must not count it.
  */
-export function fontPickReachesEastAsia(
-  layout: SemanticLayout,
-  selection: SemanticSelection,
-  cells?: readonly string[],
-  paragraphOrder?: readonly string[],
-  caretSpan = true
-): boolean {
-  const spans = caretSpan ? selectionSpans(layout, selection, cells, paragraphOrder) : [];
-  // No text to read, such as an empty paragraph: East Asian text typed next takes the pick too.
-  return spans.length === 0 || spans.some((span) => span.fontSlot === 'eastAsia');
+function selectedTextOf(
+  span: StyleSpanRecord,
+  from: SemanticPosition,
+  to: SemanticPosition
+): string {
+  const start = span.range.paragraphId === from.paragraphId ? from.offset : span.range.start;
+  const end = span.range.paragraphId === to.paragraphId ? to.offset : span.range.end;
+  return span.text.slice(
+    Math.max(0, start - span.range.start),
+    Math.max(0, end - span.range.start)
+  );
 }
 
 /** The formatting snapshot at a selection, for a toolbar to reflect. */
@@ -522,14 +526,35 @@ export function formattingAt(
   // docDefaults, theme fonts). A caret in an empty paragraph inherits too.
   const hasDirect = (span: (typeof spans)[number], localName: string): boolean =>
     span.props.some((property) => property.localName === localName);
-  // The face the span's text PAINTS in: East Asian text answers its `w:eastAsia` face, and a
-  // complex-script run already resolves `fontFamily` to its `w:cs` face. A selection of
-  // Chinese text in a Calibri+SimSun run reads SimSun; its Latin letters read Calibri, so a
-  // selection over both disagrees to blank. A font pick writes the same slot
-  // (`fontPickReachesEastAsia`), so the box reflects the pick.
+  // The face the span's text PAINTS in, by the painter's own rule (`styleForFontSlot`): East
+  // Asian text answers its `w:eastAsia` face, and a complex-script run already resolves
+  // `fontFamily` to its `w:cs` face. Chinese text in a Calibri+SimSun run reads SimSun; its
+  // Latin letters alone read Calibri.
+  //
+  // In a selection with East Asian text, selected text without a letter (spaces, punctuation,
+  // digits) does not vote. Between or inside Korean and Chinese words it paints through the
+  // Latin slot (`2024년`), and counting it made every such selection read blank. Elsewhere
+  // every span votes, so digits in another font still make a Latin selection read blank.
+  const eastAsian = spans.some((span) => span.fontSlot === 'eastAsia');
+  const { anchor, head } = selection;
+  const collapsed = anchor.paragraphId === head.paragraphId && anchor.offset === head.offset;
+  // Ordered once, only when it matters; a range that cannot be ordered reads whole spans.
+  const range =
+    !eastAsian || collapsed || cells?.length
+      ? null
+      : orderPositions(
+          selection,
+          // One paragraph is ordered by offset alone; skip the document-wide order walk.
+          anchor.paragraphId === head.paragraphId ? [] : (paragraphOrder ?? everyStoryOrder(layout))
+        );
+  const lettered = eastAsian
+    ? spans.filter((span) =>
+        LETTER.test(range ? selectedTextOf(span, range.from, range.to) : span.text)
+      )
+    : [];
+  const familySpans = lettered.length > 0 ? lettered : spans;
   const familyOf = (span: (typeof spans)[number]): string | null =>
-    (span.fontSlot === 'eastAsia' ? span.style.fontFamilyEastAsia : null) ??
-    span.style.fontFamily ??
+    styleForFontSlot(span.style, span.fontSlot).fontFamily ??
     inherited?.(span.range.paragraphId, span.props).fontFamily ??
     null;
   const sizeOf = (span: (typeof spans)[number]): number =>
@@ -705,7 +730,9 @@ export function formattingAt(
     superscript: styles.length > 0 && styles.every((e) => e.verticalAlign === 'superscript'),
     subscript: styles.length > 0 && styles.every((e) => e.verticalAlign === 'subscript'),
     fontFamily:
-      spans.length > 0 ? agreedOver(spans.map(familyOf)) : (caretInherited?.fontFamily ?? null),
+      spans.length > 0
+        ? agreedOver(familySpans.map(familyOf))
+        : (caretInherited?.fontFamily ?? null),
     fontSizeHalfPoints:
       spans.length > 0
         ? agreedOver(spans.map(sizeOf))

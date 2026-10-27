@@ -356,6 +356,8 @@ export interface ComposePreparedFontOriginsOptions extends ComposeFontOriginsOpt
   readonly instrumentation?: Pick<FontResourceInstrumentation, 'onOwnedByteCopy' | 'onHash'>;
   /** Wait for every origin's late faces and answer once, for callers that need all faces now. */
   readonly awaitDeferred?: boolean;
+  /** Origin positions an earlier pass found holding everything back; never the base. */
+  readonly placeholderOrigins?: ReadonlySet<number>;
 }
 
 async function composeFontOriginsInternal(
@@ -389,6 +391,10 @@ async function composeFontOriginsInternal(
   // Per origin position: the immediate answer as given, and its late faces.
   const answered: (FontConfiguration | FontConfigurationFragment | undefined)[] = [];
   const late: (Promise<FontConfigurationFragment | undefined> | undefined)[] = [];
+  // Origins that held everything back. They never become the base, on this pass or on a
+  // recomposition after their faces arrive, so a later origin's settings keep applying.
+  const placeholders = new Set(options.placeholderOrigins ?? []);
+  let placeholderBase: FontConfiguration | FontConfigurationFragment | undefined;
 
   for (let originIndex = 0; originIndex < origins.length; originIndex += 1) {
     throwIfFontResolutionAborted(request.signal);
@@ -397,6 +403,7 @@ async function composeFontOriginsInternal(
     // earlier origin emitted can become paintable when a LATER origin supplies its target.
     const covered = paintableFaces(inherited, sourceFaces, substitutions);
     let sampledAnswer: ReturnType<typeof validateOriginAnswer> | undefined;
+    let pendingLate: Promise<FontConfigurationFragment | undefined> | undefined;
     try {
       const observation = observed[originIndex]!;
       let answer: FontConfiguration | FontConfigurationFragment | undefined;
@@ -439,6 +446,10 @@ async function composeFontOriginsInternal(
         continue;
       }
       if (options.awaitDeferred) {
+        // The same placeholder rule as the editor's pass below, decided on the answer as
+        // given: export must not pick a different base, or its default font would differ.
+        const given = splitDeferredAnswer(answer);
+        if (given.later && holdsEverythingBack(given.now, given.now)) placeholders.add(originIndex);
         answer = await completeDeferredAnswer(
           answer,
           (cause) => reportOriginFailure(options, origin, originIndex, cause),
@@ -447,7 +458,7 @@ async function composeFontOriginsInternal(
       } else {
         const split = splitDeferredAnswer(answer);
         answer = split.now;
-        if (split.later) late[originIndex] = split.later;
+        pendingLate = split.later;
       }
       const answerFailures = 'failures' in answer ? answer.failures : undefined;
       // A partial origin can keep its usable faces while reporting failed fetches. Snapshot
@@ -506,16 +517,16 @@ async function composeFontOriginsInternal(
       // as the default still made a Google fallback fetch Calibri while leaving Aptos unresolved.
       // An origin that holds everything back (`deferFonts`, a background CJK resolver) is a
       // placeholder, not the base: the next origin's default face and byte ceiling still apply.
-      const placeholder =
-        late[originIndex] !== undefined &&
-        (sampled.sources?.length ?? 0) === 0 &&
-        (sampled.substitutions?.length ?? 0) === 0 &&
-        !('defaultFont' in answer) &&
-        !('maxFontBytes' in answer);
+      // Faces from the VALIDATED answer: an origin whose faces all failed holds everything back.
+      if (pendingLate !== undefined && holdsEverythingBack(sampled, answer)) {
+        placeholders.add(originIndex);
+      }
+      const placeholder = placeholders.has(originIndex);
       if (!base && !placeholder && 'defaultFont' in sampled) {
         defaultFamily = configuredDefaultFontFamily(sampled as FontConfigurationBase);
       }
       if (!base && !placeholder) base = sampled;
+      if (placeholder) placeholderBase ??= sampled;
       const newlyDirect = new Set(sampledOrigin.sourceKeys);
       if (newlyDirect.size > 0) {
         substitutions = substitutions.filter(
@@ -533,6 +544,8 @@ async function composeFontOriginsInternal(
       }
       // The validated answer, so composing it again with late faces reports no drop twice.
       answered[originIndex] = withoutReportedFailures(sampled);
+      // Only a committed origin keeps its late faces: one skipped whole is skipped whole.
+      if (pendingLate) late[originIndex] = pendingLate;
     } catch (cause) {
       // A validated answer that fails after its reservation but before it commits must hand
       // the reserved bytes back, or the lease leaks them for its whole lifetime.
@@ -545,16 +558,27 @@ async function composeFontOriginsInternal(
       // resolver called as a loader is the common one) and it degrades the document
       // silently otherwise.
       reportOriginFailure(options, origin, originIndex, cause);
+      if (pendingLate) {
+        // Skipped whole, background faces included; say so rather than drop them unannounced.
+        const dropped = new Error('Font origin skipped, so its background faces were not loaded');
+        reportOriginFailure(options, origin, originIndex, dropped);
+      }
       continue;
     }
   }
 
   const deferred = late.some(Boolean)
     ? composeLateOrigins(answered, late, request.signal, {
-        compose: (merged) => composeFontOriginsInternal(merged, request, options),
+        compose: (merged) =>
+          composeFontOriginsInternal(merged, request, {
+            ...options,
+            placeholderOrigins: placeholders,
+          }),
         report: (index, cause) => reportOriginFailure(options, origins[index], index, cause),
       })
     : undefined;
+  // Every origin held back: the first one is the base after all, so its faces still compose.
+  base ??= placeholderBase;
   if (!base) return deferred ? { sources: [], deferred } : undefined;
   const { epoch: _perLoad, ...composed } = composeFontConfiguration({
     ...base,
@@ -568,6 +592,22 @@ async function composeFontOriginsInternal(
     : ({ ...merged, failures: Object.freeze(failures) } as FontConfigurationFragment & {
         readonly failures: readonly unknown[];
       });
+}
+
+/**
+ * An immediate answer with no faces (`faces`, validated where possible) and no settings
+ * (`settings`, as given): its origin holds everything back.
+ */
+function holdsEverythingBack(
+  faces: FontConfiguration | FontConfigurationFragment,
+  settings: FontConfiguration | FontConfigurationFragment
+): boolean {
+  return (
+    (faces.sources?.length ?? 0) === 0 &&
+    (faces.substitutions?.length ?? 0) === 0 &&
+    !('defaultFont' in settings) &&
+    !('maxFontBytes' in settings)
+  );
 }
 
 type ObservedOriginOutcome =

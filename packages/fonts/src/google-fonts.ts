@@ -134,7 +134,7 @@ export const GOOGLE_FONT_FAMILIES: readonly string[] = Object.freeze([
  *
  * Arial and Helvetica are absent on purpose. Their match is Arimo, which google/fonts now
  * ships variable-only, and the shaper refuses variation axes — a variable file would
- * render bold at regular weight. `defaultFonts()` still covers them from the bundle.
+ * render bold at regular weight. `packagedFonts()` covers both from the bundle.
  */
 export const GOOGLE_METRIC_SUBSTITUTES: Readonly<Record<string, string>> = Object.freeze({
   Calibri: 'Carlito',
@@ -712,8 +712,11 @@ export function googleFonts(options: GoogleFontsOptions = {}): GoogleFontsResolv
       Promise.all([...wanted.values()].flat().map((face) => fetchInto(face, sources, failures))),
     ]);
     // Background CJK downloads start once the first-paint faces are in, so 4-8 MB faces never
-    // compete with them for bandwidth.
-    const cjkLater = deferCjk ? immediate.then(loadCjk, loadCjk) : undefined;
+    // compete with them for bandwidth. A resolution that failed downloads none: nobody would
+    // receive them.
+    const cjkLater = deferCjk
+      ? immediate.then(loadCjk, () => ({ sources: [], substitutions: [], failures: [] }))
+      : undefined;
     const [, cjkNow] = await Promise.all([
       immediate,
       cjkWanted.size > 0 && !deferCjk ? loadCjk() : undefined,

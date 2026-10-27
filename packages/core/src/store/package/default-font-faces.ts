@@ -5,6 +5,7 @@
 // one run per case, the face read back from each drawn glyph. Keep them together so layout,
 // font discovery and the notice read one answer.
 
+import { isEastAsianCodePoint } from './east-asian-code-points.ts';
 import type { OoxmlElement, OoxmlNode } from './ooxml-tree.ts';
 
 /** The face of a Latin slot (`w:ascii`, `w:hAnsi`) that no level names, under an authored `w:rPrDefault`. */
@@ -229,6 +230,97 @@ export function isEastAsianFace(
   if (CHINESE_FACES.has(name) || JAPANESE_KOREAN_FACES.has(name)) return true;
   if (LATIN_FACES.has(name)) return false;
   return fontTableEastAsianFaces?.includes(name) ?? false;
+}
+
+/**
+ * Region words East Asian family names carry (`Noto Sans Mono CJK SC`, `BIZ UDGothic JP`).
+ * Not `SC`, `TC`, or `HK`: Latin names use them too (`Alegreya SC`, `HK Grotesk`).
+ */
+const EAST_ASIAN_NAME_TOKENS = /(?:^|\s)(?:cjk|jp|kr)(?:\s|$)/;
+
+/**
+ * Prefixes of East Asian families a host commonly serves that no document font table names:
+ * the regional Noto and Source Han families and the platform CJK faces. Lower-cased.
+ */
+const EAST_ASIAN_FAMILY_PREFIXES: readonly string[] = [
+  'noto sans cjk',
+  'noto serif cjk',
+  'noto sans jp',
+  'noto sans sc',
+  'noto sans tc',
+  'noto sans hk',
+  'noto sans kr',
+  'noto serif jp',
+  'noto serif sc',
+  'noto serif tc',
+  'noto serif hk',
+  'noto serif kr',
+  'source han',
+  'lxgw',
+  'sarasa',
+  'ipaex',
+  'ipa gothic',
+  'ipa mincho',
+  'ipa p',
+  'wenquanyi',
+  'zen kaku',
+  'zen maru',
+  'zen old mincho',
+  'zen kurenaido',
+  'zen antique',
+  'm plus 1',
+  'm plus 2',
+  'm plus rounded',
+  'kosugi',
+  'sawarabi',
+  'biz ud',
+  'klee',
+  'toppan',
+  'tsukushi',
+  'yu ',
+  'meiryo',
+  'microsoft yahei',
+  'microsoft jhenghei',
+  'apple sd',
+  'apple ligothic',
+  'lihei',
+  'lisong',
+  'baoli',
+  'hannotate',
+  'hanzipen',
+  'libian',
+  'weibei',
+  'xingkai',
+  'yuanti',
+  'wawati',
+  'lantinghei',
+  'pingfang',
+  'hiragino',
+  'heiti',
+  'songti',
+  'stheiti',
+  'stsong',
+  'stkaiti',
+  'stfangsong',
+  'nanum',
+];
+
+/**
+ * Whether a family a user PICKS is an East Asian font, so the pick also applies to East Asian
+ * text: a known East Asian face, a family named in CJK or full-width characters, or a common
+ * East Asian family a host serves. By NAME only, never by the font table's `w:charset`:
+ * CJK-locale files give Latin fonts an East Asian charset too, and a Latin pick that reached
+ * `w:eastAsia` would redraw the ideographs in a fallback face.
+ */
+export function isEastAsianFontFamily(family: string): boolean {
+  const name = family.trim().toLowerCase();
+  if (!name || name.startsWith('@')) return false;
+  return (
+    isEastAsianFace(name, undefined) ||
+    [...name].some((character) => isEastAsianCodePoint(character.codePointAt(0)!)) ||
+    EAST_ASIAN_NAME_TOKENS.test(name) ||
+    EAST_ASIAN_FAMILY_PREFIXES.some((prefix) => name.startsWith(prefix))
+  );
 }
 
 function isElement(node: OoxmlNode): node is OoxmlElement {

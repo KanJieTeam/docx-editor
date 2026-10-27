@@ -40,34 +40,34 @@ export function markCompleteAnswer<T extends object | undefined>(answer: T): T {
 
 /**
  * One origin's immediate answer with its late one merged in. A complete answer (a composed
- * resolver's) replaces the immediate one. Otherwise the late faces are the ones the origin
- * held back and are added, ahead of the immediate ones. A configuration field the late
- * answer leaves unset keeps the immediate value. Neither answer's `failures` is carried:
- * each was reported where it arrived.
+ * resolver's) replaces the immediate faces. Otherwise the late faces are the ones the origin
+ * held back and are added, ahead of the immediate ones. Configuration settings
+ * (`defaultFont`, `maxFontBytes`) always stay the immediate answer's. Neither answer's
+ * `failures` is carried: each was reported where it arrived.
  */
 export function mergeDeferredAnswer(
   now: OriginAnswer | undefined,
   later: FontConfigurationFragment | undefined
 ): OriginAnswer | undefined {
   if (!later) return now;
-  const {
-    failures: _reported,
-    deferred: _next,
-    ...lateFields
-  } = later as FontConfigurationFragment & { failures?: unknown };
-  const defined = Object.fromEntries(
-    Object.entries(lateFields).filter(([, value]) => value !== undefined)
-  ) as FontConfigurationFragment;
+  // Faces and catalogs only: the configuration settings (`defaultFont`, `maxFontBytes`,
+  // `language`) stay the immediate answer's, so the default font never changes after paint.
   const base = now ? (withoutReportedFailures(now) as FontConfigurationFragment) : undefined;
   const next = later.deferred ? { deferred: later.deferred } : {};
-  if (completeAnswers.has(later)) return { ...base, ...defined, ...next };
-  const catalogs = [...(later.supportedFamilies ?? []), ...(base?.supportedFamilies ?? [])];
+  const complete = completeAnswers.has(later);
+  const catalogs = complete
+    ? (later.supportedFamilies ?? [])
+    : [...(later.supportedFamilies ?? []), ...(base?.supportedFamilies ?? [])];
   return {
     ...base,
-    ...defined,
-    sources: [...(later.sources ?? []), ...(base?.sources ?? [])],
-    substitutions: [...(later.substitutions ?? []), ...(base?.substitutions ?? [])],
-    ...(catalogs.length > 0 ? { supportedFamilies: [...new Set(catalogs)] } : {}),
+    sources: complete
+      ? (later.sources ?? [])
+      : [...(later.sources ?? []), ...(base?.sources ?? [])],
+    substitutions: complete
+      ? (later.substitutions ?? [])
+      : [...(later.substitutions ?? []), ...(base?.substitutions ?? [])],
+    // A complete answer's catalog replaces the immediate one, even when it is empty.
+    supportedFamilies: catalogs.length > 0 ? [...new Set(catalogs)] : undefined,
     ...next,
   };
 }
@@ -119,11 +119,16 @@ export async function completeDeferredAnswer<T extends OriginAnswer>(
   onFailure: (cause: unknown) => void,
   signal?: AbortSignal
 ): Promise<T> {
+  // The merges below drop `failures`, which is right for late answers (reported here as they
+  // arrive) but not for the immediate one: the composition reports those from the result.
+  const immediate = 'failures' in answer ? (answer as { failures?: unknown }).failures : undefined;
+  const finish = (result: OriginAnswer): T =>
+    (immediate === undefined ? result : { ...result, failures: immediate }) as T;
   let current: OriginAnswer = answer;
   // Bounded: one step per late arrival, and a composition has at most this many origins.
   for (let step = 0; step < MAX_DEFERRED_STEPS; step += 1) {
     const { now, later } = splitDeferredAnswer(current);
-    if (!later) return now as T;
+    if (!later) return finish(now);
     let arrived: FontConfigurationFragment | undefined;
     try {
       // A host promise may ignore the signal; an export must not wait past its own deadline.
@@ -131,13 +136,13 @@ export async function completeDeferredAnswer<T extends OriginAnswer>(
     } catch (cause) {
       if (signal?.aborted) throw signal.reason;
       onFailure(cause);
-      return now as T;
+      return finish(now);
     }
     for (const cause of lateAnswerFailures(arrived)) onFailure(cause);
     current = mergeDeferredAnswer(now, arrived) ?? now;
   }
   onFailure(new RangeError(`Font loading stopped after ${MAX_DEFERRED_STEPS} deferred steps`));
-  return splitDeferredAnswer(current).now as T;
+  return finish(splitDeferredAnswer(current).now);
 }
 
 /** The longest chain of late answers an export waits through before it reports and stops. */

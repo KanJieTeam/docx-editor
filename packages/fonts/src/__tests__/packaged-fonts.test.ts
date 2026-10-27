@@ -60,6 +60,51 @@ const EAGER_DEFAULT_BYTES = DEFAULT_FONT_FAMILIES.reduce(
 );
 
 describe('packagedFonts', () => {
+  test('serves Helvetica from the Liberation Sans faces it shares with Arial', async () => {
+    const { fetcher, requested } = countingFetcher();
+    const fragment = await packagedFonts({ fetcher, install: false })({
+      families: ['helvetica', 'Arial'],
+      defaultFamily: 'No Such Family',
+    });
+    // The Arial plan loads once, for both names.
+    expect(fragment.families).toEqual(['Arial']);
+    expect(requested).toHaveLength(4);
+    expect(requested.every((url) => url.includes('LiberationSans'))).toBe(true);
+    const helvetica = fragment.substitutions.filter((entry) => entry.from.family === 'helvetica');
+    expect(helvetica).toHaveLength(4);
+    expect(helvetica.every((entry) => entry.to.family === 'Liberation Sans')).toBe(true);
+    expect(fragment.supportedFamilies).toContain('Helvetica');
+  });
+
+  test("Helvetica follows a host's own Arial bytes when an earlier origin supplies them", async () => {
+    const { fetcher, requested } = countingFetcher();
+    const arialFaces = FACES.map((face) => ({
+      family: 'Arial',
+      weight: face.weight,
+      style: face.style,
+    }));
+    const fragment = await packagedFonts({ fetcher, install: false })({
+      families: ['Helvetica'],
+      defaultFamily: 'No Such Family',
+      resolvedFaces: arialFaces,
+    });
+    expect(requested).toEqual([]);
+    const targets = fragment.substitutions
+      .filter((entry) => entry.from.family === 'Helvetica')
+      .map((entry) => entry.to.family);
+    expect(targets).toEqual(['Arial', 'Arial', 'Arial', 'Arial']);
+  });
+
+  test('Helvetica alone loads the Arial plan', async () => {
+    const { fetcher, requested } = countingFetcher();
+    const fragment = await packagedFonts({ fetcher, install: false })({
+      families: ['Helvetica'],
+      defaultFamily: 'No Such Family',
+    });
+    expect(fragment.families).toEqual(['Arial']);
+    expect(requested).toHaveLength(4);
+  });
+
   test('loads only the families the document names, plus its default family', async () => {
     const { fetcher, requested } = countingFetcher();
     const fragment = await packagedFonts({ fetcher, install: false })({
