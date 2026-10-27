@@ -11,6 +11,7 @@ import type { OoxmlElement, OoxmlNode } from '../store/package/ooxml-tree.ts';
 import { WML_NAMESPACE_URI } from '../store/package/ooxml-shared.ts';
 import { themeFontFamilyOf, type ThemeSchemeFaces } from '../store/package/theme-font-scheme.ts';
 import { symbolFontFamily } from '../store/package/run-defaults.ts';
+import { weakRefOf, type WeakRefOf } from '../store/package/weak-ref.ts';
 
 /**
  * The same shape `semantic-paint.ts` enforces at the CSS sink (its `FONT_NAME`):
@@ -70,8 +71,14 @@ export function collectDocumentFonts(
   }
   const fonts = [...byFold.values()];
   fonts.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  // The same list as last time is the same array, so a picker that compares by identity does
+  // not render again after a keystroke that named no new font.
+  if (lastFonts.length === fonts.length && lastFonts.every((family, i) => family === fonts[i]))
+    return lastFonts;
+  lastFonts = fonts;
   return fonts;
 }
+let lastFonts: readonly string[] = [];
 
 interface SubtreeFontsMemo {
   readonly major: string | null;
@@ -92,6 +99,81 @@ const subtreeFontsMemos = new WeakMap<OoxmlElement, SubtreeFontsMemo>();
 const COMPOSE_CHILD_THRESHOLD = 16;
 /** Compose recursion stops here; deeper subtrees take the iterative terminal walk. */
 const MAX_COMPOSE_DEPTH = 32;
+
+/** One wide container's composition, kept for its next revision; see {@link composedFonts}. */
+interface FontComposition {
+  /** Weakly: a kept composition must not keep a closed document's tree alive. */
+  readonly children: WeakRefOf<readonly OoxmlNode[]>;
+  readonly parts: readonly (ReadonlyMap<string, string> | null)[];
+  readonly byFold: ReadonlyMap<string, string>;
+  readonly themeFonts: ThemeSchemeFaces | undefined;
+}
+/** The last composition per container id: an edit makes a new container that keeps its id. */
+const fontCompositions = new Map<string, FontComposition>();
+const MAX_FONT_COMPOSITIONS = 64;
+
+/** Theme faces by value: the theme decides what a slot reference contributes. */
+function sameThemeFaces(a: ThemeSchemeFaces | undefined, b: ThemeSchemeFaces | undefined): boolean {
+  return (
+    a?.major === b?.major &&
+    a?.minor === b?.minor &&
+    a?.majorEastAsia === b?.majorEastAsia &&
+    a?.minorEastAsia === b?.minorEastAsia &&
+    a?.majorBidi === b?.majorBidi &&
+    a?.minorBidi === b?.minorBidi
+  );
+}
+
+function sameFonts(
+  a: ReadonlyMap<string, string> | null,
+  b: ReadonlyMap<string, string> | null
+): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.size !== b.size) return false;
+  for (const [fold, family] of a) if (b.get(fold) !== family) return false;
+  return true;
+}
+
+/**
+ * A wide container's fonts from its children's, in order. An edit rebuilds the path to what
+ * it changed, so a body of thousands of blocks is new after every keystroke while all but one
+ * of its children are the objects it had. Those keep their fonts without a memo lookup, and
+ * when the changed ones name the fonts they replace, the previous composition stands.
+ */
+function composedFonts(
+  subtree: OoxmlElement,
+  themeFonts: ThemeSchemeFaces | undefined,
+  depth: number
+): ReadonlyMap<string, string> {
+  const children = subtree.children;
+  const previous = fontCompositions.get(subtree.id);
+  const previousChildren = previous?.children.deref();
+  const reusable =
+    previous !== undefined &&
+    previousChildren !== undefined &&
+    previousChildren.length === children.length &&
+    sameThemeFaces(previous.themeFonts, themeFonts);
+  let unchanged = reusable;
+  const parts = children.map((child, index) => {
+    if (reusable && child === previousChildren[index]) return previous.parts[index]!;
+    const part = isElement(child) ? subtreeFontsOf(child, themeFonts, depth + 1) : null;
+    if (unchanged && !sameFonts(part, previous!.parts[index]!)) unchanged = false;
+    return part;
+  });
+  let byFold: ReadonlyMap<string, string>;
+  if (unchanged) byFold = previous!.byFold;
+  else {
+    const merged = new Map<string, string>();
+    for (const part of parts)
+      if (part) for (const [fold, family] of part) if (!merged.has(fold)) merged.set(fold, family);
+    byFold = merged;
+  }
+  fontCompositions.delete(subtree.id);
+  fontCompositions.set(subtree.id, { children: weakRefOf(children), parts, byFold, themeFonts });
+  if (fontCompositions.size > MAX_FONT_COMPOSITIONS)
+    fontCompositions.delete(fontCompositions.keys().next().value!);
+  return byFold;
+}
 
 function subtreeFontsOf(
   subtree: OoxmlElement,
@@ -124,13 +206,7 @@ function subtreeFontsOf(
     depth < MAX_COMPOSE_DEPTH &&
     subtree.localName !== 'rFonts'
   ) {
-    const merged = new Map<string, string>();
-    for (const child of subtree.children) {
-      if (!isElement(child)) continue;
-      for (const [fold, family] of subtreeFontsOf(child, themeFonts, depth + 1)) {
-        if (!merged.has(fold)) merged.set(fold, family);
-      }
-    }
+    const merged = composedFonts(subtree, themeFonts, depth);
     subtreeFontsMemos.set(subtree, {
       major,
       minor,

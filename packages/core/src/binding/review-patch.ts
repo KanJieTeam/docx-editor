@@ -51,7 +51,7 @@ const NUMBERING_PART = '/word/numbering.xml';
  * before: every part but `storyPartName` and the numbering part, and the relationships and
  * content types that resolve headers, footers, notes, and comments.
  */
-function reviewInputsUnchanged(
+export function reviewInputsUnchanged(
   before: OoxmlPackage,
   after: OoxmlPackage,
   storyPartName: string
@@ -128,7 +128,7 @@ export function patchLocalReviewItems(
   filterLocal: (items: readonly ReviewRevisionItem[]) => readonly ReviewRevisionItem[] = (items) =>
     items,
   part?: OoxmlPart
-): ReviewItem[] | null {
+): readonly ReviewItem[] | null {
   // Comments anchored in the paragraph keep their cards, at the offsets its markers now hold.
   const comments = part ? remappedComments(cached, part, dirtyParagraphId) : new Map();
   if (!comments) return null;
@@ -136,7 +136,7 @@ export function patchLocalReviewItems(
   // With no revision of its own the cached queue still holds; with one, the caller derives the
   // whole queue instead.
   const dirtyRank = paragraphOrder.get(dirtyParagraphId);
-  if (dirtyRank === undefined) return localRevisions.length === 0 ? [...cached] : null;
+  if (dirtyRank === undefined) return localRevisions.length === 0 ? cached : null;
 
   const patched: ReviewItem[] = [];
   let insertAt: number | null = null;
@@ -199,7 +199,12 @@ export function patchLocalReviewItems(
   // answering it, so a keystroke in that paragraph tore the reply out into a card of its own —
   // and the next full re-derive put it back. The pass is over the patched list and costs
   // nothing when no comment answers a change.
-  return linkRevisionReplies(patched);
+  const linked = linkRevisionReplies(patched);
+  // The same cards in the same order are the same queue: every cache keyed on the queue (rail
+  // order, placements, highlights) then holds across a keystroke that changed no card.
+  return linked.length === cached.length && linked.every((item, index) => item === cached[index])
+    ? cached
+    : linked;
 }
 
 /**
@@ -309,7 +314,7 @@ function absorbedIntoGroups(
   return { groups, absorbed };
 }
 
-function commentTouchesParagraph(item: ReviewCommentItem, paragraphId: string): boolean {
+export function commentTouchesParagraph(item: ReviewCommentItem, paragraphId: string): boolean {
   if (!item.range) return false;
   return item.range.start.paragraphId === paragraphId || item.range.end.paragraphId === paragraphId;
 }
@@ -324,7 +329,10 @@ function commentTouchesParagraph(item: ReviewCommentItem, paragraphId: string): 
  * markers. So typing in that first cell dropped the row's card while the row stayed painted
  * as a proposal: a change on screen with nothing left to accept it by.
  */
-function revisionAnchoredOutsideParagraph(item: ReviewRevisionItem, paragraphId: string): boolean {
+export function revisionAnchoredOutsideParagraph(
+  item: ReviewRevisionItem,
+  paragraphId: string
+): boolean {
   return (
     item.revisionKind === 'structural' &&
     item.ranges.some(
@@ -333,7 +341,10 @@ function revisionAnchoredOutsideParagraph(item: ReviewRevisionItem, paragraphId:
   );
 }
 
-function revisionCrossesParagraphBoundary(item: ReviewRevisionItem, paragraphId: string): boolean {
+export function revisionCrossesParagraphBoundary(
+  item: ReviewRevisionItem,
+  paragraphId: string
+): boolean {
   if (item.ranges.length === 0) return false;
   const touches = item.ranges.some(
     (range) => range.start.paragraphId === paragraphId || range.end.paragraphId === paragraphId
@@ -355,7 +366,7 @@ export interface ReviewPatchInputs {
 }
 
 /** Whether `change` is one body commit after `cache`, with every other queue input unchanged. */
-function onlyBodyChanged(
+export function onlyBodyChanged(
   change: TreeModelChange,
   cache: LocalReviewPatchCache,
   inputs: ReviewPatchInputs
@@ -427,7 +438,7 @@ const isBlockChild = (node: OoxmlNode): boolean =>
   (node.kind === 'generic' && (node.localName === 'sdt' || node.localName === 'customXml'));
 
 /** Whether the paragraph a formatting change in `paragraphId` continues from holds a mark revision. */
-function previousHoldsMarkRevision(part: OoxmlPart, paragraphId: string): boolean {
+export function previousHoldsMarkRevision(part: OoxmlPart, paragraphId: string): boolean {
   const previous = formattingPredecessor(part, paragraphId);
   return (
     previous !== undefined &&
@@ -482,7 +493,11 @@ export function reviewQueueKeptByStructure(
 }
 
 /** Whether the paragraph holds a control that is not the same object it was in `before`. */
-function controlsChangedIn(before: OoxmlPackage, part: OoxmlPart, paragraph: OoxmlNode): boolean {
+export function controlsChangedIn(
+  before: OoxmlPackage,
+  part: OoxmlPart,
+  paragraph: OoxmlNode
+): boolean {
   const now = contentControlsIn(paragraph);
   if (now.length === 0) return false;
   const previousPart = before.parts.get(part.name);
@@ -493,7 +508,7 @@ function controlsChangedIn(before: OoxmlPackage, part: OoxmlPart, paragraph: Oox
 }
 
 /** Whether a control the queue lists as a custom node encloses the paragraph. */
-function insideCustomNode(
+export function insideCustomNode(
   part: OoxmlPart,
   paragraphId: string,
   items: readonly ReviewItem[]
