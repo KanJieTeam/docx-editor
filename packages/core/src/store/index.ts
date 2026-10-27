@@ -54,3 +54,18 @@ export {
   type Points,
   type Twips,
 } from './units.ts';
+
+export { inspectDrawingSupport } from './package/drawing-support.ts';
+export type {
+  DrawingSupportEntry,
+  DrawingSupportReport,
+  DrawingSupportIssue,
+  DrawingGraphicKind,
+  DrawingSupport,
+} from './package/drawing-support.ts';
+export {
+  createDrawingPreviewPackage,
+  type DrawingPreviewPackageLimits,
+  type DrawingPreviewPackageResult,
+  type DrawingPreviewTarget,
+} from './package/drawing-preview-package.ts';

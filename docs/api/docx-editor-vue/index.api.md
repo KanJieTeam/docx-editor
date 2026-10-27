@@ -61,6 +61,9 @@ import * as _docx_editor_dev_core_editor from '@docx-editor.dev/core/editor';
 import * as _docx_editor_dev_i18n from '@docx-editor.dev/i18n';
 import { DocxDocument } from '@docx-editor.dev/core/contracts/types';
 import { DocxEditorInstance } from '@docx-editor.dev/core/editor';
+import { DrawingGraphicKind } from '@docx-editor.dev/core/store';
+import { DrawingSupport } from '@docx-editor.dev/core/store';
+import { DrawingSupportIssue } from '@docx-editor.dev/core/store';
 import { Editor } from '@docx-editor.dev/core/contracts/editor';
 import { EditorCommand } from '@docx-editor.dev/core/contracts/editor';
 import { EditorCommandExecute } from '@docx-editor.dev/core/editor';
@@ -4952,6 +4955,10 @@ export interface DocxEditorToolbarSlotProps {
 
 // @public
 export const DocxEditorUnsupportedElement: vue.DefineComponent<vue.ExtractPropTypes<{
+    includePartial: {
+        default: boolean;
+        type: BooleanConstructor;
+    };
     layout: {
         default: undefined;
         type: PropType<UnsupportedElementRule['layout']>;
@@ -4963,6 +4970,10 @@ export const DocxEditorUnsupportedElement: vue.DefineComponent<vue.ExtractPropTy
 }>, () => vue.VNode<vue.RendererNode, vue.RendererElement, {
     [key: string]: any;
 }>[], {}, {}, {}, vue.ComponentOptionsMixin, vue.ComponentOptionsMixin, {}, string, vue.PublicProps, Readonly<vue.ExtractPropTypes<{
+    includePartial: {
+        default: boolean;
+        type: BooleanConstructor;
+    };
     layout: {
         default: undefined;
         type: PropType<UnsupportedElementRule['layout']>;
@@ -4972,6 +4983,7 @@ export const DocxEditorUnsupportedElement: vue.DefineComponent<vue.ExtractPropTy
         type: PropType<UnsupportedElementRule['match']>;
     };
 }>> & Readonly<{}>, {
+    includePartial: boolean;
     layout: _docx_editor_dev_core_editor.UnsupportedElementLayout | undefined;
     match: ((element: UnsupportedElement) => boolean) | undefined;
 }, SlotsType<{
@@ -4982,6 +4994,7 @@ export const DocxEditorUnsupportedElement: vue.DefineComponent<vue.ExtractPropTy
 
 // @public
 export interface DocxEditorUnsupportedElementProps extends UnsupportedElementRule {
+    includePartial?: UnsupportedElementRule['includePartial'];
 }
 
 // @public (undocumented)
@@ -5270,6 +5283,12 @@ export type DocxFontsSource = DocxFontOrigin | readonly DocxFontOrigin[];
 
 // @public (undocumented)
 export type DocxSource = string | URL | Uint8Array | ArrayBuffer;
+
+export { DrawingGraphicKind }
+
+export { DrawingSupport }
+
+export { DrawingSupportIssue }
 
 export { Editor }
 

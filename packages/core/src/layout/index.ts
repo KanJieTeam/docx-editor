@@ -786,3 +786,9 @@ export { tabLeaderPattern } from './tab-leader-pattern.ts';
 export { noteSeparatorRuleBox } from './note-separator-rule.ts';
 export type { StrikeoutStrokePt } from './sfnt-strikeout-metrics.ts';
 export { shapedRunOutline } from './text-outline.ts';
+
+export type {
+  DrawingGraphicKind,
+  DrawingSupport,
+  DrawingSupportIssue,
+} from '../store/package/drawing-support.ts';

@@ -919,6 +919,9 @@ export interface Contribution {
 }
 
 // @public
+export function createDrawingPreviewPackage(pkg: OoxmlPackage, target: DrawingPreviewTarget, limits?: DrawingPreviewPackageLimits): DrawingPreviewPackageResult;
+
+// @public
 export function createImageResourceCache(initialPkg: OoxmlPackage, options: CreateImageResourceCacheOptions): ImageResourceLookup;
 
 // @public
@@ -1381,6 +1384,9 @@ export interface DrawingEffectsRenderer {
     }) => readonly VectorShapeComponent[];
 }
 
+// @public
+export type DrawingGraphicKind = 'picture' | 'chart' | 'diagram' | 'shape' | 'group' | 'textbox' | 'canvas' | 'graphic';
+
 // @internal
 export interface DrawingGraphicProjection {
     // (undocumented)
@@ -1437,6 +1443,29 @@ export interface DrawingPositionInput {
 }
 
 // @public
+export interface DrawingPreviewPackageLimits {
+    readonly maxBytes?: number;
+    readonly maxParts?: number;
+}
+
+// @public
+export type DrawingPreviewPackageResult = {
+    readonly copiedParts: readonly string[];
+    readonly docx: Uint8Array;
+    readonly ok: true;
+    readonly pageFitsDrawing: boolean;
+} | {
+    readonly ok: false;
+    readonly reason: 'drawing-not-found' | 'too-many-parts' | 'too-large';
+};
+
+// @public
+export interface DrawingPreviewTarget {
+    readonly nodeId: string;
+    readonly ownerPartName: string;
+}
+
+// @public
 export type DrawingPropertyIdResult = {
     readonly id: number;
     readonly ok: true;
@@ -1459,6 +1488,37 @@ export interface DrawingRenderers {
     readonly legacyTextArt?: (shape: OoxmlElement, context?: LegacyTextArtContext) => LegacyTextArtProjection | null;
     readonly metafile?: MetafileRenderer;
     readonly textArtLayout?: TextArtLayoutRenderer;
+}
+
+// @public
+export type DrawingSupport = 'native' | 'partial' | 'unrendered';
+
+// @public
+export interface DrawingSupportEntry {
+    readonly drawingNodeId: string | null;
+    readonly graphicKind: DrawingGraphicKind;
+    readonly issues: readonly DrawingSupportIssue[];
+    readonly nodeId: string;
+    readonly ownerPartName: string;
+    readonly source: OoxmlElement;
+    readonly state: 'projected' | 'fallback' | 'placeholder' | 'hidden' | 'unplaced';
+    readonly support: DrawingSupport;
+}
+
+// @public
+export interface DrawingSupportIssue {
+    readonly code: 'unsupported-effect' | 'renderer-required' | 'unverified-3d' | 'saved-fallback' | 'unplaced-drawing' | 'inspection-limit' | 'projection-diagnostic';
+    readonly detail: string;
+    readonly localName: string;
+    readonly namespaceUri: string;
+    readonly nodeId: string;
+}
+
+// @public
+export interface DrawingSupportReport {
+    readonly complete: boolean;
+    readonly coverage: 'explicit-source-effects';
+    readonly entries: readonly DrawingSupportEntry[];
 }
 
 // @internal
@@ -2372,6 +2432,9 @@ export type InsertTextOp = {
     readonly text: string;
     readonly textFormFieldId?: string;
 };
+
+// @public
+export function inspectDrawingSupport(pkg: OoxmlPackage): DrawingSupportReport;
 
 // @internal
 export function installDrawingRenderers(renderers: DrawingRenderers): void;

@@ -650,6 +650,11 @@ export type {
 } from '@docx-editor.dev/core/editor';
 
 export type {
+  DrawingGraphicKind,
+  DrawingSupport,
+  DrawingSupportIssue,
+} from '@docx-editor.dev/core/store';
+export type {
   UnsupportedElement,
   UnsupportedElementLayout,
   UnsupportedElementRule,

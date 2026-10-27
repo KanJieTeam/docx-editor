@@ -1548,6 +1548,9 @@ export const DRAWING_REL_FROM_H: readonly string[];
 export const DRAWING_REL_FROM_V: readonly string[];
 
 // @public
+export type DrawingGraphicKind = 'picture' | 'chart' | 'diagram' | 'shape' | 'group' | 'textbox' | 'canvas' | 'graphic';
+
+// @public
 export interface DrawingPositionInput {
     // (undocumented)
     readonly horizontalEmu?: number;
@@ -1561,6 +1564,26 @@ export interface DrawingPositionInput {
 }
 
 // @public
+export function drawingPreviewDocx(editor: DocxEditorInstance, element: Pick<UnsupportedElement, 'ownerPartName' | 'nodeId'>, limits?: DrawingPreviewPackageLimits): DrawingPreviewPackageResult;
+
+// @public
+export interface DrawingPreviewPackageLimits {
+    readonly maxBytes?: number;
+    readonly maxParts?: number;
+}
+
+// @public
+export type DrawingPreviewPackageResult = {
+    readonly copiedParts: readonly string[];
+    readonly docx: Uint8Array;
+    readonly ok: true;
+    readonly pageFitsDrawing: boolean;
+} | {
+    readonly ok: false;
+    readonly reason: 'drawing-not-found' | 'too-many-parts' | 'too-large';
+};
+
+// @public
 export type DrawingSelectionIntent = {
     readonly kind: 'none';
 } | {
@@ -1569,6 +1592,18 @@ export type DrawingSelectionIntent = {
 } | {
     readonly kind: 'programmatic';
 };
+
+// @public
+export type DrawingSupport = 'native' | 'partial' | 'unrendered';
+
+// @public
+export interface DrawingSupportIssue {
+    readonly code: 'unsupported-effect' | 'renderer-required' | 'unverified-3d' | 'saved-fallback' | 'unplaced-drawing' | 'inspection-limit' | 'projection-diagnostic';
+    readonly detail: string;
+    readonly localName: string;
+    readonly namespaceUri: string;
+    readonly nodeId: string;
+}
 
 // @public
 export interface EditorCommandExecute {
@@ -4335,19 +4370,17 @@ export const twipsToInches: (twips: number) => number;
 export interface UnsupportedElement {
     readonly bounds?: LayoutBox;
     readonly drawing?: InlineDrawingRecord | AnchoredDrawingRecord;
+    readonly drawingIssues?: readonly DrawingSupportIssue[];
     readonly equation?: EquationSpanRecord;
+    readonly graphicKind?: DrawingGraphicKind;
     readonly label: string;
-    // (undocumented)
     readonly localName: string;
-    // (undocumented)
     readonly namespaceUri: string | null;
-    // (undocumented)
     readonly nodeId: string;
-    // (undocumented)
     readonly ownerPartName: string;
-    // (undocumented)
     readonly placement: 'inline' | 'block';
     readonly source: OoxmlElement | null;
+    readonly support?: Exclude<DrawingSupport, 'native'>;
 }
 
 // @public
@@ -4366,19 +4399,19 @@ export interface UnsupportedElementHost {
 
 // @public
 export interface UnsupportedElementLayout {
-    // (undocumented)
     readonly height: number;
-    // (undocumented)
     readonly width: number;
 }
 
 // @public
 export interface UnsupportedElementRule {
-    // (undocumented)
+    readonly includePartial?: boolean;
     readonly layout?: UnsupportedElementLayout;
-    // (undocumented)
     readonly match?: (element: UnsupportedElement) => boolean;
 }
+
+// @public
+export function unsupportedElementRuleMatches(rule: UnsupportedElementRule, element: UnsupportedElement): boolean;
 
 // @public
 export function validateDrawingPositionInput(position: DrawingPositionInput): boolean;
