@@ -65,7 +65,8 @@ export function alignCellLine(
         shared.rtl,
         shared.inTableCell,
         pendingLine.spaceShrink === true,
-        measure.passages
+        measure.passages,
+        pendingLine
       ),
     (aligned) => lineAlignOffset(placedSpans, aligned, alignment, measure.available, measure.used)
   );

@@ -1,3 +1,5 @@
+import { lineHangingPunctuationAdvance } from './line-hanging-punctuation.ts';
+import type { PendingLine } from './pending-line.ts';
 import { shrinkJustifiedSpans } from './paragraph-space-shrink.ts';
 import { PAGE_BREAK_CHAR, type OoxmlProperty } from '@docx-editor.dev/core/store';
 import { paragraphIsRtl, reorderBidiSpans, splitBidiTrailingWhitespace } from './rtl-paragraph.ts';
@@ -124,7 +126,8 @@ function alignLogicalSpans(
   lineUsedWidth: number | undefined,
   paragraphRtl: boolean,
   pageBreaksIgnored: boolean,
-  lastLineShrinks: boolean
+  lastLineShrinks: boolean,
+  hangingPunctuationAdvance: number
 ): readonly StyleSpanRecord[] {
   if (spans.length === 0) return spans;
   // An unbounded line (a measuring pass) has no far edge to align or justify against.
@@ -141,7 +144,8 @@ function alignLogicalSpans(
         lineUsedWidth,
         paragraphRtl,
         false,
-        lastLineShrinks
+        lastLineShrinks,
+        hangingPunctuationAdvance
       )
     );
     if (aligned) return aligned;
@@ -294,6 +298,8 @@ function alignLogicalSpans(
   // still fit before the measure and the one that closes the last word's span.
   if ((alignment === 'center' || alignment === 'right') && !paragraphRtl && visible !== undefined)
     used = Math.min(used, visible);
+  // The hanging mark keeps its advance outside the measure; only its prefix fills the line.
+  if (alignment === 'both') used -= hangingPunctuationAdvance;
   const slack = available - used;
   // A last line compresses only when the flow kept the paragraph's last word by borrowing
   // inter-word space. Hanging punctuation also overflows a line, and keeps its spacing.
@@ -309,7 +315,7 @@ function alignLogicalSpans(
 
   // The last line of a justified paragraph is set flush left, never stretched.
   if (alignment === 'both') {
-    if (isLastLine) return spans;
+    if (isLastLine && hangingPunctuationAdvance === 0) return spans;
     const justified = justifyCjkSpans(spans, measurer, slack);
     if (justified) return justified;
     // Only boundaries after an expandable space receive slack — the same slots paint stretches
@@ -420,12 +426,20 @@ export function alignSpans(
   paragraphRtl = spans.some((span) => span.style.shaping?.baseLevel === 1),
   pageBreaksIgnored = false,
   lastLineShrinks = false,
-  passages?: readonly LinePassage[]
+  passages?: readonly LinePassage[],
+  pendingLine?: PendingLine
 ): readonly StyleSpanRecord[] {
+  const hangingPunctuationAdvance = pendingLine ? lineHangingPunctuationAdvance(pendingLine) : 0;
   // A right-to-left last line aligns to the right, unless the flow kept its last word by
   // borrowing inter-word space: then it compresses as justified text does.
   const effective =
-    alignment === 'both' && isLastLine && paragraphRtl && !lastLineShrinks ? 'right' : alignment;
+    alignment === 'both' &&
+    isLastLine &&
+    paragraphRtl &&
+    !lastLineShrinks &&
+    hangingPunctuationAdvance === 0
+      ? 'right'
+      : alignment;
   const split = splitBidiTrailingWhitespace(spans, measurer);
   if (passages && passages.length > 1 && !paragraphRtl && !split.some(isRightToLeft)) {
     const aligned = alignPassageSpans(split, passages, (part, passage, isLastPart) =>
@@ -439,7 +453,8 @@ export function alignSpans(
         effective === 'center' || effective === 'right' ? partUsedWidth(part, passage) : undefined,
         false,
         pageBreaksIgnored,
-        lastLineShrinks
+        lastLineShrinks,
+        isLastPart ? hangingPunctuationAdvance : 0
       )
     );
     if (aligned) return reorderBidiSpans(aligned, false, pageBreaksIgnored);
@@ -459,7 +474,8 @@ export function alignSpans(
       usedWidth,
       paragraphRtl,
       pageBreaksIgnored,
-      lastLineShrinks
+      lastLineShrinks,
+      hangingPunctuationAdvance
     );
   const trailing = bidiTrailingSpaces(split, paragraphRtl, isLastLine, pageBreaksIgnored);
   if (trailing) {

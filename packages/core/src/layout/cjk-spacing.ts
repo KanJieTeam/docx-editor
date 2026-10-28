@@ -353,7 +353,11 @@ export function hangingCjkPunctuationAdvance(
   // allocate a grapheme array on every placement candidate just to discover no punctuation.
   const tail = text[text.length - 1];
   if (!tail || !/^[\p{Pe}\p{Pf}\p{Po}]$/u.test(tail)) return undefined;
-  if (!FULLWIDTH_PUNCTUATION.test(tail) && !eastAsianLanguage(piece.props)) return undefined;
+  const language = eastAsianLanguage(piece.props);
+  if (language?.startsWith('ko')) return undefined;
+  if (language?.startsWith('ja') && '〕》〉！？：；・'.includes(tail)) return undefined;
+  if (language?.startsWith('zh') && tail === '．') return undefined;
+  if (!FULLWIDTH_PUNCTUATION.test(tail) && !language) return undefined;
   const last = segmentGraphemes(text).at(-1)?.text;
   if (!last || !/^[\p{Pe}\p{Pf}\p{Po}]$/u.test(last)) return undefined;
   return measureDisplayText(last, styleForFontSlot(piece.style, piece.fontSlot), measurer);

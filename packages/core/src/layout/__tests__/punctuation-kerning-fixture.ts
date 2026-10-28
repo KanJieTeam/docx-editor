@@ -23,6 +23,9 @@ export interface FixtureOptions {
   italic?: boolean;
   underlineElsewhere?: boolean;
   language?: string;
+  secondLanguage?: string;
+  defaultLanguage?: string;
+  lineStartRule?: { language: string; characters: string };
   /** Paragraph properties; the default is left aligned without hanging punctuation. */
   paragraphProperties?: string;
   /** One `word/fontTable.xml` entry: the face and its `w:charset` value. */
@@ -47,6 +50,7 @@ export function loadFixture(options: FixtureOptions = {}) {
     const face = second
       ? (options.secondFace ?? options.face ?? 'Yu Mincho')
       : (options.face ?? 'Yu Mincho');
+    const language = second ? (options.secondLanguage ?? options.language) : options.language;
     return (
       '<w:r><w:rPr>' +
       `<w:rFonts w:ascii="${escape(face)}" w:eastAsia="${escape(face)}"/><w:sz w:val="48"/>` +
@@ -54,7 +58,7 @@ export function loadFixture(options: FixtureOptions = {}) {
       (options.tracking === undefined ? '' : `<w:spacing w:val="${options.tracking}"/>`) +
       (options.bold ? '<w:b/>' : '') +
       (options.italic ? '<w:i/>' : '') +
-      (options.language ? `<w:lang w:eastAsia="${escape(options.language)}"/>` : '') +
+      (language ? `<w:lang w:eastAsia="${escape(language)}"/>` : '') +
       `</w:rPr><w:t xml:space="preserve">${escape(content)}</w:t></w:r>`
     );
   };
@@ -75,6 +79,7 @@ export function loadFixture(options: FixtureOptions = {}) {
   entries['word/styles.xml'] = strToU8(
     `<w:styles xmlns:w="${W}"><w:docDefaults><w:rPrDefault><w:rPr>` +
       (face ? `<w:rFonts w:eastAsia="${escape(face)}"/>` : '') +
+      (options.defaultLanguage ? `<w:lang w:eastAsia="${escape(options.defaultLanguage)}"/>` : '') +
       '</w:rPr></w:rPrDefault></w:docDefaults></w:styles>'
   );
   entries['word/settings.xml'] = strToU8(
@@ -85,6 +90,9 @@ export function loadFixture(options: FixtureOptions = {}) {
           ? '<w:noPunctuationKerning/>'
           : `<w:noPunctuationKerning w:val="${options.noPunctuation}"/>`) +
       (options.compression ? `<w:characterSpacingControl w:val="${options.compression}"/>` : '') +
+      (options.lineStartRule
+        ? `<w:noLineBreaksBefore w:lang="${escape(options.lineStartRule.language)}" w:val="${escape(options.lineStartRule.characters)}"/>`
+        : '') +
       `<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="${options.compatibility ?? 15}"/></w:compat>` +
       '</w:settings>'
   );
@@ -130,6 +138,7 @@ export function loadFixture(options: FixtureOptions = {}) {
     bytes,
     view,
     lines,
+    layout,
     before,
     entries: Object.fromEntries(
       Object.entries(entries).map(([name, data]) => [name, strFromU8(data)])

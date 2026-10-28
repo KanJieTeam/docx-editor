@@ -190,10 +190,18 @@ export function cjkParagraphBreaks(
           ? detectedLanguage
           : undefined);
       if (language || previousLanguage) {
+        // Korean overflow punctuation wraps by itself. Explicit custom prohibitions still win.
+        const koreanOverflowMark =
+          language !== undefined &&
+          /^ko(?:-|$)/.test(language) &&
+          (policy.hangingPunctuation ?? policy.overflowPunctuation) &&
+          /^[\p{Pe}\p{Pf}\p{Po}]$/u.test(right.text) &&
+          policy.settings?.before[language] === undefined;
         forbidden =
-          (language
-            ? tableFor(language).before.includes(String.fromCodePoint(after))
-            : CJK_NO_BREAK_BEFORE.has(after)) ||
+          (!koreanOverflowMark &&
+            (language
+              ? tableFor(language).before.includes(String.fromCodePoint(after))
+              : CJK_NO_BREAK_BEFORE.has(after))) ||
           (previousLanguage
             ? tableFor(previousLanguage).after.includes(String.fromCodePoint(before))
             : CJK_NO_BREAK_AFTER.has(before));

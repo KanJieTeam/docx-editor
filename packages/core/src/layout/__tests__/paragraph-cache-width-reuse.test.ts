@@ -1,7 +1,12 @@
+import {
+  setLineHangingPunctuationAdvance,
+  lineHangingPunctuationAdvance,
+} from '../line-hanging-punctuation.ts';
+import { frozenLine } from '../pending-line.ts';
 import { expect, test } from 'bun:test';
 import { readOoxmlPart } from '@docx-editor.dev/core/store';
 import { createParagraphLayoutCache, type ParagraphKeyInputs } from '../layout-cache.ts';
-import { reuseSingleLineAtWidth } from '../paragraph-cache-width-reuse.ts';
+import { lineTiedToPlacement, reuseSingleLineAtWidth } from '../paragraph-cache-width-reuse.ts';
 import { breakParagraph, type PendingLine } from '../paragraph-flow.ts';
 import { createFixedMeasurer } from '../semantic-layout.ts';
 
@@ -61,4 +66,14 @@ test('a token that no longer fits requires a fresh break', () => {
   const { paragraph, cache, inputs } = fixture();
   const next = cache.keyFor!({ ...inputs, width: 10 });
   expect(reuseSingleLineAtWidth(cache, paragraph, next, 10)).toBeUndefined();
+});
+
+test('hanging punctuation retains its width-dependent alignment decision in the cache', () => {
+  const { cache, key } = fixture('Token.');
+  const line = (cache.get(key) as readonly PendingLine[])[0]!;
+  const pending = { ...line };
+  setLineHangingPunctuationAdvance(pending, 3);
+  const retained = frozenLine(pending);
+  expect(lineHangingPunctuationAdvance(retained)).toBe(3);
+  expect(lineTiedToPlacement(retained)).toBe(true);
 });
