@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import {
   OFFICE_MATH_NAMESPACE_URI,
   WML_NAMESPACE_URI,
@@ -181,4 +181,44 @@ test('an n-ary with m:limLoc subSup projects its location and keeps its source',
   expect(equationExpressionToLinearMath(project(nary('∑', 'undOvr')).expression)).toBe(
     '∑[q]^[k]{x}'
   );
+});
+
+describe('an n-ary operator without m:chr', () => {
+  const unnamed = (properties: string) =>
+    `<m:nary>${properties}<m:sub>${run('q')}</m:sub><m:sup>${run('k')}</m:sup>` +
+    `<m:e>${run('x')}</m:e></m:nary>`;
+
+  test('draws an integral and places its limits as an integral does', () => {
+    for (const properties of ['<m:naryPr/>', '']) {
+      expect(operatorOf(inline(unnamed(properties))).operator.text).toBe('∫');
+      expect(inline(unnamed(properties))).toEqual(inline(nary('∫')));
+      expect(beside(display(unnamed(properties)))).toBe(true);
+      expect(display(unnamed(properties))).toEqual(display(nary('∫')));
+    }
+    // Without m:chr, m:limLoc still decides where display limits sit.
+    const stacked = unnamed('<m:naryPr><m:limLoc m:val="undOvr"/></m:naryPr>');
+    expect(beside(display(stacked))).toBe(false);
+    expect(display(stacked)).toEqual(display(nary('∫', 'undOvr')));
+  });
+
+  test('has no compact linear text, because that syntax spells only the sum', () => {
+    const projected = project(unnamed('<m:naryPr/>'));
+    expect(projected.expression).toMatchObject({ kind: 'nary', operator: '∫' });
+    expect(projected.fallbackText).toBe('∫qkx');
+    expect(equationExpressionToLinearMath(projected.expression)).toBe('');
+    // The text spelling of every n-ary structure includes the operator it draws.
+    expect(project(nary('∑', 'subSup')).fallbackText).toBe('∑qkx');
+  });
+
+  test('outside the supported subset, its text fallback paints the integral', () => {
+    for (const hidden of ['<m:subHide m:val="1"/>', '<m:grow m:val="1"/>']) {
+      const body = unnamed(`<m:naryPr>${hidden}</m:naryPr>`);
+      const projected = project(body);
+      expect(projected.expression).toEqual({ kind: 'fallback', text: '∫qkx' });
+      expect(inline(body)).toMatchObject({ kind: 'fallback', text: '∫qkx' });
+    }
+    // A named operator paints in the fallback text too.
+    const named = nary('∑').replace('</m:naryPr>', '<m:subHide m:val="1"/></m:naryPr>');
+    expect(project(named).expression).toEqual({ kind: 'fallback', text: '∑qkx' });
+  });
 });
