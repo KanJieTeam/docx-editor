@@ -749,7 +749,7 @@ describe('the shaped parts', () => {
     );
     const { view, editor } = mountToolbar(<DocxEditorToolbar />, styled);
 
-    // Live: a real button trigger showing the unstyled placeholder (raw key — no `t`).
+    // Live: the trigger shows the catalog label for the selected default style.
     const trigger = view.container.querySelector(
       '[data-slot="styles.style"] .docx-toolbar__style-trigger'
     ) as HTMLButtonElement;
@@ -757,7 +757,7 @@ describe('the shaped parts', () => {
     // The paragraph names no `w:pStyle`, but it IS written in the document's default
     // style, and that is what Word's box shows — not a generic placeholder over a style
     // the menu below lists by name with the tick beside nothing.
-    expect(trigger.textContent).toBe('Normal');
+    expect(trigger.textContent).toBe(en.styles.normalText);
 
     await act(async () => {
       trigger.click();
@@ -766,10 +766,9 @@ describe('the shaped parts', () => {
     // The selected row carries a ✓ glyph, so compare the label span rather than the row.
     const items = rows.map((row) => row.querySelector('span')?.textContent);
     // Word's gallery order, NOT the order the part lists them in, with the unranked style
-    // keeping its document position at the end. `Heading 1` is title-cased for display:
-    // Word writes the built-in name lowercase and title-cases it in its own UI. `Callout`
-    // is the document's own style, so its name is shown exactly as authored.
-    expect(items).toEqual(['Normal', 'Heading 1', 'Callout']);
+    // keeping its document position at the end. Built-in labels use the catalog.
+    // `Callout` is the document's own style, so its name is shown exactly as authored.
+    expect(items).toEqual([en.styles.normalText, 'Heading 1', 'Callout']);
     // The paragraph states no `w:pStyle` but IS written in the default style, so the tick
     // sits on it. Reading "no style" as "nothing selected" left every row unticked while
     // the trigger showed a placeholder for a style the list names.
