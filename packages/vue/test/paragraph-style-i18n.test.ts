@@ -1,7 +1,7 @@
 import './dom-setup.ts';
 import { afterEach, expect, test } from 'bun:test';
 import { createSSRApp, h, ref, type App } from 'vue';
-import { renderToString } from '@vue/server-renderer';
+import { renderToString } from 'vue/server-renderer';
 import { commandForSlotValue } from '@docx-editor.dev/core/editor';
 import { canonicalOoxmlFingerprint, readOoxmlPackage } from '@docx-editor.dev/core/store';
 import { LocaleProvider } from '../src/i18n/LocaleContext';
