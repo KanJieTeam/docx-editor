@@ -1599,6 +1599,7 @@ export function ensureNumberingLevel(pkg: OoxmlPackage, numId: string, level: nu
 
 // @public
 export interface EquationControlSource {
+    readonly controlFontSizePt?: number;
     readonly controlProperties?: true;
 }
 
@@ -1639,6 +1640,7 @@ export type EquationExpression = {
 } & EquationControlSource) | ({
     readonly body: EquationExpression;
     readonly kind: 'nary';
+    readonly limitLocation?: 'undOvr' | 'subSup';
     readonly lowerLimit?: EquationExpression;
     readonly operator: string;
     readonly upperLimit?: EquationExpression;
@@ -4378,7 +4380,10 @@ export type ResolvedRelationship = {
 export function resolveEndnoteProperties(section?: AuthoredNoteProperties, document?: AuthoredNoteProperties): ResolvedEndnoteProperties;
 
 // @public
-export function resolveFootnoteProperties(section?: AuthoredNoteProperties, document?: AuthoredNoteProperties): ResolvedFootnoteProperties;
+export function resolveFootnoteProperties(section?: AuthoredNoteProperties): ResolvedFootnoteProperties;
+
+// @public @deprecated
+export function resolveFootnoteProperties(section: AuthoredNoteProperties | undefined, document: AuthoredNoteProperties | undefined): ResolvedFootnoteProperties;
 
 // @public
 export function resolveHeaderFooterParts(pkg: OoxmlPackage): HeaderFooterParts;

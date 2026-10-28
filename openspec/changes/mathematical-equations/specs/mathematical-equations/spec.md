@@ -33,6 +33,62 @@ The engine SHALL publish equation geometry from DOM-free layout. Paint SHALL use
 - **WHEN** an equation contains `m:sSup` or `m:nary`
 - **THEN** paint places scripts and limits around the projected base or operator
 
+#### Scenario: N-ary limit location
+
+- **WHEN** an inline equation (`m:oMath` beside other visible content of its paragraph) contains an `m:nary` with limits
+- **THEN** the operator draws at its run size, and the limits sit to its right with the subscript and superscript offsets of an `m:sSubSup`, whatever `m:limLoc` says
+- **AND** in a display equation (`m:oMathPara`) the limits follow `m:limLoc`, and without it sit beside an integral and below and above other operators
+- **AND** an `m:oMath` that is the only visible content of its paragraph is a display equation, so its operator draws enlarged with display limits and its fractions take the display placement
+- **AND** an `m:limLoc` of `subSup` projects as math, keeps its source on save, and refuses compact replacement
+
+#### Scenario: Script size and placement
+
+- **WHEN** an equation contains `m:sSup`, `m:sSub`, or `m:sSubSup`
+- **THEN** each script draws at 73 percent of its run size, rounded down to a whole half point
+- **AND** a script inside a script, fraction part, or limit draws at 60 percent of its run size, at every deeper level too
+- **AND** the superscript baseline rises at least 750/2048 em of the structure size, and at least to 460/2048 em below the top of the lowercase text of its base, including text inside a structured base
+- **AND** the subscript baseline sits 0.2 em below the base baseline, and lower when the top of the subscript ink would rise more than 760/2048 em above it
+- **AND** the em of these offsets is the `w:sz` of the structure `m:ctrlPr`, or the size of the text around the equation when the structure has none
+- **AND** the two scripts of one base keep a 300/2048 em gap between their glyphs
+
+#### Scenario: Operator spacing
+
+- **WHEN** an argument at its base size contains relations, binary operators, or punctuation
+- **THEN** a relation takes 5/18 em on each side that has a neighbour, and a binary operator takes 4/18 em
+- **AND** punctuation takes 3/18 em after it, except a comma or period between digits
+- **AND** a fraction or an ellipsis takes 3/18 em beside an ordinary neighbour, and an n-ary structure takes 3/18 em beside its neighbours
+- **AND** a binary operator at the start of an argument or after an operator, an opening bracket, or punctuation is a sign and takes no space
+- **AND** a binary operator before a relation, a closing bracket, or punctuation takes no space, and the relation takes no space on that side
+- **AND** each space takes the size of the neighbour that is not the spaced operator
+- **AND** scripts, limits, fraction parts, and normal text take no operator spacing
+
+#### Scenario: Fraction placement
+
+- **WHEN** an inline equation (`m:oMath`) contains an `m:f` bar fraction
+- **THEN** the rule strokes 133/2048 em of the fraction size and centres on the math axis, 585/2048 em above the baseline
+- **AND** the numerator baseline rises at least 1200/2048 em, and further to keep a 133/2048 em gap between its ink and the rule
+- **AND** the denominator baseline drops at least 1030/2048 em, and further to keep a 133/2048 em gap between the rule and its ink
+- **AND** the fraction is as wide as its wider part, and its text parts reach the typographic ascender and descender of the math face
+
+#### Scenario: Display fraction placement
+
+- **WHEN** a display equation (`m:oMathPara`) contains an `m:f` bar fraction
+- **THEN** its parts draw at the inline part size, with their full font boxes
+- **AND** the rule strokes 0.055 em of the fraction size, inset 0.04 em on each side, with a 0.08 em gap above and below it
+- **AND** the fraction is as wide as its wider part plus 0.08 em on each side
+
+#### Scenario: Run language
+
+- **WHEN** an equation run carries a bounded `w:lang` beside supported run properties
+- **THEN** the run lays out as math with its own size and style
+- **AND** save keeps the `w:lang` source, and compact replacement stays refused for the run
+
+#### Scenario: Bar placement
+
+- **WHEN** an equation contains `m:bar` with an upper or lower position
+- **THEN** the bar strokes 133/2048 em of the structure size, which is the `w:sz` of its `m:ctrlPr` or the size of the text around the equation
+- **AND** the bar keeps a 345/2048 em gap from the ink of its body, with one more stroke of space on its outer side
+
 #### Scenario: Safe paint
 
 - **WHEN** OMML text contains markup-like attacker-controlled characters
@@ -41,8 +97,21 @@ The engine SHALL publish equation geometry from DOM-free layout. Paint SHALL use
 #### Scenario: Authored text fonts in equation runs
 
 - **WHEN** an equation run specifies a text font and contains ASCII digits
-- **THEN** the digits use that font with the run's mathematical and Word style
+- **THEN** the digits use that font in italic, with run bold, unless `m:sty` selects plain or a bold math style
 - **AND** mathematical letters and symbols retain the math face
+
+#### Scenario: Bold math style digits in authored text fonts
+
+- **WHEN** an equation run with `m:sty` `b` or `bi` specifies a text font and contains ASCII digits
+- **THEN** the digits use mathematical bold digits from the math face
+- **AND** letters in the same run stay in the same math-face text node
+
+#### Scenario: Run font slots that name different faces
+
+- **WHEN** an equation run's `w:rFonts` names different faces in its `w:ascii`, `w:hAnsi`, `w:eastAsia`, and `w:cs` slots
+- **THEN** the run takes the face of the slots that its characters use, and keeps its size and math style
+- **AND** a run whose characters use two different faces keeps the text fallback
+- **AND** compact replacement refuses the equation, and save keeps the source properties
 
 #### Scenario: Normal text without a run font
 
