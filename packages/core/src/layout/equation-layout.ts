@@ -4,8 +4,41 @@ import type { EquationExpression, OmmlEquationProjection } from '@docx-editor.de
 import { measureDisplayText, withFontFamily, type ResolvedRunStyle } from './run-style.ts';
 import type { LayoutBox, TextMeasurer } from './semantic-records.ts';
 import { equationDisplayText } from './equation-display-text.ts';
+import { equationInk } from './equation-ink.ts';
+import { attachScripts, box, naryLimitsBeside, shifted } from './equation-scripts.ts';
+import {
+  equationAtomSpaces,
+  equationTextAtoms,
+  equationTextHasOperators,
+  type EquationAtomClass,
+  type EquationSpacingAtom,
+  type EquationTextAtom,
+} from './equation-spacing.ts';
 
-const SCRIPT_SCALE = 0.7;
+// Script and stack metrics in ems of the structure size, from the math constants of the
+// default math face (2048 font units to the em).
+/** Scripts, fraction parts, and limits draw at 73% of their base size. */
+const SCRIPT_SCALE = 0.73;
+/** A script inside a script, fraction part, or limit draws at 60%, at every deeper level too. */
+const SCRIPT_SCRIPT_SCALE = 0.6;
+/** The stroke of an upper or lower bar. */
+const BAR_RULE_THICKNESS = 133 / 2048;
+/** The gap between a bar and the ink of its body. */
+const BAR_VERTICAL_GAP = 345 / 2048;
+/** The space a bar reserves on its outer side. */
+const BAR_EXTRA_SPACE = 133 / 2048;
+/** The height of the math axis, where fraction rules and operators centre. */
+const MATH_AXIS_HEIGHT = 585 / 2048;
+/** The stroke of a fraction rule. */
+const FRACTION_RULE_THICKNESS = 133 / 2048;
+/** The least numerator baseline rise of an inline fraction. */
+const FRACTION_NUMERATOR_SHIFT_UP = 1200 / 2048;
+/** The least denominator baseline drop of an inline fraction. */
+const FRACTION_DENOMINATOR_SHIFT_DOWN = 1030 / 2048;
+/** The least ink gap between the numerator and the rule. */
+const FRACTION_NUMERATOR_GAP_MIN = 133 / 2048;
+/** The least ink gap between the rule and the denominator. */
+const FRACTION_DENOMINATOR_GAP_MIN = 133 / 2048;
 const NARY_OPERATOR_SCALE = 1.25;
 /** The synthetic face Core layout uses for every OMML equation. @internal */
 export const EQUATION_FONT_FAMILY = 'Cambria Math';
@@ -102,19 +135,33 @@ export interface EquationSpanRecord {
   readonly truncated: boolean;
 }
 
-function box(x: number, y: number, width: number, height: number): LayoutBox {
-  return Object.freeze({ x, y, width, height });
-}
-
-function shifted<T extends EquationGeometry>(node: T, x: number, y: number): T {
-  return Object.freeze({
-    ...node,
-    box: box(x, y, node.box.width, node.box.height),
-  }) as unknown as T;
+/**
+ * Layout inputs that an equation piece carries beside its projection. An inline and a display
+ * equation can share one projection, so these inputs also key the geometry cache.
+ * @internal
+ */
+export interface EquationLayoutInput {
+  /** The equation is a display equation (`m:oMathPara`). */
+  readonly display?: boolean;
+  /**
+   * The font size, in points, of the text around the equation. A structure without a size in
+   * its `m:ctrlPr` sizes its offsets and rules from it. Defaults to the size of the style.
+   */
+  readonly surroundingSizePt?: number;
+  /**
+   * The font family of the text around the equation, which normal text (`m:nor`) without a
+   * run font uses; `null` for the default face. Defaults to the family that the style was
+   * derived from.
+   */
+  readonly textFontFamily?: string | null;
 }
 
 interface EquationLayoutCache {
   readonly textStyle: ResolvedRunStyle;
+  /** The size of the text around the equation: the structure size without `m:ctrlPr`. */
+  readonly surroundingSizePt: number;
+  /** The equation is a display equation, so its fractions keep the padded placement. */
+  readonly display: boolean;
   readonly formats: WeakMap<
     object,
     Map<boolean, { readonly style: ResolvedRunStyle; readonly cache: EquationLayoutCache }>
@@ -180,6 +227,28 @@ function sharedEquationLayouts(
   return created;
 }
 
+/** The size factor of a script level below a structure drawn at `scale`. */
+function scriptScale(scale: number): number {
+  return scale >= 1 ? scale * SCRIPT_SCALE : Math.min(scale, SCRIPT_SCRIPT_SCALE);
+}
+
+// A reduced size rounds down to whole half points, the unit of authored run sizes.
+function scaledSizePt(sizePt: number, scale: number): number {
+  return scale < 1 ? Math.max(0.5, Math.floor(sizePt * scale * 2 + 1e-9) / 2) : sizePt * scale;
+}
+
+/**
+ * The size that sizes the offsets and rules of one structure: its `m:ctrlPr` size, or the
+ * size of the text around the equation, reduced to the structure's script level.
+ */
+function structureSizePt(
+  expression: { readonly controlFontSizePt?: number },
+  scale: number,
+  cache: EquationLayoutCache
+): number {
+  return scaledSizePt(expression.controlFontSizePt ?? cache.surroundingSizePt, scale);
+}
+
 function scaledStyle(
   style: ResolvedRunStyle,
   scale: number,
@@ -192,7 +261,7 @@ function scaledStyle(
       ? style
       : Object.freeze({
           ...style,
-          fontSizePt: style.fontSizePt * scale,
+          fontSizePt: scaledSizePt(style.fontSizePt, scale),
           characterSpacingPt: style.characterSpacingPt * scale,
         });
   cache.styles.set(scale, resolved);
@@ -234,7 +303,9 @@ function textGeometry(
 
 function rowGeometry(
   items: readonly EquationGeometry[],
-  fallbackMetrics: { readonly height: number; readonly baseline: number }
+  fallbackMetrics: { readonly height: number; readonly baseline: number },
+  /** The space, in points, before each item. */
+  spaces?: readonly number[]
 ): EquationRowGeometry {
   if (items.length === 0) {
     return Object.freeze({
@@ -247,7 +318,8 @@ function rowGeometry(
   const baseline = Math.max(...items.map((child) => child.baseline));
   const descent = Math.max(...items.map((child) => child.box.height - child.baseline));
   let x = 0;
-  const placed = items.map((child) => {
+  const placed = items.map((child, index) => {
+    x += spaces?.[index] ?? 0;
     const result = shifted(child, x, baseline - child.baseline);
     x += child.box.width;
     return result;
@@ -260,6 +332,223 @@ function rowGeometry(
   });
 }
 
+type TextExpression = Extract<EquationExpression, { readonly kind: 'text' }>;
+
+function layoutText(
+  expression: TextExpression,
+  measurer: TextMeasurer,
+  style: ResolvedRunStyle,
+  scale: number,
+  cache: EquationLayoutCache,
+  // A part of a split run shares the faces derived for the whole run.
+  source: object = expression
+): EquationGeometry {
+  const authoredFamily = expression.format?.fontFamily;
+  const textFace = authoredFamily && authoredFamily.trim().toLowerCase() !== 'cambria math';
+  const digitParts =
+    textFace && !expression.format?.normalText && (expression.format?.mathStyle ?? 'i') === 'i'
+      ? expression.value.match(/(?:[0-9]\p{M}*)+|[^0-9]+/gu)
+      : null;
+  if (digitParts && digitParts.length > 1) {
+    return rowGeometry(
+      digitParts.map((value) =>
+        layoutText({ ...expression, value }, measurer, style, scale, cache, source)
+      ),
+      metricsAt(measurer, style, scale, cache)
+    );
+  }
+  const display = equationDisplayText(expression, authoredFamily ?? style.fontFamily);
+  const familyStyle =
+    authoredFamily && !display.mathematicalGlyphs
+      ? withFontFamily(style, authoredFamily)
+      : expression.format?.normalText
+        ? cache.textStyle
+        : style;
+  const formatKey = expression.format ?? source;
+  const digits = Boolean(textFace && display.mathStyle && !display.mathematicalGlyphs);
+  let formats = cache.formats.get(formatKey);
+  let formatted = formats?.get(digits);
+  if (!formatted) {
+    const face = Object.freeze({
+      ...familyStyle,
+      fontSizePt: textSizePt(expression, familyStyle),
+      // Mathematical alphanumeric glyphs already carry their style in this
+      // regular face. Do not request a second italic or bold font program.
+      bold:
+        display.mathStyle === null
+          ? (expression.format?.bold ?? familyStyle.bold)
+          : !display.mathematicalGlyphs &&
+            (digits && expression.format?.bold !== undefined
+              ? expression.format.bold
+              : display.mathStyle === 'b' || display.mathStyle === 'bi'),
+      italic:
+        display.mathStyle === null || digits
+          ? (expression.format?.italic ??
+            (digits
+              ? display.mathStyle === 'i' || display.mathStyle === 'bi'
+              : expression.format?.normalText
+                ? false
+                : familyStyle.italic))
+          : !display.mathematicalGlyphs &&
+            (display.mathStyle === 'i' || display.mathStyle === 'bi'),
+    });
+    formatted = {
+      style: face,
+      cache: {
+        textStyle: cache.textStyle,
+        surroundingSizePt: cache.surroundingSizePt,
+        display: cache.display,
+        styles: new Map(),
+        metrics: new Map(),
+        formats: new WeakMap(),
+      },
+    };
+    if (!formats) {
+      formats = new Map();
+      cache.formats.set(formatKey, formats);
+    }
+    formats.set(digits, formatted);
+  }
+  return textGeometry('text', display.text, measurer, formatted.style, scale, formatted.cache);
+}
+
+function textSizePt(expression: TextExpression, style: ResolvedRunStyle): number {
+  return expression.format?.fontSizePt ?? expression.fontSizePt ?? style.fontSizePt;
+}
+
+function collectLeaves(items: readonly EquationExpression[], leaves: EquationExpression[]): void {
+  for (const item of items) {
+    if (item.kind === 'row') collectLeaves(item.items, leaves);
+    else leaves.push(item);
+  }
+}
+
+function structureClass(expression: EquationExpression): EquationAtomClass {
+  return expression.kind === 'fraction' ? 'inner' : expression.kind === 'nary' ? 'op' : 'ord';
+}
+
+/**
+ * Lay out one argument at its base size with the space between its atoms. Runs inside the
+ * argument are one sequence, so an operator in its own run is spaced like one inside a
+ * longer run.
+ */
+function layoutArgument(
+  items: readonly EquationExpression[],
+  measurer: TextMeasurer,
+  style: ResolvedRunStyle,
+  cache: EquationLayoutCache
+): EquationGeometry {
+  const leaves: EquationExpression[] = [];
+  collectLeaves(items, leaves);
+  const atoms: EquationSpacingAtom[] = [];
+  const parts: (readonly EquationTextAtom[] | null)[] = [];
+  for (const leaf of leaves) {
+    if (leaf.kind === 'text') {
+      // Normal text is one ordinary atom. Its operators take no space.
+      const textAtoms = leaf.format?.normalText ? null : equationTextAtoms(leaf.value);
+      const sizePt = textSizePt(leaf, leaf.format?.normalText ? cache.textStyle : style);
+      parts.push(textAtoms);
+      if (!textAtoms) {
+        atoms.push({ atomClass: 'ord', sizePt, text: leaf.value });
+        continue;
+      }
+      for (const atom of textAtoms)
+        atoms.push({ atomClass: atom.atomClass, sizePt, text: atom.text });
+      continue;
+    }
+    parts.push(null);
+    atoms.push({ atomClass: structureClass(leaf), sizePt: style.fontSizePt });
+  }
+  const spaces = equationAtomSpaces(atoms);
+  if (spaces.every((space) => space === 0)) {
+    // Keep the source rows. A text item needs no second scan for operators.
+    const plain = (item: EquationExpression) =>
+      item.kind === 'text'
+        ? layoutText(item, measurer, style, 1, cache)
+        : layoutExpression(item, measurer, style, 1, cache);
+    return items.length === 1
+      ? plain(items[0]!)
+      : rowGeometry(items.map(plain), metricsAt(measurer, style, 1, cache));
+  }
+  const geometries: EquationGeometry[] = [];
+  leaves.forEach((leaf, index) => {
+    const textAtoms = parts[index];
+    if (leaf.kind === 'text' && textAtoms) {
+      for (const atom of textAtoms) {
+        geometries.push(layoutText({ ...leaf, value: atom.text }, measurer, style, 1, cache, leaf));
+      }
+    } else {
+      geometries.push(layoutExpression(leaf, measurer, style, 1, cache));
+    }
+  });
+  return rowGeometry(geometries, metricsAt(measurer, style, 1, cache), spaces);
+}
+
+/** The typographic ascender and descender of the default math face, in ems. */
+const MATH_FACE_TYPO_ASCENT = 1593 / 2048;
+const MATH_FACE_TYPO_DESCENT = 455 / 2048;
+
+/**
+ * One part of a stacked structure, with its text boxes trimmed to the typographic ascender
+ * and descender of the math face, without the line gap that its font box adds above. Text in
+ * another face and other structures keep their boxes. Glyphs keep their baselines.
+ */
+function stackPart(node: EquationGeometry): EquationGeometry {
+  if (node.kind === 'text') {
+    // The requested family, not the drawn face: a substitute keeps the trim, which only shrinks.
+    if (node.runStyle?.fontFamily?.trim().toLowerCase() !== EQUATION_FONT_FAMILY.toLowerCase())
+      return node;
+    const ascent = Math.min(node.baseline, MATH_FACE_TYPO_ASCENT * node.fontSizePt);
+    const descent = Math.min(
+      node.box.height - node.baseline,
+      MATH_FACE_TYPO_DESCENT * node.fontSizePt
+    );
+    return Object.freeze({
+      ...node,
+      box: box(node.box.x, node.box.y, node.box.width, ascent + descent),
+      baseline: ascent,
+    });
+  }
+  if (node.kind !== 'row' || node.items.length === 0) return node;
+  const items = node.items.map(stackPart);
+  const baseline = Math.max(...items.map((item) => item.baseline));
+  const descent = Math.max(...items.map((item) => item.box.height - item.baseline));
+  return Object.freeze({
+    ...node,
+    items: Object.freeze(items.map((item) => shifted(item, item.box.x, baseline - item.baseline))),
+    box: box(node.box.x, node.box.y, node.box.width, baseline + descent),
+    baseline,
+  });
+}
+
+/**
+ * A fraction in a display equation. Display style is not modelled yet: its parts take the
+ * inline part size, and the fraction keeps the earlier padded placement, with full font boxes
+ * for the parts and fixed gaps around the rule. The inline typographic trim would make a
+ * display fraction shorter still, so it waits for display style.
+ */
+function displayFraction(
+  numerator: EquationGeometry,
+  denominator: EquationGeometry,
+  em: number
+): EquationFractionGeometry {
+  const pad = Math.max(0.75, em * 0.08);
+  const gap = Math.max(0.75, em * 0.08);
+  const thickness = Math.max(0.6, em * 0.055);
+  const width = Math.max(numerator.box.width, denominator.box.width) + pad * 2;
+  const barY = numerator.box.height + gap;
+  const denominatorY = barY + thickness + gap;
+  const height = denominatorY + denominator.box.height;
+  return Object.freeze({
+    kind: 'fraction',
+    numerator: shifted(numerator, (width - numerator.box.width) / 2, 0),
+    denominator: shifted(denominator, (width - denominator.box.width) / 2, denominatorY),
+    bar: box(pad / 2, barY, width - pad, thickness),
+    box: box(0, 0, width, height),
+    baseline: Math.min(height, barY + thickness / 2 + em * 0.22),
+  });
+}
+
 function layoutExpression(
   expression: EquationExpression,
   measurer: TextMeasurer,
@@ -269,109 +558,81 @@ function layoutExpression(
 ): EquationGeometry {
   switch (expression.kind) {
     case 'text': {
-      const authoredFamily = expression.format?.fontFamily;
-      const textFace = authoredFamily && authoredFamily.trim().toLowerCase() !== 'cambria math';
-      const digitParts =
-        textFace && !expression.format?.normalText && expression.format?.mathStyle !== 'p'
-          ? expression.value.match(/(?:[0-9]\p{M}*)+|[^0-9]+/gu)
-          : null;
-      if (digitParts && digitParts.length > 1) {
-        return rowGeometry(
-          digitParts.map((value) =>
-            layoutExpression({ ...expression, value }, measurer, style, scale, cache)
-          ),
-          metricsAt(measurer, style, scale, cache)
-        );
+      // Operator spacing applies only at the base size, not in scripts, limits, or fractions.
+      if (
+        scale === 1 &&
+        !expression.format?.normalText &&
+        equationTextHasOperators(expression.value)
+      ) {
+        return layoutArgument([expression], measurer, style, cache);
       }
-      const display = equationDisplayText(expression, authoredFamily ?? style.fontFamily);
-      const familyStyle =
-        authoredFamily && !display.mathematicalGlyphs
-          ? withFontFamily(style, authoredFamily)
-          : expression.format?.normalText
-            ? cache.textStyle
-            : style;
-      const formatKey = expression.format ?? expression;
-      const digits = Boolean(textFace && display.mathStyle && !display.mathematicalGlyphs);
-      let formats = cache.formats.get(formatKey);
-      let formatted = formats?.get(digits);
-      if (!formatted) {
-        const face = Object.freeze({
-          ...familyStyle,
-          fontSizePt:
-            expression.format?.fontSizePt ?? expression.fontSizePt ?? familyStyle.fontSizePt,
-          // Mathematical alphanumeric glyphs already carry their style in this
-          // regular face. Do not request a second italic or bold font program.
-          bold:
-            display.mathStyle === null
-              ? (expression.format?.bold ?? familyStyle.bold)
-              : !display.mathematicalGlyphs &&
-                (digits && expression.format?.bold !== undefined
-                  ? expression.format.bold
-                  : display.mathStyle === 'b' || display.mathStyle === 'bi'),
-          italic:
-            display.mathStyle === null || digits
-              ? (expression.format?.italic ??
-                (digits
-                  ? display.mathStyle === 'i' || display.mathStyle === 'bi'
-                  : expression.format?.normalText
-                    ? false
-                    : familyStyle.italic))
-              : !display.mathematicalGlyphs &&
-                (display.mathStyle === 'i' || display.mathStyle === 'bi'),
-        });
-        formatted = {
-          style: face,
-          cache: {
-            textStyle: cache.textStyle,
-            styles: new Map(),
-            metrics: new Map(),
-            formats: new WeakMap(),
-          },
-        };
-        if (!formats) {
-          formats = new Map();
-          cache.formats.set(formatKey, formats);
-        }
-        formats.set(digits, formatted);
-      }
-      return textGeometry('text', display.text, measurer, formatted.style, scale, formatted.cache);
+      return layoutText(expression, measurer, style, scale, cache);
     }
     case 'fallback':
       return textGeometry('fallback', expression.text || '…', measurer, style, scale, cache);
-    case 'row':
+    case 'row': {
+      if (scale === 1) return layoutArgument(expression.items, measurer, style, cache);
       return rowGeometry(
         expression.items.map((child) => layoutExpression(child, measurer, style, scale, cache)),
         metricsAt(measurer, style, scale, cache)
       );
+    }
     case 'fraction': {
       const resolved = scaledStyle(style, scale, cache);
-      const numerator = layoutExpression(
-        expression.numerator,
-        measurer,
-        style,
-        scale * SCRIPT_SCALE,
-        cache
+      if (cache.display) {
+        return displayFraction(
+          layoutExpression(expression.numerator, measurer, style, scriptScale(scale), cache),
+          layoutExpression(expression.denominator, measurer, style, scriptScale(scale), cache),
+          resolved.fontSizePt
+        );
+      }
+      const numerator = stackPart(
+        layoutExpression(expression.numerator, measurer, style, scriptScale(scale), cache)
       );
-      const denominator = layoutExpression(
-        expression.denominator,
-        measurer,
-        style,
-        scale * SCRIPT_SCALE,
-        cache
+      const denominator = stackPart(
+        layoutExpression(expression.denominator, measurer, style, scriptScale(scale), cache)
       );
-      const pad = Math.max(0.75, resolved.fontSizePt * 0.08);
-      const gap = Math.max(0.75, resolved.fontSizePt * 0.08);
-      const thickness = Math.max(0.6, resolved.fontSizePt * 0.055);
-      const width = Math.max(numerator.box.width, denominator.box.width) + pad * 2;
-      const barY = numerator.box.height + gap;
-      const denominatorY = barY + thickness + gap;
-      const height = denominatorY + denominator.box.height;
-      const baseline = Math.min(height, barY + thickness / 2 + resolved.fontSizePt * 0.22);
+      // The rule is centred on the math axis. Each part sits at least a fixed shift from the
+      // baseline, and further when its ink would come closer to the rule than the minimum gap.
+      // The parts reach their typographic extents, and the rule spans the wider part.
+      const em = resolved.fontSizePt;
+      const axis = MATH_AXIS_HEIGHT * em;
+      const thickness = FRACTION_RULE_THICKNESS * em;
+      const numeratorShift = Math.max(
+        FRACTION_NUMERATOR_SHIFT_UP * em,
+        axis +
+          thickness / 2 +
+          FRACTION_NUMERATOR_GAP_MIN * em +
+          equationInk(numerator, measurer).descent
+      );
+      const denominatorShift = Math.max(
+        FRACTION_DENOMINATOR_SHIFT_DOWN * em,
+        FRACTION_DENOMINATOR_GAP_MIN * em +
+          thickness / 2 -
+          axis +
+          equationInk(denominator, measurer).ascent
+      );
+      const baseline = Math.max(numeratorShift + numerator.baseline, axis + thickness / 2);
+      const height =
+        baseline +
+        Math.max(
+          denominatorShift + denominator.box.height - denominator.baseline,
+          thickness / 2 - axis
+        );
+      const width = Math.max(numerator.box.width, denominator.box.width);
       return Object.freeze({
         kind: 'fraction',
-        numerator: shifted(numerator, (width - numerator.box.width) / 2, 0),
-        denominator: shifted(denominator, (width - denominator.box.width) / 2, denominatorY),
-        bar: box(pad / 2, barY, width - pad, thickness),
+        numerator: shifted(
+          numerator,
+          (width - numerator.box.width) / 2,
+          baseline - numeratorShift - numerator.baseline
+        ),
+        denominator: shifted(
+          denominator,
+          (width - denominator.box.width) / 2,
+          baseline + denominatorShift - denominator.baseline
+        ),
+        bar: box(0, baseline - axis - thickness / 2, width, thickness),
         box: box(0, 0, width, height),
         baseline,
       });
@@ -404,69 +665,106 @@ function layoutExpression(
       });
     }
     case 'bar': {
-      const resolved = scaledStyle(style, scale, cache);
       const body = layoutExpression(expression.body, measurer, style, scale, cache);
-      const thickness = Math.max(0.55, resolved.fontSizePt * 0.05);
-      const gap = Math.max(0.35, resolved.fontSizePt * 0.035);
-      const bodyY = expression.position === 'top' ? thickness + gap : 0;
-      const barY = expression.position === 'top' ? 0 : body.box.height + gap;
+      // The rule takes the structure size, not the size of the runs inside it.
+      const em = structureSizePt(expression, scale, cache);
+      const thickness = BAR_RULE_THICKNESS * em;
+      const gap = BAR_VERTICAL_GAP * em;
+      // The rule keeps its gap from the body's ink, not from its font box, and reserves
+      // one more rule thickness of space on its outer side. Offsets are from the body
+      // baseline, downward.
+      const ink = equationInk(body, measurer);
+      const barTop =
+        expression.position === 'top' ? -(ink.ascent + gap + thickness) : ink.descent + gap;
+      const top = Math.min(
+        -body.baseline,
+        expression.position === 'top' ? barTop - BAR_EXTRA_SPACE * em : -body.baseline
+      );
+      const bottom = Math.max(
+        body.box.height - body.baseline,
+        expression.position === 'top' ? 0 : barTop + thickness + BAR_EXTRA_SPACE * em
+      );
       return Object.freeze({
         kind: 'bar',
-        body: shifted(body, 0, bodyY),
-        bar: box(0, barY, body.box.width, thickness),
-        box: box(0, 0, body.box.width, body.box.height + gap + thickness),
-        baseline: body.baseline + bodyY,
+        body: shifted(body, 0, -body.baseline - top),
+        bar: box(0, barTop - top, body.box.width, thickness),
+        box: box(0, 0, body.box.width, bottom - top),
+        baseline: -top,
       });
     }
     case 'script': {
-      const resolved = scaledStyle(style, scale, cache);
       const base = layoutExpression(expression.base, measurer, style, scale, cache);
       const subscript = expression.subscript
-        ? layoutExpression(expression.subscript, measurer, style, scale * SCRIPT_SCALE, cache)
+        ? layoutExpression(expression.subscript, measurer, style, scriptScale(scale), cache)
         : undefined;
       const superscript = expression.superscript
-        ? layoutExpression(expression.superscript, measurer, style, scale * SCRIPT_SCALE, cache)
+        ? layoutExpression(expression.superscript, measurer, style, scriptScale(scale), cache)
         : undefined;
-      const gap = Math.max(0.4, resolved.fontSizePt * 0.04);
-      const scriptX = base.box.width + gap;
-      const superscriptY = 0;
-      const baseY = superscript ? Math.max(0, superscript.box.height - base.baseline * 0.45) : 0;
-      const baseline = baseY + base.baseline;
-      const subscriptY = baseline + resolved.fontSizePt * 0.08;
-      const width =
-        scriptX + Math.max(subscript?.box.width ?? 0, superscript?.box.width ?? 0, -gap);
-      const height = Math.max(
-        baseY + base.box.height,
-        superscript ? superscriptY + superscript.box.height : 0,
-        subscript ? subscriptY + subscript.box.height : 0
-      );
-      return Object.freeze({
-        kind: 'script',
-        base: shifted(base, 0, baseY),
-        ...(subscript ? { subscript: shifted(subscript, scriptX, subscriptY) } : {}),
-        ...(superscript ? { superscript: shifted(superscript, scriptX, superscriptY) } : {}),
-        box: box(0, 0, width, height),
-        baseline,
-      });
+      // Offsets take the structure size, not the size of the runs inside it.
+      const em = structureSizePt(expression, scale, cache);
+      return attachScripts(base, subscript, superscript, em, measurer);
     }
     case 'nary': {
       const resolved = scaledStyle(style, scale, cache);
+      const besideLimits = naryLimitsBeside(expression, cache.display);
+      // Display style is not modelled, so only a display operator draws enlarged.
       const operator = textGeometry(
         'text',
         expression.operator,
         measurer,
         style,
-        scale * NARY_OPERATOR_SCALE,
+        cache.display ? scale * NARY_OPERATOR_SCALE : scale,
         cache
       );
       const body = layoutExpression(expression.body, measurer, style, scale, cache);
       const lower = expression.lowerLimit
-        ? layoutExpression(expression.lowerLimit, measurer, style, scale * SCRIPT_SCALE, cache)
+        ? layoutExpression(expression.lowerLimit, measurer, style, scriptScale(scale), cache)
         : undefined;
       const upper = expression.upperLimit
-        ? layoutExpression(expression.upperLimit, measurer, style, scale * SCRIPT_SCALE, cache)
+        ? layoutExpression(expression.upperLimit, measurer, style, scriptScale(scale), cache)
         : undefined;
       const gap = Math.max(0.5, resolved.fontSizePt * 0.05);
+      if (besideLimits) {
+        // The limits attach to the operator exactly as a subscript and a superscript do.
+        const em = structureSizePt(expression, scale, cache);
+        const scripted = attachScripts(operator, lower, upper, em, measurer);
+        const bodyX = scripted.box.width + gap;
+        const top = Math.max(scripted.baseline, body.baseline);
+        const bottom = Math.max(
+          scripted.box.height - scripted.baseline,
+          body.box.height - body.baseline
+        );
+        const y = top - scripted.baseline;
+        return Object.freeze({
+          kind: 'nary',
+          operator: shifted(
+            scripted.base as EquationTextGeometry,
+            scripted.base.box.x,
+            scripted.base.box.y + y
+          ),
+          body: shifted(body, bodyX, top - body.baseline),
+          ...(scripted.subscript
+            ? {
+                lowerLimit: shifted(
+                  scripted.subscript,
+                  scripted.subscript.box.x,
+                  scripted.subscript.box.y + y
+                ),
+              }
+            : {}),
+          ...(scripted.superscript
+            ? {
+                upperLimit: shifted(
+                  scripted.superscript,
+                  scripted.superscript.box.x,
+                  scripted.superscript.box.y + y
+                ),
+              }
+            : {}),
+          box: box(0, 0, bodyX + body.box.width, top + bottom),
+          baseline: top,
+        });
+      }
       const operatorWidth = Math.max(
         operator.box.width,
         lower?.box.width ?? 0,
@@ -506,15 +804,37 @@ function layoutExpression(
   }
 }
 
+/** The style of the text around the equation, which normal text without a run font uses. */
+function surroundingTextStyle(style: ResolvedRunStyle, input: EquationLayoutInput) {
+  const family = input.textFontFamily;
+  // Layout pieces always set `textFontFamily`. Only direct `layoutEquation` and
+  // `createEquationLayouter` callers omit it; they get the face the math style came from.
+  if (family === undefined) return equationTextStyles.get(style) ?? style;
+  return family === null
+    ? Object.freeze({ ...style, fontFamily: null })
+    : withFontFamily(style, family);
+}
+
 /** Compose one bounded OMML projection into paint-ready point geometry. */
 export function layoutEquation(
   projection: OmmlEquationProjection,
   measurer: TextMeasurer,
   style: ResolvedRunStyle
 ): EquationSpanRecord {
+  return layoutEquationWith(projection, measurer, style, {});
+}
+
+function layoutEquationWith(
+  projection: OmmlEquationProjection,
+  measurer: TextMeasurer,
+  style: ResolvedRunStyle,
+  input: EquationLayoutInput
+): EquationSpanRecord {
   const mathStyle = equationRunStyle(style);
   const cache: EquationLayoutCache = {
-    textStyle: equationTextStyles.get(style) ?? style,
+    textStyle: surroundingTextStyle(style, input),
+    surroundingSizePt: input.surroundingSizePt ?? style.fontSizePt,
+    display: input.display === true,
     styles: new Map(),
     metrics: new Map(),
     formats: new WeakMap(),
@@ -531,10 +851,19 @@ export function layoutEquation(
 export function createEquationLayouter(
   measurer: TextMeasurer,
   producer?: string
-): (projection: OmmlEquationProjection, style: ResolvedRunStyle) => EquationSpanRecord {
+): (
+  projection: OmmlEquationProjection,
+  style: ResolvedRunStyle,
+  input?: EquationLayoutInput
+) => EquationSpanRecord {
   const layouts = sharedEquationLayouts(measurer, producer);
-  return (projection, style) => {
-    const token = geometryStyleToken(style);
+  return (projection, style, input = {}) => {
+    const token = [
+      geometryStyleToken(style),
+      input.display ? 'display' : 'inline',
+      input.surroundingSizePt ?? '',
+      input.textFontFamily === undefined ? '' : `${input.textFontFamily}`,
+    ].join('|');
     let styles = layouts.projections.get(projection);
     const cached = styles?.get(token);
     if (cached && styles) {
@@ -542,7 +871,7 @@ export function createEquationLayouter(
       styles.set(token, cached);
       return cached;
     }
-    const layout = layoutEquation(projection, measurer, style);
+    const layout = layoutEquationWith(projection, measurer, style, input);
     if (!styles) {
       styles = new Map();
       layouts.projections.set(projection, styles);

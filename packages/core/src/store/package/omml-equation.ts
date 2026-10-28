@@ -5,6 +5,7 @@
 
 import { XML_NAMESPACE_URI } from './ooxml-shared.ts';
 import {
+  equationControlFontSizePt,
   equationRunFormat,
   equationMathChild as namedChild,
   equationMathChildren as namedChildren,
@@ -39,6 +40,9 @@ export const DEFAULT_OMML_LIMITS = Object.freeze({
   maxTextLength: 512,
 });
 
+/** The operator of an `m:nary` that names no `m:chr`. */
+const DEFAULT_NARY_OPERATOR = '\u222b';
+
 /** Shared work limits for untrusted OMML and linear-math input. */
 export interface OmmlLimits {
   readonly maxDepth?: number;
@@ -58,6 +62,16 @@ export interface OmmlLimits {
 export interface EquationControlSource {
   /** The structure carries non-default `m:ctrlPr` properties, so compact replacement refuses it. */
   readonly controlProperties?: true;
+  /**
+   * Font size of the structure, in points. The source is the `w:sz` value of the run
+   * properties in the structure's `m:ctrlPr`, which counts half-points.
+   *
+   * Layout sizes script offsets and bar strokes and gaps from this size, not from the size of
+   * the runs inside the structure. When it is not set, those use the size of the text around
+   * the equation. Set whether or not the control properties are default. Fractions, radicals, and
+   * n-ary operators with limits below and above do not use it yet.
+   */
+  readonly controlFontSizePt?: number;
 }
 
 export type EquationExpression =
@@ -65,10 +79,31 @@ export type EquationExpression =
   | {
       readonly kind: 'text';
       readonly value: string;
-      /** Size inherited from uniform default properties that compact replacement preserves. */
+      /**
+       * Authored font size of the run, in points. The source is the `w:sz` value of the
+       * run properties (`w:rPr`), which counts half-points.
+       *
+       * Set only when every run of the equation holds the same default math formatting: the
+       * Cambria Math font, italic, one size, and at most a language. Such runs have no
+       * `format`, so compact replacement stays available and writes the same `w:rPr` back.
+       * Otherwise the size is in `format.fontSizePt`. When neither field is set, the text
+       * takes the size of the surrounding text. To read the size of any text expression,
+       * use `format?.fontSizePt ?? fontSizePt`.
+       */
       readonly fontSizePt?: number;
+      /**
+       * Source formatting of the run. Set when the run has its own supported formatting and
+       * the equation does not use the uniform default math formatting. Compact replacement
+       * refuses an equation that has a text expression with a `format`, because it cannot
+       * write that formatting back.
+       */
       readonly format?: {
         readonly fontFamily?: string;
+        /**
+         * Authored font size of the run, in points. The source is the `w:sz` value of the
+         * run properties (`w:rPr`), which counts half-points. Set when the run has a
+         * `format` and a `w:sz`. The top-level `fontSizePt` is not set in that case.
+         */
         readonly fontSizePt?: number;
         readonly bold?: boolean;
         readonly italic?: boolean;
@@ -100,10 +135,18 @@ export type EquationExpression =
     } & EquationControlSource)
   | ({
       readonly kind: 'nary';
+      /** The operator character from `m:chr`, or `∫` when the source names none. */
       readonly operator: string;
       readonly body: EquationExpression;
       readonly lowerLimit?: EquationExpression;
       readonly upperLimit?: EquationExpression;
+      /**
+       * Where the limits sit, from `m:limLoc`: `undOvr` below and above the operator, `subSup`
+       * to its right as a subscript and superscript. Not set when the source names none.
+       * Inline equations place the limits to the right either way. An `m:oMath` alone in its
+       * paragraph is a display equation, as an `m:oMathPara` is, and follows this location.
+       */
+      readonly limitLocation?: 'undOvr' | 'subSup';
     } & EquationControlSource)
   | { readonly kind: 'fallback'; readonly text: string };
 
@@ -225,12 +268,28 @@ function fallbackOf(node: OoxmlNode, state: ProjectionState, depth: number): Equ
   return Object.freeze({ kind: 'fallback', text: text || (state.truncated ? '…' : '') });
 }
 
+/** The `m:val` of one `m:naryPr` property of an `m:nary`, when present. */
+function naryProperty(node: OoxmlGenericElementNode, name: string): string | undefined {
+  const property = namedChild(node, 'naryPr');
+  return (property ? namedChild(property, name) : null)?.attributes.find(
+    (attribute) =>
+      attribute.namespaceUri === OFFICE_MATH_NAMESPACE_URI && attribute.localName === 'val'
+  )?.value;
+}
+
+/** The operator an `m:nary` draws. Without `m:chr` it stands for an integral. */
+function naryOperator(node: OoxmlGenericElementNode): string {
+  return naryProperty(node, 'chr') ?? DEFAULT_NARY_OPERATOR;
+}
+
 function collectFallbackText(node: OoxmlNode, state: ProjectionState, depth: number): void {
   if (!enterProjectionNode(state, depth)) return;
   if (node.kind === 'textValue') {
     appendProjectionText(state, node.value);
     return;
   }
+  // The operator of an n-ary structure is a property, not text, but it is drawn.
+  if (isMathElement(node, 'nary')) appendProjectionText(state, naryOperator(node));
   for (const child of childrenOf(node)) {
     collectFallbackText(child, state, depth + 1);
     if (state.truncated && state.text.length >= state.limits.maxTextLength) return;
@@ -256,9 +315,15 @@ function controlSource(
   propertyName: string,
   state: ProjectionState
 ): EquationControlSource {
-  return !state.defaultControls && equationStructureHasControlProperties(node, propertyName)
-    ? { controlProperties: true }
-    : {};
+  const property = namedChild(node, propertyName);
+  const control = property ? namedChild(property, 'ctrlPr') : null;
+  const controlFontSizePt = control ? equationControlFontSizePt(control) : undefined;
+  return {
+    ...(!state.defaultControls && equationStructureHasControlProperties(node, propertyName)
+      ? { controlProperties: true as const }
+      : {}),
+    ...(controlFontSizePt === undefined ? {} : { controlFontSizePt }),
+  };
 }
 
 function projectStructured(
@@ -327,16 +392,10 @@ function projectStructured(
     if (!body) return null;
     const lower = namedChild(node, 'sub');
     const upper = namedChild(node, 'sup');
-    const property = namedChild(node, 'naryPr');
-    const operatorNode = property ? namedChild(property, 'chr') : null;
-    const operator =
-      operatorNode?.attributes.find(
-        (attribute) =>
-          attribute.namespaceUri === OFFICE_MATH_NAMESPACE_URI && attribute.localName === 'val'
-      )?.value ?? '∑';
+    const limitLocation = naryProperty(node, 'limLoc');
     return Object.freeze({
       kind: 'nary',
-      operator: appendProjectionText(state, operator),
+      operator: appendProjectionText(state, naryOperator(node)),
       body: projectContainer(body, state, depth + 1),
       ...(lower && childrenOf(lower).length > 0
         ? { lowerLimit: projectContainer(lower, state, depth + 1) }
@@ -344,6 +403,7 @@ function projectStructured(
       ...(upper && childrenOf(upper).length > 0
         ? { upperLimit: projectContainer(upper, state, depth + 1) }
         : {}),
+      ...(limitLocation === 'undOvr' || limitLocation === 'subSup' ? { limitLocation } : {}),
       ...controlSource(node, 'naryPr', state),
     });
   }

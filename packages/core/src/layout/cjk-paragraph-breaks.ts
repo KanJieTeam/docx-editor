@@ -79,18 +79,26 @@ export function protectedSeamAfter(
   );
 }
 
-export function cjkParagraphBreaks(
+/** Select the East Asian analysis, rather than the ordinary run-spanning word cuts. */
+export function usesEastAsianParagraphBreaks(
   pieces: readonly FieldAwarePiece[],
   policy: CjkParagraphTypography
-): CjkParagraphBreaks | null {
-  if (
-    !policy.characterWrap &&
-    !pieces.some(
+): boolean {
+  return (
+    policy.characterWrap ||
+    pieces.some(
       (piece) =>
         /[\u1100-\u11ff\u2e80-\ud7ff\uf900-\uffef\u{20000}-\u{323af}]/u.test(piece.text) ||
         eastAsianLanguage(piece.props)
     )
-  ) {
+  );
+}
+
+export function cjkParagraphBreaks(
+  pieces: readonly FieldAwarePiece[],
+  policy: CjkParagraphTypography
+): CjkParagraphBreaks | null {
+  if (!usesEastAsianParagraphBreaks(pieces, policy)) {
     // A run that opens with a dash needs the text before it; any other paragraph without
     // East Asian text has no paragraph-wide analysis.
     const cuts = paragraphWordCuts(pieces);
@@ -131,6 +139,9 @@ export function cjkParagraphBreaks(
     eastAsianContext.push(context || isCjk(cluster.text.codePointAt(0)!));
   }
   const languages = pieces.map((piece) => eastAsianLanguage(piece.props));
+  // The paragraph's last cluster before trailing whitespace.
+  let lastVisible = clusters.length - 1;
+  while (lastVisible > 0 && /^\s+$/u.test(clusters[lastVisible]!.text)) lastVisible--;
   const tables = new Map<string, ReturnType<typeof kinsokuCharacters>>();
   const tableFor = (language: string) => {
     let table = tables.get(language);
@@ -190,10 +201,19 @@ export function cjkParagraphBreaks(
           ? detectedLanguage
           : undefined);
       if (language || previousLanguage) {
+        // Korean overflow punctuation wraps by itself. At the paragraph end only 。 and 、
+        // do; any other final mark stays with its character and hangs.
+        const koreanOverflowMark =
+          language !== undefined &&
+          /^ko(?:-|$)/.test(language) &&
+          (policy.hangingPunctuation ?? policy.overflowPunctuation) &&
+          /^[\p{Pe}\p{Pf}\p{Po}]$/u.test(right.text) &&
+          (index < lastVisible || '。、'.includes(right.text));
         forbidden =
-          (language
-            ? tableFor(language).before.includes(String.fromCodePoint(after))
-            : CJK_NO_BREAK_BEFORE.has(after)) ||
+          (!koreanOverflowMark &&
+            (language
+              ? tableFor(language).before.includes(String.fromCodePoint(after))
+              : CJK_NO_BREAK_BEFORE.has(after))) ||
           (previousLanguage
             ? tableFor(previousLanguage).after.includes(String.fromCodePoint(before))
             : CJK_NO_BREAK_AFTER.has(before));

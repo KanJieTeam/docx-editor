@@ -1,3 +1,4 @@
+import { copyLineHangingPunctuation } from './line-hanging-punctuation.ts';
 import { automaticTextSpacingBefore } from './cjk-automatic-spacing.ts';
 // The broken-but-unplaced line: the record breakParagraph accumulates and pagination
 // budgets, before placement publishes a LineRecord from it. Extracted from paragraph-flow
@@ -48,6 +49,11 @@ export interface PendingLine {
    * overflow such as hanging punctuation.
    */
   spaceShrink?: true;
+  /**
+   * The flow admitted a word on this line by borrowing inter-word space, so its natural
+   * content can run past its float passage while the compressed line stays inside it.
+   */
+  borrowedSpace?: true;
   /** Model ranges on this line covering deleted content; see {@link LineRecord.deletedRanges}. */
   deletedRanges?: readonly ModelRange[];
   /** Vertical gap inserted before this line to clear a drawing exclusion band. */
@@ -83,8 +89,9 @@ export interface PendingLine {
    */
   wrapSegment?: WrapSegment;
   /**
-   * The float passages a line that steps over a float holds content in, left to right, in
-   * paragraph-local coordinates. The first starts where the line's content begins.
+   * The float passages a line that steps over a float holds content in, in the order its pen
+   * met them, in paragraph-local coordinates (mirrored when {@link wrapMirrored}). The first
+   * starts where the line's content begins.
    *
    * Each part of such a line aligns INSIDE its own passage: centred text is centred beside the
    * float on each side, and right-aligned text ends at each passage's right edge. Aligning the
@@ -92,6 +99,12 @@ export interface PendingLine {
    * one passage holds whole, which {@link wrapSegment} describes.
    */
   wrapPassages?: readonly { readonly start: number; readonly end: number }[];
+  /**
+   * The line broke in x mirrored about its paragraph's measure, as a right-to-left line does
+   * beside a float (`wrap-break-space.ts`): it fills the rightmost passage first. Its spans,
+   * {@link wrapSegment} and {@link wrapPassages} are then in that mirrored x, in break order.
+   */
+  wrapMirrored?: true;
   /** Tracked anchored-drawing attributions on this line; see {@link LineRecord.anchorRevisions}. */
   anchorRevisions?: readonly RevisionAttribution[];
   /** Revisions a resolved view answered on this line; see {@link LineRecord.changeSites}. */
@@ -288,6 +301,7 @@ const SPAN_DECORATIONS: Record<Exclude<keyof StyleSpanRecord, 'range' | 'text' |
   caretEdges: true,
   tabLeader: true,
   tabLeaderAdvancePt: true,
+  tabAlignment: true,
   link: true,
   wrapAdvanceBefore: true,
   revisions: true,
@@ -443,43 +457,49 @@ export function pendingLineFlowExtentAtPlacement(
  * quietly corrupt every subsequent reuse.
  */
 export function frozenLine(line: PendingLine): PendingLine {
-  return Object.freeze({
-    spans: line.spans.map((span) =>
-      Object.freeze({ ...span, box: Object.freeze({ ...span.box }) })
-    ),
-    drawings: line.drawings.map((drawing) =>
-      Object.freeze({
-        ...drawing,
-        paintBounds: Object.freeze({ ...drawing.paintBounds }),
-        hitBounds: Object.freeze({ ...drawing.hitBounds }),
-      })
-    ),
-    start: line.start,
-    end: line.end,
-    width: line.width,
-    height: line.height,
-    baseline: line.baseline,
-    leading: line.leading,
-    trailingSpacing: line.trailingSpacing,
-    ...(line.pageBreakAfter ? { pageBreakAfter: true } : {}),
-    ...(line.columnBreakAfter ? { columnBreakAfter: true } : {}),
-    ...(line.manualBreakAfter ? { manualBreakAfter: true } : {}),
-    ...(line.spaceShrink ? { spaceShrink: true } : {}),
-    ...(line.deletedRanges ? { deletedRanges: Object.freeze(line.deletedRanges) } : {}),
-    ...(line.exclusionSkipBefore ? { exclusionSkipBefore: line.exclusionSkipBefore } : {}),
-    ...(line.breakClearance ? { breakClearance: true } : {}),
-    ...(line.ownBandClearance ? { ownBandClearance: true } : {}),
-    ...(line.anchorClearanceBefore !== undefined
-      ? { anchorClearanceBefore: line.anchorClearanceBefore }
-      : {}),
-    ...(line.firstLineOffset ? { firstLineOffset: line.firstLineOffset } : {}),
-    ...(line.wrapSegment ? { wrapSegment: Object.freeze({ ...line.wrapSegment }) } : {}),
-    ...(line.wrapPassages
-      ? { wrapPassages: Object.freeze(line.wrapPassages.map((passage) => Object.freeze(passage))) }
-      : {}),
-    ...(line.anchorRevisions ? { anchorRevisions: Object.freeze(line.anchorRevisions) } : {}),
-    ...(line.changeSites ? { changeSites: Object.freeze(line.changeSites) } : {}),
-  }) as PendingLine;
+  return copyLineHangingPunctuation(
+    line,
+    Object.freeze({
+      spans: line.spans.map((span) =>
+        Object.freeze({ ...span, box: Object.freeze({ ...span.box }) })
+      ),
+      drawings: line.drawings.map((drawing) =>
+        Object.freeze({
+          ...drawing,
+          paintBounds: Object.freeze({ ...drawing.paintBounds }),
+          hitBounds: Object.freeze({ ...drawing.hitBounds }),
+        })
+      ),
+      start: line.start,
+      end: line.end,
+      width: line.width,
+      height: line.height,
+      baseline: line.baseline,
+      leading: line.leading,
+      trailingSpacing: line.trailingSpacing,
+      ...(line.pageBreakAfter ? { pageBreakAfter: true } : {}),
+      ...(line.columnBreakAfter ? { columnBreakAfter: true } : {}),
+      ...(line.manualBreakAfter ? { manualBreakAfter: true } : {}),
+      ...(line.spaceShrink ? { spaceShrink: true } : {}),
+      ...(line.deletedRanges ? { deletedRanges: Object.freeze(line.deletedRanges) } : {}),
+      ...(line.exclusionSkipBefore ? { exclusionSkipBefore: line.exclusionSkipBefore } : {}),
+      ...(line.breakClearance ? { breakClearance: true } : {}),
+      ...(line.ownBandClearance ? { ownBandClearance: true } : {}),
+      ...(line.anchorClearanceBefore !== undefined
+        ? { anchorClearanceBefore: line.anchorClearanceBefore }
+        : {}),
+      ...(line.firstLineOffset ? { firstLineOffset: line.firstLineOffset } : {}),
+      ...(line.wrapSegment ? { wrapSegment: Object.freeze({ ...line.wrapSegment }) } : {}),
+      ...(line.wrapPassages
+        ? {
+            wrapPassages: Object.freeze(line.wrapPassages.map((passage) => Object.freeze(passage))),
+          }
+        : {}),
+      ...(line.wrapMirrored ? { wrapMirrored: true } : {}),
+      ...(line.anchorRevisions ? { anchorRevisions: Object.freeze(line.anchorRevisions) } : {}),
+      ...(line.changeSites ? { changeSites: Object.freeze(line.changeSites) } : {}),
+    }) as PendingLine
+  );
 }
 
 /**

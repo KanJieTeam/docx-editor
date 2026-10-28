@@ -1,3 +1,4 @@
+import { paragraphFinalAt, rememberHangingPunctuation } from './paragraph-hanging-punctuation.ts';
 import { appendUnsupportedContent } from './unsupported-content-flow.ts';
 import { besideFloatWidth } from './legacy-inline-beside-float.ts';
 import { continuationPiecesWithRules } from './paragraph-continuation-pieces.ts';
@@ -7,13 +8,13 @@ import { growRunBorderLineMetrics, textBandHeightWithBorders } from './run-borde
 import {
   clipLineDrawingsAtTop,
   growPendingLineDrawingExtent,
-  lineContentEdges,
   lineHoldsContent,
   markPendingLineWrapAdvances,
   placeLeadingIgnoredBreaks,
   admittedToNarrowPassage,
 } from './pending-line.ts';
 import { spaceShrinkWordTail } from './space-shrink-word-tail.ts';
+import { graphemeContinuationWidth } from './grapheme-continuation-width.ts';
 import { wordFollowsOnlyTabs } from './leading-tab-word.ts';
 import { growScriptLineMetrics } from './paragraph-mark-metrics.ts';
 import { spacedLine } from './positioned-run-spacing.ts';
@@ -22,6 +23,7 @@ import { paragraphSpanMetadata } from './paragraph-span-metadata.ts';
 import {
   endsAtHyphenBreak,
   fitsWithSpaceShrink,
+  createShrinkProbe,
   opensWithHangingSpace,
   lineEndAt,
 } from './paragraph-space-shrink.ts';
@@ -34,8 +36,8 @@ export {
   type Alignment,
 } from './paragraph-alignment.ts';
 import { bidiPieces, paragraphIsRtl } from './rtl-paragraph.ts';
-import { lineWrapPassages } from './line-wrap-passages.ts';
-
+import { recordLineWrapPassages } from './line-wrap-passages.ts';
+import { wrapBreakSpace } from './wrap-break-space.ts';
 import { PAGE_BREAK_CHAR, type OoxmlNode, type OoxmlProperty } from '@docx-editor.dev/core/store';
 import {
   propertiesOfRunContainer as propertiesOf,
@@ -65,7 +67,7 @@ import {
 import {
   EMPTY_TAB_STOPS,
   tabAdvanceWidth,
-  TAB_LEADER_GLYPH,
+  tabStopSpanFields,
   type ResolvedTabStops,
 } from './paragraph-tabs.ts';
 import { SINGLE_LINE_SPACING } from './paragraph-style.ts';
@@ -114,15 +116,11 @@ import { carryWordAtOptionalHyphens } from './optional-hyphen-break.ts';
 import { measuredWidth, styleCutAtHyphen } from './optional-hyphen-joining.ts';
 import { collectLineChangeSites } from './paragraph-change-sites.ts';
 import { rebreakForEarlierOwnBands } from './top-and-bottom-earlier-lines.ts';
-
 // Ignore subpixel rounding: a tab that ends exactly at the margin must not wrap.
 const OVERFLOW_TOLERANCE_PT = 0.001;
-
 import type { ParagraphFlowOptions } from './paragraph-flow-options.ts';
 export type { ParagraphFlowOptions } from './paragraph-flow-options.ts';
-
 export { propertiesOf };
-
 import {
   measureFollowingTabSegment,
   placeableContentSuffixes,
@@ -240,13 +238,15 @@ export function breakParagraph(
     measurer
   );
   const { preserveColonAdvances } = advances;
-  const pieces = compressCjkPieces(visiblePieces, typography, measurer, advances, available);
+  const pieces = compressCjkPieces(visiblePieces, typography, measurer, advances);
   const seamNaturalWidths = cjkSeamNaturalWidths(pieces, visiblePieces, measurer);
   const placeableSuffixes = placeableContentSuffixes(pieces, pageBreaksIgnored);
   const replayScope = cellTabReplayScope(flow?.cellAnchorScope, rawPieces);
   const endsParagraph = lineEndAt(pieces);
+  const paragraphFinal = paragraphFinalAt(pieces);
   const endSpacesAt = lineEndSpaces.paragraphEndSpacesOf(pieces, paragraphRtl, measurer);
   const cjkBreaks = cjkParagraphBreaks(pieces, typography);
+  const clusterTail = graphemeContinuationWidth(pieces, measurer, typography);
   const { opticalParagraph, opticalCompression, fitCjkOptically } = createParagraphCjkOpticalFitter(
     allPieces,
     pieces,
@@ -259,7 +259,7 @@ export function breakParagraph(
   );
   const layoutEquation = createEquationLayouter(measurer, flow?.equationCacheToken);
   const equationLayoutOf = (piece: FieldAwarePiece) =>
-    piece.equation ? layoutEquation(piece.equation, piece.style) : null;
+    piece.equation ? layoutEquation(piece.equation, piece.style, piece.equationLayout) : null;
   if (pieces.length === 0 && flow?.suppressEmptyPlaceholderLine) {
     return [];
   }
@@ -296,6 +296,13 @@ export function breakParagraph(
   // The right-to-left line's leading (right) indent, from the paragraph's full measure.
   const rtlLeadingIndent = Math.max(0, (flow?.marginExtent?.right ?? rightEdge) - rightEdge);
   const wrapRight = Math.min(contentRight, contentOriginX + rightEdge);
+  // A right-to-left line fills a float's passages from the right; see `wrap-break-space.ts`.
+  const breakSpace = wrapBreakSpace(paragraphRtl, contentOriginX + indentLeft, available, {
+    firstLineOffset,
+    contentLeft,
+    wrapRight,
+    largestTieLeft: flow?.largestWrapTieLeft === true,
+  });
   const lines: PendingLine[] = [];
   let previousLineCut = false; // The last line closed inside a word the oversized cut split.
   let alignedTabRight = 0;
@@ -414,7 +421,7 @@ export function breakParagraph(
           })
         : Object.freeze([]);
     const synthesized = anchorsWrap ? ownTopAndBottomZones() : emptyExclusionZones;
-    return Object.freeze([...pageZones, ...synthesizedWrap, ...synthesized]);
+    return breakSpace.zones(Object.freeze([...pageZones, ...synthesizedWrap, ...synthesized]));
   };
 
   // Whether the line being built takes the first-line slot: the first line, or the first
@@ -469,8 +476,8 @@ export function breakParagraph(
     top: currentLineTopY,
     spaceAbove: () => (lines.length === 0 ? (flow?.paragraphSpaceBefore ?? 0) : 0),
     zones: activeExclusionZones,
-    left: () => Math.max(contentLeft, lineOrigin()),
-    right: wrapRight,
+    left: () => Math.max(breakSpace.left, lineOrigin()),
+    right: breakSpace.right,
     clearOwnEmptyAnchor: flow?.anchorCellBox == null,
     emptyStyle: lineStartStyle,
     measurer,
@@ -507,12 +514,13 @@ export function breakParagraph(
   /** The floats a `w:br w:clear` on the line being built clears, chosen where the pen stands. */
   const breakClearOnLine = (clear: TextWrappingBreakClear) =>
     clear === 'all'
-      ? (zones: readonly ExclusionZone[]) => withOwnClearZones(zones, ownClearZones())
-      : breakClearSelector(clear, activeExclusionZones(), {
+      ? (zones: readonly ExclusionZone[]) =>
+          withOwnClearZones(zones, breakSpace.zones(ownClearZones()))
+      : breakClearSelector(breakSpace.clearSide(clear), activeExclusionZones(), {
           y: currentLineTopY() + (line.exclusionSkipBefore ?? 0),
           height: line.height,
-          left: Math.max(contentLeft, lineOrigin()),
-          right: wrapRight,
+          left: Math.max(breakSpace.left, lineOrigin()),
+          right: breakSpace.right,
           penX: lineOrigin() + line.width,
         });
 
@@ -523,12 +531,13 @@ export function breakParagraph(
   const exclusionProbe = createLineExclusionProbe({
     line: () => line,
     top: currentLineTopY,
-    left: contentLeft,
-    right: wrapRight,
+    left: breakSpace.left,
+    right: breakSpace.right,
     lineSpacing,
     initialMetrics: measurer.lineMetrics(lineStartStyle),
   });
   const availableIntervals = exclusionProbe.intervals;
+  const probeX = createShrinkProbe(activeExclusionZones, availableIntervals, pieces, paragraphRtl);
 
   /**
    * First usable x at or after the pen, with the first-line indent preserved.
@@ -587,23 +596,11 @@ export function breakParagraph(
   /** Room left ahead of the pen on the current line. */
   const remainingLineWidth = (): number => Math.max(0, lineAvailable() - line.width);
 
-  /** Record the float passages this line aligns inside; see {@link lineWrapPassages}. */
+  /** Record the float passages this line aligns inside; see {@link recordLineWrapPassages}. */
   const recordWrapSegment = (): void => {
-    // Placement mirrors an RTL line's spans, so its first span is not its left edge.
-    if (flow?.paragraphRtl) return;
     const zones = activeExclusionZones();
-    if (zones.length === 0) return;
-    const penEnd = lineOrigin() + line.width;
-    const edges = lineContentEdges(line.spans, line.drawings);
-    const contentStart = edges?.left ?? Math.max(contentLeft, lineOrigin());
-    const passages = lineWrapPassages(
-      availableIntervals(zones),
-      contentStart,
-      Math.min(penEnd, edges?.right ?? penEnd),
-      penEnd,
-      { start: contentLeft, end: wrapRight }
-    );
-    if (passages) Object.assign(line, passages);
+    if (zones.length > 0)
+      recordLineWrapPassages(line, availableIntervals(zones), lineOrigin(), breakSpace);
   };
 
   const tryAdvanceToNextPassage = (): boolean => {
@@ -947,7 +944,7 @@ export function breakParagraph(
     // where a float anchored earlier is; one anchored on this line moves with it, so clearing
     // it again on every region would leave the line no region to fit.
     const select = breakClearOnLine(restartClear);
-    const placed = new Set(flow?.pageExclusionZones ?? []);
+    const placed = new Set(breakSpace.zones(flow?.pageExclusionZones ?? []));
     applyBreakClearance((zones) =>
       select(zones).filter((zone) => zone.anchorParagraphId !== paragraphId || placed.has(zone))
     );
@@ -1273,19 +1270,11 @@ export function breakParagraph(
           props: piece.props,
           style: piece.style,
           box: { x: currentX, y: 0, width, height: metrics.height },
-          // The leader belongs to the stop that was REACHED, so it is resolved here with the
-          // destination rather than re-derived from the paragraph at paint time — and its
-          // glyph is MEASURED here too, in this run's own face, because paint has no
-          // measurer and a guessed advance cannot space the dots the way typing them would.
-          ...(destination.leader
-            ? {
-                tabLeader: destination.leader,
-                tabLeaderAdvancePt: measurer.measure(
-                  TAB_LEADER_GLYPH.get(destination.leader) ?? '.',
-                  piece.style
-                ),
-              }
-            : {}),
+          // The leader and alignment belong to the stop that was REACHED, so they are resolved
+          // here with the destination rather than re-derived from the paragraph at paint
+          // time — and the leader glyph is MEASURED here too, in this run's own face, because
+          // paint has no measurer and a guessed advance cannot space the dots as typing would.
+          ...tabStopSpanFields(destination, (glyph) => measurer.measure(glyph, piece.style)),
           ...(piece.link ? { link: piece.link } : {}),
           ...(layoutOwned && !piece.positionalTab ? { projected: true as const } : {}),
           ...(piece.noteNav ? { noteNav: piece.noteNav } : {}),
@@ -1322,8 +1311,7 @@ export function breakParagraph(
           ? faceStyle.fontSizePt
           : measurer.measure(displayText(measureSource, faceStyle), faceStyle);
       exclusionProbe.setWidth(width);
-      // A candidate may open a line only at a real break opportunity — the shared
-      // decision in `lineOpenDecisionAt`, which the anchor-line probe above consumes too.
+      // The anchor probe and placement use the same paragraph-wide break decision.
       const openDecision =
         piece.noteSeparator || line.spans.at(-1)?.noteSeparator
           ? 'opens'
@@ -1364,9 +1352,17 @@ export function breakParagraph(
           : undefined;
       let clippedWordEnd = clipWordEndAtPen();
       width = clippedWordEnd?.width ?? width;
+      const ends = paragraphFinal(pieceIndex, boundary);
       const hangsAtLineEnd = () =>
         (typography.hangingPunctuation ?? typography.overflowPunctuation) &&
-        canHangCjkPunctuation(candidate, piece, lineAvailable() - line.width, width, measurer);
+        canHangCjkPunctuation(
+          candidate,
+          piece,
+          lineAvailable() - line.width,
+          width,
+          measurer,
+          ends
+        );
       let hangs = hangsAtLineEnd();
       const applyOpticalFit =
         opticalCompression && sameParagraphAnchorStarts.length === 0
@@ -1418,7 +1414,9 @@ export function breakParagraph(
       }
       // A bearing shared across a line break is lost, so fit at the natural advance.
       const baseFitWidth = opticalFit ? width : (seamNaturalWidths.get(piece) ?? width);
-      const fitWidth = baseFitWidth + automaticGap() + (lineEndWhitespace ? 0 : endSpaces.room);
+      const followingCluster = clusterTail?.(pieceIndex, boundary) ?? 0;
+      const fitWidth =
+        baseFitWidth + followingCluster + automaticGap() + (lineEndWhitespace ? 0 : endSpaces.room);
       const overflows =
         !hangs &&
         // A space after a word that borrowed inter-word space hangs on its line.
@@ -1429,14 +1427,10 @@ export function breakParagraph(
       const borrowsSpace =
         overflows &&
         flow?.justifySpaceShrink === true &&
-        // A word split across source runs overflows on a later piece than the one
-        // that opened it, where the open decision is `continues`. The shrink test
-        // still applies to the whole word: `wordStartSpan` says where it began.
+        // A word split across runs still borrows from the span where the word began.
         (opensWord || (openDecision === 'continues' && wordStartSpan > 0)) &&
         // Text after a right, center or decimal tab is placed against its stop, not justified.
         alignedTabRight === 0 &&
-        !flow.pageExclusionZones?.length &&
-        sameParagraphAnchorStarts.length === 0 &&
         line.drawings.length === 0 &&
         (placeableSuffixes[pieceIndex]![boundary] === 1 || endsParagraph(pieceIndex, boundary)) &&
         fitsWithSpaceShrink(
@@ -1453,7 +1447,8 @@ export function breakParagraph(
             (boundary < piece.text.length
               ? !layoutOwned && (piece.text[boundary] === ' ' || endsAtHyphenBreak(candidate))
               : opensWithHangingSpace(pieces[pieceIndex + 1])),
-          followingWidth ?? 0
+          followingWidth ?? 0,
+          probeX(lineOrigin() + line.width)
         );
       // Leading tabs define the opening word's remaining measure. Chop the word
       // there instead of closing a line that contains only those tabs.
@@ -1512,9 +1507,10 @@ export function breakParagraph(
         // The pen of an empty line may already stand in a later passage: the test above is
         // the room ahead of it, not the line's capacity from its origin.
         if (!ensurePlacementWidth(fitWidth)) continue;
-      } else if (borrowsSpace && endsParagraph(pieceIndex, boundary)) {
+      } else if (borrowsSpace) {
+        line.borrowedSpace = true;
         // Only this admission may compress the paragraph's last line when it is aligned.
-        line.spaceShrink = true;
+        if (endsParagraph(pieceIndex, boundary)) line.spaceShrink = true;
       }
       // Overflow can close the previous line after the clearance check above.
       // Recheck the newly opened line before placing this candidate, including
@@ -1539,7 +1535,7 @@ export function breakParagraph(
         canChopWord &&
         !hangs &&
         (!holdsContent() || (!opensWord && wordOpensLine()) || chopsAfterLeadingTabs) &&
-        width + automaticGap() >
+        width + followingCluster + automaticGap() >
           remainingLineWidth() +
             OVERFLOW_TOLERANCE_PT +
             // The whole group is on the line once its last candidate arrives.
@@ -1590,6 +1586,7 @@ export function breakParagraph(
             previousLineCut = true;
           },
           overflowTolerancePt: OVERFLOW_TOLERANCE_PT,
+          followingWidth: followingCluster,
           keepWithPrevious: openDecision === 'forbidden',
           // Kinsoku vetoes measured cuts: 天。地。人。 must not chop onto a leading 。.
           cutAllowedAt: textBreaks
@@ -1632,6 +1629,7 @@ export function breakParagraph(
           layoutOwned && !piece.positionalTab,
           lineEndWhitespace
         );
+        rememberHangingPunctuation(line, span, piece, measurer, hangs, lineAvailable(), flow);
         if (opticalFit) appendOpticalCjkCandidate(line.spans, span, opticalFit);
         else lineEndSpaces.appendWordEnd(line.spans, span, clippedWordEnd);
         line.width += remainingWidth;

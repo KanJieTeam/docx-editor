@@ -4,6 +4,8 @@ Licensed under the EigenPal Pro Evaluation License 1.0 — see packages/pro/LICE
 Production use requires a commercial agreement: licensing@eigenpal.com
 */
 import { afterEach, expect, test } from 'bun:test';
+import { applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness';
+import { caretAt } from '@docx-editor.dev/core/layout';
 import { createDocxEditor, type DocxEditorInstance } from '@docx-editor.dev/core/editor';
 import {
   bodyStoryRoot,
@@ -153,6 +155,25 @@ for (const shared of [false, true]) {
       expect(text(alice, 0)).toMatch(
         shared ? /^Text\uFFFC(?:AB|BA)tail$/ : /^Text\uFFFC(?:AB|BA)$/
       );
+      select(bob, 1, 4, 5);
+      const localSelection = bob.surface!.state().selection;
+      const beforePresence = packageFingerprint(bob.surface!.session.currentPackage());
+      select(alice, 0, 5, 6);
+      applyAwarenessUpdate(
+        peers.bob.awareness,
+        encodeAwarenessUpdate(peers.alice.awareness, [peers.alice.ydoc.clientID]),
+        'reference-caret'
+      );
+      const remote = peers.bob.room.session.remoteSelections()[0];
+      expect(remote).toBeDefined();
+      if (!remote) throw Error('The reference-adjacent remote selection is missing');
+      expect(remote.anchor.offset).toBe(5);
+      expect(remote.head.offset).toBe(6);
+      expect(bob.surface!.state().selection).toEqual(localSelection);
+      expect(
+        caretAt(bob.surface!.layout(), { paragraphId: remote.head.nodeId, offset: 6 })
+      ).toEqual(caretAt(alice.surface!.layout(), alice.surface!.state().selection.head));
+      expect(packageFingerprint(bob.surface!.session.currentPackage())).toBe(beforePresence);
       expect(alice.exec({ type: 'undo' }).ok).toBe(true);
       sync();
       expect(text(bob, 0)).toBe('Text\uFFFCB' + (shared ? 'tail' : ''));

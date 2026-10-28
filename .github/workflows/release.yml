@@ -117,7 +117,9 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: '1.4.3'
+          bun-version-file: .bun-version
+          # Downloading the binary takes seconds; caching it only fills the cache.
+          no-cache: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -125,7 +127,7 @@ jobs:
           node-version: '24'
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bash scripts/ci/install-dependencies.sh
 
       - name: Run check
         run: ${{ matrix.command }}
@@ -149,7 +151,9 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: '1.4.3'
+          bun-version-file: .bun-version
+          # Downloading the binary takes seconds; caching it only fills the cache.
+          no-cache: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -157,7 +161,7 @@ jobs:
           node-version: '24'
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bash scripts/ci/install-dependencies.sh
 
       - name: Build packages (publish reuses the dist/)
         run: bun run build:packages
@@ -285,7 +289,9 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: '1.4.3'
+          bun-version-file: .bun-version
+          # Downloading the binary takes seconds; caching it only fills the cache.
+          no-cache: true
 
       # Node 24 ships with npm 11.x; Trusted Publishing requires >=11.5.1.
       - name: Setup Node.js
@@ -305,7 +311,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bash scripts/ci/install-dependencies.sh
 
       # `bun install` runs `prepare` (husky), pointing core.hooksPath at the
       # repo's pre-commit hook (typecheck + parity + api:check + lint-staged).
