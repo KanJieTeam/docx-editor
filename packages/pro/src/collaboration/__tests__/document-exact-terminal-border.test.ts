@@ -32,6 +32,8 @@ interface ReferenceCase {
   headerYields?: boolean;
   /** Three rows on a 54pt band: the middle row ends page 1 and the last row opens page 2. */
   pageEdge?: boolean;
+  /** No compatibility mode, a 40pt last row: the repeat stays and the row runs past the margin. */
+  overflows?: boolean;
 }
 const SETTINGS = 'application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml';
 const settingsPackage = {
@@ -53,7 +55,7 @@ function documentBody(options: ReferenceCase) {
   const rows = (options.pageEdge ? ['First', 'Middle', 'Terminal'] : ['First', 'Terminal'])
     .map(
       (text, index) =>
-        `<w:tr><w:trPr>${index === 0 && !options.pageEdge ? '<w:tblHeader/>' : ''}<w:trHeight w:val="${index === 1 && options.headerYields ? 620 : 397}" w:hRule="exact"/></w:trPr><w:tc><w:tcPr><w:vAlign w:val="${options.align}"/></w:tcPr>${paragraph(text)}</w:tc></w:tr>`
+        `<w:tr><w:trPr>${index === 0 && !options.pageEdge ? '<w:tblHeader/>' : ''}<w:trHeight w:val="${index === 1 && options.headerYields ? 620 : index === 1 && options.overflows ? 800 : 397}" w:hRule="exact"/></w:trPr><w:tc><w:tcPr><w:vAlign w:val="${options.align}"/></w:tcPr>${paragraph(text)}</w:tc></w:tr>`
     )
     .join('');
   const section = options.tightPage
@@ -86,6 +88,16 @@ function geometry(editor: Editor, options: ReferenceCase) {
     expect(last.cells[0]!.blocks[0]!.box.y - last.box.y).toBeCloseTo(8.85, 6);
     return { middle: middle!.box, rows: table.rows.map((r) => r.box), after: after?.box };
   }
+  if (options.overflows) {
+    // Page 2: the repeated 19.85pt header stays above the 40pt row, which ends past the 52pt band.
+    expect(tables[1]).toEqual([table]);
+    const [repeat, last] = table.rows;
+    expect(repeat!.isHeaderRepeat).toBe(true);
+    expect(last!.box.y - table.box.y).toBeCloseTo(19.85, 6);
+    expect(last!.box.height).toBeCloseTo(40 + options.width, 6);
+    expect(layout.pages[2]!.fragments).toContain(after!);
+    return { rows: table.rows.map((r) => r.box), after: after?.box };
+  }
   if (options.headerYields) {
     // Page 2: 19.85pt + 31pt fits the 52pt band, but 1.5pt more does not. The repeat is
     // omitted, so the terminal row starts the page and its rule fits there.
@@ -96,8 +108,10 @@ function geometry(editor: Editor, options: ReferenceCase) {
     expect(only.box.y).toBe(table.box.y);
     expect(only.box.height).toBeCloseTo(31 + options.width, 6);
     expect(only.cells[0]!.blocks[0]!.box.y - only.box.y).toBeCloseTo(19, 6);
-    expect(layout.pages[1]!.fragments).toContain(after!);
-    expect(after?.box.y).toBeCloseTo(table.box.y + table.box.height, 6);
+    // The table's last page left out the repeat, so the paragraph after it starts page 3
+    // although it fits below the row (`omittedRepeatEndsPage`).
+    expect(layout.pages[2]!.fragments[0]).toBe(after!);
+    expect(after?.box.y).toBe(0);
     return { box: table.box, rows: table.rows.map((r) => r.box), after: after?.box };
   }
   expect(table.box.height).toBeCloseTo(39.7 + options.width, 6);
@@ -131,8 +145,9 @@ for (const options of [
   { align: 'bottom', width: 1.5, tightPage: true },
   { align: 'bottom', width: 1.5, tightPage: true, headerYields: true },
   { align: 'bottom', width: 1.5, tightPage: true, pageEdge: true },
+  { align: 'center', width: 1.5, tightPage: true, overflows: true },
 ] satisfies ReferenceCase[])
-  test(`the ${options.align} terminal rule${options.headerYields ? ' that omits a repeated header' : options.pageEdge ? ' at a page edge' : ''} converges through edits and cold reopen`, async () => {
+  test(`the ${options.align} terminal rule${options.headerYields ? ' that omits a repeated header' : options.pageEdge ? ' at a page edge' : options.overflows ? ' below a kept repeat' : ''} converges through edits and cold reopen`, async () => {
     const source = documentBody(options);
     const peers = await harness.pair(
       options.headerYields ? zipDocument(source, settingsPackage) : zipDocument(source)

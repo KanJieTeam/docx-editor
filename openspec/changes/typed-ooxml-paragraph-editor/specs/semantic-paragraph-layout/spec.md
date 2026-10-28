@@ -650,6 +650,27 @@ Semantic layout SHALL place a supported terminal exact row's simple bottom rule 
 - **WHEN** a supported exact row other than the table's first row opens a later page fragment of its table
 - **THEN** the row grows above its authored height by the width its top rule there exceeds the inside rule it reserved
 
+#### Scenario: Repeated headers stay above a row that cannot split before mode 15
+
+- **WHEN** compatibility mode is 14 or earlier, or absent
+- **AND** a continuation page cannot hold the repeated header group and a row that cannot split, but a fresh page holds the row
+- **THEN** the repeated header group stays on that page
+- **AND** the row stays whole below it and runs past the bottom margin
+
+#### Scenario: A body row below a repeated header reserves the boundary rule
+
+- **WHEN** a complete body row of a collapsed table starts directly below its repeated header rows
+- **THEN** before compatibility mode 15, or with no mode, the row reserves the wider of its own top rule and the bottom rule of the last header row
+- **AND** in compatibility mode 15 and later, the row reserves the rule it shares with the row above it in the table
+- **AND** the shared border plan and the ordinary repeat path reserve the same band
+
+#### Scenario: Content after a table whose last page omits the repeat starts a page
+
+- **WHEN** compatibility mode is 15 or later
+- **AND** the last page of a table leaves out its repeated header rows
+- **THEN** the content after the table starts on the next page, also when it fits below the last row
+- **AND** a table whose last page keeps its repeated header rows leaves that content on the page
+
 #### Scenario: Cell text uses the authored bottom
 
 - **WHEN** a terminal exact-row cell has center or bottom alignment
