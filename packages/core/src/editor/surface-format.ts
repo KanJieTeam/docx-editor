@@ -33,6 +33,7 @@ import { formattableRanges } from '@docx-editor.dev/core/store';
 import { findNode } from '../store/package/ooxml-edit.ts';
 import { isEastAsianFontFamily } from '../store/package/default-font-faces.ts';
 import { formattingRangeBesideRestrictedControl } from '../store/store/direct-properties.ts';
+import { noteReferenceEndingAt } from '../store/store/note-typing-boundary.ts';
 import type {
   FormattingDisplayMode,
   FormattingRevisionAuthorFilter,
@@ -142,6 +143,9 @@ export function createSurfaceFormat(deps: SurfaceFormatDeps): FormatMethods {
       return { selection, caretSpan: true };
     }
     const paragraph = findNode(storyPart(), head.paragraphId);
+    if (paragraph?.kind === 'paragraph' && noteReferenceEndingAt(paragraph, head.offset)) {
+      return { selection, caretSpan: false };
+    }
     const run = paragraph
       ? formattingRangeBesideRestrictedControl(paragraph, head.offset)
       : undefined;

@@ -4,6 +4,7 @@ import {
   formattingRangeBesideRestrictedControl,
   formattingRunAt,
 } from '../store/store/direct-properties.ts';
+import { noteReferenceEndingAt } from '../store/store/note-typing-boundary.ts';
 // Formatting queries over the published layout (paginated-surface seam).
 //
 // This module owns what a toolbar reads and what a formatting command merges against:
@@ -218,6 +219,8 @@ export function authoredRunPropertiesAt(
   const paragraph = findNode(part, paragraphId);
   if (!paragraph || paragraph.kind !== 'paragraph') return [];
   // Beside a control that typing cannot enter, with no text run to copy, typing writes none.
+  if (noteReferenceEndingAt(paragraph, offset))
+    return directParagraphMarkProperties(part, paragraphId);
   if (formattingRangeBesideRestrictedControl(paragraph, offset) === null) return [];
   // Share the revision-filtered caret owner with complex-script lane selection.
   const owner = formattingRunAt(paragraph, offset, displayMode, authorFilter);

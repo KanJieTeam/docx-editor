@@ -26,6 +26,11 @@ import {
   textWithHyphens,
 } from './tree-op-inline-elements.ts';
 import { characterStyleElement, emptyParagraphRunProperties } from './mark-character-style-run.ts';
+import {
+  insertAfterNoteInRun,
+  noteReferenceEndingAt,
+  noteTypingProperties,
+} from './note-typing-boundary.ts';
 import { withFreshIds } from '../package/hf-lifecycle-shell.ts';
 import {
   isContentRevisionKind,
@@ -764,6 +769,20 @@ function applyInsertContent(
   }
 
   if (site.kind === 'atRunIndex') {
+    if (bias === 'left' && noteReferenceEndingAt(paragraph, offset)) {
+      const edited = insertAfterNoteInRun(
+        part,
+        paragraph,
+        site.run,
+        site.index,
+        nodes,
+        nextId,
+        deferOptions(options, control)
+      );
+      return edited
+        ? finishContentEdit(fromEdit(edited, effect), control, options)
+        : { ok: false, reason: 'tree-invariant' };
+    }
     // Text right before the index takes plain typing in place, rather than gaining a sibling
     // `w:t` per keystroke. Only that node: an earlier one would sit before the index.
     const prior = site.run.children[site.index - 1];
@@ -845,13 +864,15 @@ function applyInsertContent(
           ? findNode(part, leftSegment.runId)
           : null;
     const inheritedProperties =
-      leftRun && leftRun.kind === 'run'
-        ? fieldInsertionEndAt(paragraph, offset)
-          ? insertedRunProperties(nextId, leftRun)
-          : leftRun.children
-              .filter((child) => child.kind === 'runProperties')
-              .map((child) => withFreshIds(child, nextId))
-        : emptyParagraphRunProperties(paragraph, nextId);
+      bias === 'left' && noteReferenceEndingAt(paragraph, offset)
+        ? noteTypingProperties(paragraph, nextId)
+        : leftRun && leftRun.kind === 'run'
+          ? fieldInsertionEndAt(paragraph, offset)
+            ? insertedRunProperties(nextId, leftRun)
+            : leftRun.children
+                .filter((child) => child.kind === 'runProperties')
+                .map((child) => withFreshIds(child, nextId))
+          : emptyParagraphRunProperties(paragraph, nextId);
     inserted = fromEdit(
       insertChildren(
         part,

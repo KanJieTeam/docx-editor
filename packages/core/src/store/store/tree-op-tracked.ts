@@ -20,6 +20,7 @@
 //   - deleting inside an existing `w:del` does nothing, since it is already gone.
 
 import { textWithHyphens } from './tree-op-inline-elements.ts';
+import { noteReferenceEndingAt, noteTypingProperties } from './note-typing-boundary.ts';
 import {
   WML_NAMESPACE_URI,
   type OoxmlElement,
@@ -401,18 +402,25 @@ function applyTrackedInsertion(
     ? Math.max(aim, replacedEnd(paragraph, offsets, replaced!, revision.author, aim))
     : aim;
   const trailingDestination = trailingInsertionDestination(paragraph, offset);
-  const fieldDestination = fieldInsertionEndAt(paragraph, offset)
-    ? insertionDestination(paragraph, offset, null)
-    : null;
+  const afterNote = bias === 'left' && noteReferenceEndingAt(paragraph, offset);
+  const fieldDestination =
+    fieldInsertionEndAt(paragraph, offset) || afterNote
+      ? insertionDestination(paragraph, offset, null)
+      : null;
   const fieldSite = fieldDestination?.site;
   const fieldLeftRunId = fieldDestination
     ? [...offsets.segments].reverse().find((segment) => segment.end === offset)?.runId
     : undefined;
   const fieldLeftRun = fieldLeftRunId ? findNode(part, fieldLeftRunId) : null;
-  const fieldProperties = () => (fieldLeftRun ? insertedRunProperties(mint, fieldLeftRun) : []);
+  const fieldProperties = () =>
+    afterNote
+      ? noteTypingProperties(paragraph, mint)
+      : fieldLeftRun
+        ? insertedRunProperties(mint, fieldLeftRun)
+        : [];
   // Beside a control that typing cannot enter, the words take the text's formatting outside it.
   const besideProperties = (): readonly OoxmlNode[] | null => {
-    if (replacesThisEdit) return null;
+    if (replacesThisEdit || afterNote) return null;
     const run = formattingRunBesideRestrictedControl(paragraph, offset, offsets);
     return run === undefined ? null : run ? insertedRunProperties(mint, run) : [];
   };
@@ -573,7 +581,8 @@ function applyTrackedInsertion(
         }
         if (fieldSite?.kind === 'atRunIndex' && node.id === fieldSite.run.id) {
           const children = childrenOf(node);
-          const properties = () => insertedRunProperties(mint, node);
+          const properties = () =>
+            afterNote ? noteTypingProperties(paragraph, mint) : insertedRunProperties(mint, node);
           const head = runOf(mint, children.slice(0, fieldSite.index));
           const tail = runOf(mint, [
             ...children.filter(isRunProperties).map((child) => copy(mint, child)),

@@ -37,7 +37,11 @@ import {
   inlineContainersOf,
   isContentControlNode,
 } from './tree-op-nodes.ts';
-import { afterTrailingFieldEnd, directParentOf } from './tree-op-field-end-site.ts';
+import {
+  afterTrailingFieldEnd,
+  directParentOf,
+  insertionSiteAfterAtom,
+} from './tree-op-field-end-site.ts';
 import { continuedRevisionRun } from './same-revision.ts';
 import {
   besideRestrictedControl,
@@ -623,29 +627,8 @@ function rawInsertionSite(
     if (offset <= segment.start || offset >= segment.end) continue;
     return { kind: 'withinValue', segment };
   }
-  {
-    const endId = fieldInsertionEndAt(paragraph, offset);
-    const run = endId ? directParentOf(paragraph, endId) : null;
-    if (run?.kind === 'run' && (owner === null || containsNode(owner, run.id))) {
-      if (owner !== null || offsets.spanOf(run)?.end !== offset) {
-        return {
-          kind: 'atRunIndex',
-          run,
-          index: run.children.findIndex((node) => node.id === endId) + 1,
-        };
-      }
-      // Field chrome has no width. Do not append to the visible result before it.
-      // Escape wrappers that end here, and keep closing bookmarks before the new run.
-      const exited =
-        inlineContainersOf(paragraph, run.id)
-          .filter((node) => offsets.spanOf(node)?.end === offset)
-          .at(-1) ?? run;
-      const holder = directParentOf(paragraph, exited.id) ?? paragraph;
-      let index = holder.children.findIndex((node) => node.id === exited.id) + 1;
-      while (holder.children[index]?.kind === 'bookmarkEnd') index += 1;
-      return { kind: 'newRun', holder, index };
-    }
-  }
+  const afterAtom = insertionSiteAfterAtom(paragraph, offset, owner, bias);
+  if (afterAtom) return afterAtom;
   const boundary = segments.find((segment) => segment.start === offset);
   if (owner === null && boundary) {
     const boundaryIndex = all.findIndex((segment) => segment === boundary);
