@@ -24,6 +24,7 @@ import { validateInsertBuildingBlock } from './building-block-insert.ts';
 import type { OoxmlNode, OoxmlParagraphNode, OoxmlPart } from '../package/ooxml-tree.ts';
 import { findNode, type EditOptions } from '../package/ooxml-edit.ts';
 import { restylePassesContentLock } from './content-lock-policy.ts';
+import { changesOnlyParagraphAlignment } from './content-lock-paragraph-alignment.ts';
 import { OFFICE_MATH_NAMESPACE_URI, parseLinearMath } from '../package/omml-equation.ts';
 import { isValidXmlText } from '../package/sinks.ts';
 import { isDangerousKey } from '../package/safe-record.ts';
@@ -850,7 +851,11 @@ export function validateTreeOp(
         return 'invalid-property-value';
       }
       if (isBoundAt(part, op.paragraphId)) return 'bound';
-      if (effectiveContentLockAt(part, op.paragraphId).content) return 'locked';
+      if (
+        effectiveContentLockAt(part, op.paragraphId).content &&
+        !changesOnlyParagraphAlignment(part, op)
+      )
+        return 'locked';
       return null;
     }
     case 'insertInlineContentControl': {

@@ -268,7 +268,11 @@ A new dropdown or combo box has no items. Add its items in Word, or fill a contr
 
 ## Formatting content-locked controls
 
-A content lock (`contentLocked` or `sdtContentLocked`) refuses every edit inside a control, including formatting, as Word does. A formatting command over a selection that includes such a control fails with code `locked`, and the selection keeps its formatting. `editor.can()` gives the same answer first, so the toolbar shows the button as unavailable. If your template uses controls for placeholders that authors style but must not retype, set `contentLockPolicy` when you create the editor or the server host:
+A content lock (`contentLocked` or `sdtContentLocked`) refuses text edits and character formatting inside a control. A character formatting command over such a selection fails with code `locked`, and the selection keeps its formatting. `editor.can()` gives the same answer first, so the toolbar shows the button as unavailable.
+
+You can align paragraphs inside locked controls without changing their text or other paragraph properties. In suggesting mode, alignment records a revision that you can accept or reject. This also applies to `Paragraph.alignment` in the document API. Binding and document protection checks still apply.
+
+If authors must style placeholder text without editing it, set `contentLockPolicy` when you create the editor:
 
 ```ts
 const editor = createDocxEditor({
@@ -287,9 +291,9 @@ In React and Vue, pass the same value as the `contentLockPolicy` prop. The edito
 With the option, run formatting passes the content lock: bold, italic, color, font, size, and highlight, on the control's text or on its paragraph marks. The toolbar, keyboard shortcuts, and automation `setFont` all follow the same rule. These edits are still refused with `locked`:
 
 - Typing, pasting, cutting, or deleting text in the control.
-- Paragraph properties, such as alignment or indents.
+- Other paragraph properties, such as indents or spacing.
 - Removing a control whose wrapper is locked.
-- Tracked formatting in suggesting mode. Its revision would sit inside the lock, where nobody could accept or reject it.
+- Tracked character formatting in suggesting mode. Its revision would sit inside the lock, where nobody could accept or reject it.
 
 A control with `w:dataBinding` still refuses formatting with `bound`. The option does not change the document: the saved `w:lock` value stays the same. The option applies only to local edits. In a collaboration session, every participant receives formatting from a participant that set the option.
 
