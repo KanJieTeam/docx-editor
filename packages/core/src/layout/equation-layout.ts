@@ -5,6 +5,7 @@ import { measureDisplayText, withFontFamily, type ResolvedRunStyle } from './run
 import type { LayoutBox, TextMeasurer } from './semantic-records.ts';
 import { equationDisplayText } from './equation-display-text.ts';
 import { equationInk } from './equation-ink.ts';
+import { fitEquationLineExtent } from './equation-line-extent.ts';
 import { attachScripts, box, naryLimitsBeside, shifted } from './equation-scripts.ts';
 import {
   equationAtomSpaces,
@@ -839,9 +840,22 @@ function layoutEquationWith(
     metrics: new Map(),
     formats: new WeakMap(),
   };
+  const leaves: EquationExpression[] = [];
+  collectLeaves([projection.expression], leaves);
+  const first = leaves[0];
+  // A first structure leads with its own size: its `m:ctrlPr` size or the surrounding size.
+  // This walk and the geometry walk in `fitEquationLineExtent` both flatten rows and skip
+  // nothing, so they find the same first leaf.
+  const firstControl = first && 'controlFontSizePt' in first ? first : {};
+  const leadingSizePt =
+    first && first.kind !== 'text' ? structureSizePt(firstControl, 1, cache) : mathStyle.fontSizePt;
   return Object.freeze({
     sourceNodeId: projection.sourceNodeId,
-    geometry: layoutExpression(projection.expression, measurer, mathStyle, 1, cache),
+    geometry: fitEquationLineExtent(
+      layoutExpression(projection.expression, measurer, mathStyle, 1, cache),
+      leadingSizePt,
+      measurer
+    ),
     fallbackText: projection.fallbackText,
     truncated: projection.truncated,
   });
