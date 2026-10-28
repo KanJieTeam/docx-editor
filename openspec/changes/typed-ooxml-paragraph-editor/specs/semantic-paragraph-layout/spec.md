@@ -548,3 +548,14 @@ The layout engine SHALL allow curly quotes in runs with the East Asian font hint
 - **GIVEN** a curly-only punctuation window, unhinted Latin quotes, a curly quote's inner side, unresolved face, authored tracking, horizontal scaling, complex shaping, decorated text, or source punctuation-kerning refusal
 - **WHEN** layout considers optical fitting
 - **THEN** the new East Asian curly path leaves the unsupported geometry unchanged
+
+### Requirement: Natural kana advances
+
+Layout SHALL preserve natural kana advances and authored tracking under every character spacing control value. Paragraph overflow SHALL NOT apply a fixed kana reduction.
+
+#### Scenario: Japanese kana overflow the measure
+
+- **GIVEN** twenty kana with natural advances of 24 points and a 468-point measure
+- **WHEN** character spacing control enables punctuation and Japanese kana compression
+- **THEN** the first line contains nineteen kana and the next line contains one kana
+- **AND** source text, run properties, and settings remain unchanged after save and reopen

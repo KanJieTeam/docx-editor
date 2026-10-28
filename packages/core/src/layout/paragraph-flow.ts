@@ -14,6 +14,7 @@ import {
   admittedToNarrowPassage,
 } from './pending-line.ts';
 import { spaceShrinkWordTail } from './space-shrink-word-tail.ts';
+import { graphemeContinuationWidth } from './grapheme-continuation-width.ts';
 import { wordFollowsOnlyTabs } from './leading-tab-word.ts';
 import { growScriptLineMetrics } from './paragraph-mark-metrics.ts';
 import { spacedLine } from './positioned-run-spacing.ts';
@@ -35,7 +36,6 @@ export {
 } from './paragraph-alignment.ts';
 import { bidiPieces, paragraphIsRtl } from './rtl-paragraph.ts';
 import { lineWrapPassages } from './line-wrap-passages.ts';
-
 import { PAGE_BREAK_CHAR, type OoxmlNode, type OoxmlProperty } from '@docx-editor.dev/core/store';
 import {
   propertiesOfRunContainer as propertiesOf,
@@ -114,15 +114,11 @@ import { carryWordAtOptionalHyphens } from './optional-hyphen-break.ts';
 import { measuredWidth, styleCutAtHyphen } from './optional-hyphen-joining.ts';
 import { collectLineChangeSites } from './paragraph-change-sites.ts';
 import { rebreakForEarlierOwnBands } from './top-and-bottom-earlier-lines.ts';
-
 // Ignore subpixel rounding: a tab that ends exactly at the margin must not wrap.
 const OVERFLOW_TOLERANCE_PT = 0.001;
-
 import type { ParagraphFlowOptions } from './paragraph-flow-options.ts';
 export type { ParagraphFlowOptions } from './paragraph-flow-options.ts';
-
 export { propertiesOf };
-
 import {
   measureFollowingTabSegment,
   placeableContentSuffixes,
@@ -240,7 +236,8 @@ export function breakParagraph(
     measurer
   );
   const { preserveColonAdvances } = advances;
-  const pieces = compressCjkPieces(visiblePieces, typography, measurer, advances, available);
+  const pieces = compressCjkPieces(visiblePieces, typography, measurer, advances);
+  const clusterTail = graphemeContinuationWidth(pieces, measurer);
   const seamNaturalWidths = cjkSeamNaturalWidths(pieces, visiblePieces, measurer);
   const placeableSuffixes = placeableContentSuffixes(pieces, pageBreaksIgnored);
   const replayScope = cellTabReplayScope(flow?.cellAnchorScope, rawPieces);
@@ -1418,7 +1415,9 @@ export function breakParagraph(
       }
       // A bearing shared across a line break is lost, so fit at the natural advance.
       const baseFitWidth = opticalFit ? width : (seamNaturalWidths.get(piece) ?? width);
-      const fitWidth = baseFitWidth + automaticGap() + (lineEndWhitespace ? 0 : endSpaces.room);
+      const followingCluster = clusterTail(pieceIndex, boundary);
+      const fitWidth =
+        baseFitWidth + followingCluster + automaticGap() + (lineEndWhitespace ? 0 : endSpaces.room);
       const overflows =
         !hangs &&
         // A space after a word that borrowed inter-word space hangs on its line.
@@ -1539,7 +1538,7 @@ export function breakParagraph(
         canChopWord &&
         !hangs &&
         (!holdsContent() || (!opensWord && wordOpensLine()) || chopsAfterLeadingTabs) &&
-        width + automaticGap() >
+        width + followingCluster + automaticGap() >
           remainingLineWidth() +
             OVERFLOW_TOLERANCE_PT +
             // The whole group is on the line once its last candidate arrives.
@@ -1590,6 +1589,7 @@ export function breakParagraph(
             previousLineCut = true;
           },
           overflowTolerancePt: OVERFLOW_TOLERANCE_PT,
+          followingWidth: followingCluster,
           keepWithPrevious: openDecision === 'forbidden',
           // Kinsoku vetoes measured cuts: 天。地。人。 must not chop onto a leading 。.
           cutAllowedAt: textBreaks
