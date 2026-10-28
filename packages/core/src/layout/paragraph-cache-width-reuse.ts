@@ -1,3 +1,4 @@
+import { lineHangingPunctuationAdvance } from './line-hanging-punctuation.ts';
 import type { OoxmlNode } from '@docx-editor.dev/core/store';
 import { endsWithSpaceSlot } from './trailing-spaces.ts';
 import type { ParagraphLayoutCache } from './layout-cache.ts';
@@ -23,6 +24,7 @@ export function lineTiedToPlacement(line: PendingLine): boolean {
     line.columnBreakAfter ||
     line.manualBreakAfter ||
     line.spaceShrink ||
+    lineHangingPunctuationAdvance(line) ||
     line.deletedRanges?.length ||
     line.anchorRevisions?.length ||
     line.changeSites?.length

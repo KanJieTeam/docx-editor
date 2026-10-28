@@ -1,3 +1,5 @@
+import { lineHangingPunctuationAdvance } from './line-hanging-punctuation.ts';
+import type { PendingLine } from './pending-line.ts';
 import { shrinkJustifiedSpans } from './paragraph-space-shrink.ts';
 import { PAGE_BREAK_CHAR, type OoxmlProperty } from '@docx-editor.dev/core/store';
 import { paragraphIsRtl, reorderBidiSpans, splitBidiTrailingWhitespace } from './rtl-paragraph.ts';
@@ -135,7 +137,8 @@ function alignLogicalSpans(
   pageBreaksIgnored: boolean,
   lastLineShrinks: boolean,
   distributed: DistributedSpacing | undefined,
-  eastAsianSpacing: boolean
+  eastAsianSpacing: boolean,
+  hangingPunctuationAdvance: number
 ): readonly StyleSpanRecord[] {
   if (spans.length === 0) return spans;
   // An unbounded line (a measuring pass) has no far edge to align or justify against.
@@ -154,7 +157,8 @@ function alignLogicalSpans(
         false,
         lastLineShrinks,
         distributed,
-        eastAsianSpacing
+        eastAsianSpacing,
+        hangingPunctuationAdvance
       )
     );
     if (aligned) return aligned;
@@ -307,6 +311,8 @@ function alignLogicalSpans(
   // still fit before the measure and the one that closes the last word's span.
   if ((alignment === 'center' || alignment === 'right') && !paragraphRtl && visible !== undefined)
     used = Math.min(used, visible);
+  // The hanging mark keeps its advance outside the measure; only its prefix fills the line.
+  if (alignment === 'both') used -= hangingPunctuationAdvance;
   const slack = available - used;
   // A last line compresses only when the flow kept the paragraph's last word by borrowing
   // inter-word space. Hanging punctuation also overflows a line, and keeps its spacing.
@@ -322,7 +328,7 @@ function alignLogicalSpans(
 
   // The last line of a justified paragraph is set flush left, never stretched.
   if (alignment === 'both') {
-    if (isLastLine) return spans;
+    if (isLastLine && hangingPunctuationAdvance === 0) return spans;
     // Zero-width spaces closing the line take no room, so the boundary before them is no slot.
     let slotEnd = Math.min(trailingStart, contentLast + 1);
     while (
@@ -540,12 +546,20 @@ export function alignSpans(
   lastLineShrinks = false,
   passages?: readonly LinePassage[],
   distributed?: DistributedSpacing,
-  eastAsianSpacing = true
+  eastAsianSpacing = true,
+  pendingLine?: PendingLine
 ): readonly StyleSpanRecord[] {
+  const hangingPunctuationAdvance = pendingLine ? lineHangingPunctuationAdvance(pendingLine) : 0;
   // A right-to-left last line aligns to the right, unless the flow kept its last word by
   // borrowing inter-word space: then it compresses as justified text does.
   const effective =
-    alignment === 'both' && isLastLine && paragraphRtl && !lastLineShrinks ? 'right' : alignment;
+    alignment === 'both' &&
+    isLastLine &&
+    paragraphRtl &&
+    !lastLineShrinks &&
+    hangingPunctuationAdvance === 0
+      ? 'right'
+      : alignment;
   const split = splitBidiTrailingWhitespace(spans, measurer);
   const bidiLine = paragraphRtl || split.some(isRightToLeft);
   if (passages && passages.length > 1 && !bidiLine) {
@@ -562,7 +576,8 @@ export function alignSpans(
         pageBreaksIgnored,
         lastLineShrinks,
         distributed,
-        eastAsianSpacing
+        eastAsianSpacing,
+        isLastPart ? hangingPunctuationAdvance : 0
       )
     );
     if (aligned) return reorderBidiSpans(aligned, false, pageBreaksIgnored);
@@ -601,7 +616,8 @@ export function alignSpans(
       pageBreaksIgnored,
       lastLineShrinks,
       distributed,
-      eastAsianSpacing
+      eastAsianSpacing,
+      hangingPunctuationAdvance
     );
   const trailing = bidiTrailingSpaces(split, paragraphRtl, isLastLine, pageBreaksIgnored);
   if (trailing) {
@@ -656,7 +672,8 @@ export function alignBodyLineSpans(
     line.spaceShrink === true,
     measure.passages,
     paragraphDistributedSpacing(props, compatibility),
-    compatibility?.typography?.eastAsianSpacing !== false
+    compatibility?.typography?.eastAsianSpacing !== false,
+    line as PendingLine
   );
 }
 

@@ -643,6 +643,48 @@ With `w:overflowPunct` on, the layout engine SHALL let line-end punctuation hang
 - **WHEN** a line fits only when its punctuation compresses or hangs
 - **THEN** the line wraps instead
 
+### Requirement: Language-specific hanging punctuation
+
+When a justified paragraph enables hanging punctuation, the punctuation run's language SHALL select its hanging characters. Japanese `〕》〉！？：；・`, ASCII `! ? : ; ) ] }`, `％`, and `°`, Simplified Chinese `．`, and Korean punctuation SHALL NOT hang, except that a Korean paragraph-final mark other than `。` or `、` SHALL hang. Korean overflow punctuation SHALL start the next line.
+
+#### Scenario: The punctuation run selects the hanging rule
+
+- **GIVEN** a Japanese run followed by a Chinese run containing a full-width exclamation mark
+- **WHEN** the mark overflows a justified line with hanging enabled
+- **THEN** the Chinese mark can hang
+- **AND** changing the mark's run language to Japanese makes it wrap with its preceding character
+
+#### Scenario: Korean punctuation starts the next line
+
+- **GIVEN** a Korean run ending a justified line with hanging enabled
+- **WHEN** its next punctuation mark does not fit inside the measure
+- **THEN** the mark starts the next line without moving the preceding character
+- **AND** a paragraph-final `！` hangs instead, while a paragraph-final `。` starts the next line
+
+#### Scenario: Traditional Chinese hangs a full-width full stop
+
+- **GIVEN** a justified line of Traditional Chinese text with hanging enabled
+- **WHEN** a full-width full stop `．` overflows the measure
+- **THEN** the mark hangs
+- **AND** the same mark in Simplified Chinese wraps with its preceding character
+
+### Requirement: Alignment before hanging punctuation
+
+When line-end punctuation hangs, the preceding text SHALL fill the measure, including on the paragraph's final line. The mark SHALL retain its measured advance outside that measure. Source text and offsets SHALL remain unchanged.
+
+#### Scenario: A final hanging mark follows a full-width prefix
+
+- **GIVEN** a justified line of nineteen 24 pt ideographs and a hanging 24 pt full stop
+- **WHEN** the line's measure is 468 pt and the paragraph ends after the mark
+- **THEN** the full stop starts at 468 pt and ends at 492 pt relative to the line origin
+
+#### Scenario: A Korean final line in an earlier compatibility mode
+
+- **GIVEN** a justified Korean paragraph that ends with a hanging `！`
+- **WHEN** the document declares compatibility mode 14
+- **THEN** the final line keeps its natural width
+- **AND** in mode 15 the text before the mark fills the measure
+
 ### Requirement: East Asian punctuation fitting on mixed lines
 
 When document punctuation compression is on and the document defaults name an East Asian face, a line that also holds complete Latin words, digit groups, or ASCII symbol groups SHALL be able to fit by compressing adjacent East Asian punctuation against measured glyph ink. The Latin groups SHALL keep their natural advances and source ranges.

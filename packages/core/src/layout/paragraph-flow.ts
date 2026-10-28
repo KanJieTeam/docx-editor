@@ -1,3 +1,4 @@
+import { paragraphFinalAt, rememberHangingPunctuation } from './paragraph-hanging-punctuation.ts';
 import { appendUnsupportedContent } from './unsupported-content-flow.ts';
 import { besideFloatWidth } from './legacy-inline-beside-float.ts';
 import { continuationPiecesWithRules } from './paragraph-continuation-pieces.ts';
@@ -242,6 +243,7 @@ export function breakParagraph(
   const placeableSuffixes = placeableContentSuffixes(pieces, pageBreaksIgnored);
   const replayScope = cellTabReplayScope(flow?.cellAnchorScope, rawPieces);
   const endsParagraph = lineEndAt(pieces);
+  const paragraphFinal = paragraphFinalAt(pieces);
   const endSpacesAt = lineEndSpaces.paragraphEndSpacesOf(pieces, paragraphRtl, measurer);
   const cjkBreaks = cjkParagraphBreaks(pieces, typography);
   const clusterTail = graphemeContinuationWidth(pieces, measurer, typography);
@@ -1309,8 +1311,7 @@ export function breakParagraph(
           ? faceStyle.fontSizePt
           : measurer.measure(displayText(measureSource, faceStyle), faceStyle);
       exclusionProbe.setWidth(width);
-      // A candidate may open a line only at a real break opportunity — the shared
-      // decision in `lineOpenDecisionAt`, which the anchor-line probe above consumes too.
+      // The anchor probe and placement use the same paragraph-wide break decision.
       const openDecision =
         piece.noteSeparator || line.spans.at(-1)?.noteSeparator
           ? 'opens'
@@ -1351,9 +1352,17 @@ export function breakParagraph(
           : undefined;
       let clippedWordEnd = clipWordEndAtPen();
       width = clippedWordEnd?.width ?? width;
+      const ends = paragraphFinal(pieceIndex, boundary);
       const hangsAtLineEnd = () =>
         (typography.hangingPunctuation ?? typography.overflowPunctuation) &&
-        canHangCjkPunctuation(candidate, piece, lineAvailable() - line.width, width, measurer);
+        canHangCjkPunctuation(
+          candidate,
+          piece,
+          lineAvailable() - line.width,
+          width,
+          measurer,
+          ends
+        );
       let hangs = hangsAtLineEnd();
       const applyOpticalFit =
         opticalCompression && sameParagraphAnchorStarts.length === 0
@@ -1620,6 +1629,7 @@ export function breakParagraph(
           layoutOwned && !piece.positionalTab,
           lineEndWhitespace
         );
+        rememberHangingPunctuation(line, span, piece, measurer, hangs, lineAvailable(), flow);
         if (opticalFit) appendOpticalCjkCandidate(line.spans, span, opticalFit);
         else lineEndSpaces.appendWordEnd(line.spans, span, clippedWordEnd);
         line.width += remainingWidth;

@@ -325,18 +325,34 @@ export function compressCjkPieces(
   return result;
 }
 
-/** The advance of the final mark that may hang past the margin, or undefined when none may. */
+/**
+ * Line-end marks that stay inside the measure in Japanese text. They wrap with the character
+ * before them instead of hanging.
+ */
+const JAPANESE_NON_HANGING = '〕》〉！？：；・!?:;)]}％°';
+
+/**
+ * The advance of the final mark that may hang past the margin, or undefined when none may.
+ * `paragraphFinal` says that only whitespace follows the text in its paragraph: Korean text
+ * hangs a mark other than `。` or `、` only there.
+ */
 export function hangingCjkPunctuationAdvance(
   text: string,
   piece: FieldAwarePiece,
-  measurer: TextMeasurer
+  measurer: TextMeasurer,
+  paragraphFinal = false
 ): number | undefined {
   if (piece.projected || piece.measureText !== undefined) return undefined;
   // Callers check the paragraph's hanging policy first. Ordinary Latin words/spaces must not
   // allocate a grapheme array on every placement candidate just to discover no punctuation.
   const tail = text[text.length - 1];
   if (!tail || !/^[\p{Pe}\p{Pf}\p{Po}]$/u.test(tail)) return undefined;
-  if (!FULLWIDTH_PUNCTUATION.test(tail) && !eastAsianLanguage(piece.props)) return undefined;
+  const language = eastAsianLanguage(piece.props);
+  if (language?.startsWith('ko') && (!paragraphFinal || '。、'.includes(tail))) return undefined;
+  if (language?.startsWith('ja') && JAPANESE_NON_HANGING.includes(tail)) return undefined;
+  // Simplified Chinese keeps a full-width full stop inside the measure; Traditional hangs it.
+  if (/^zh-cn$/i.test(language ?? '') && tail === '．') return undefined;
+  if (!FULLWIDTH_PUNCTUATION.test(tail) && !language) return undefined;
   const last = segmentGraphemes(text).at(-1)?.text;
   if (!last || !/^[\p{Pe}\p{Pf}\p{Po}]$/u.test(last)) return undefined;
   return measureDisplayText(last, styleForFontSlot(piece.style, piece.fontSlot), measurer);
@@ -352,7 +368,12 @@ export function canHangCjkPunctuation(
   piece: FieldAwarePiece,
   remaining: number,
   width: number,
-  measurer: TextMeasurer
+  measurer: TextMeasurer,
+  paragraphFinal = false
 ): boolean {
-  return hangsWithin(hangingCjkPunctuationAdvance(text, piece, measurer), remaining, width);
+  return hangsWithin(
+    hangingCjkPunctuationAdvance(text, piece, measurer, paragraphFinal),
+    remaining,
+    width
+  );
 }

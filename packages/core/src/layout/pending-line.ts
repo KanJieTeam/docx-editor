@@ -1,3 +1,4 @@
+import { copyLineHangingPunctuation } from './line-hanging-punctuation.ts';
 import { automaticTextSpacingBefore } from './cjk-automatic-spacing.ts';
 // The broken-but-unplaced line: the record breakParagraph accumulates and pagination
 // budgets, before placement publishes a LineRecord from it. Extracted from paragraph-flow
@@ -456,44 +457,49 @@ export function pendingLineFlowExtentAtPlacement(
  * quietly corrupt every subsequent reuse.
  */
 export function frozenLine(line: PendingLine): PendingLine {
-  return Object.freeze({
-    spans: line.spans.map((span) =>
-      Object.freeze({ ...span, box: Object.freeze({ ...span.box }) })
-    ),
-    drawings: line.drawings.map((drawing) =>
-      Object.freeze({
-        ...drawing,
-        paintBounds: Object.freeze({ ...drawing.paintBounds }),
-        hitBounds: Object.freeze({ ...drawing.hitBounds }),
-      })
-    ),
-    start: line.start,
-    end: line.end,
-    width: line.width,
-    height: line.height,
-    baseline: line.baseline,
-    leading: line.leading,
-    trailingSpacing: line.trailingSpacing,
-    ...(line.pageBreakAfter ? { pageBreakAfter: true } : {}),
-    ...(line.columnBreakAfter ? { columnBreakAfter: true } : {}),
-    ...(line.manualBreakAfter ? { manualBreakAfter: true } : {}),
-    ...(line.spaceShrink ? { spaceShrink: true } : {}),
-    ...(line.deletedRanges ? { deletedRanges: Object.freeze(line.deletedRanges) } : {}),
-    ...(line.exclusionSkipBefore ? { exclusionSkipBefore: line.exclusionSkipBefore } : {}),
-    ...(line.breakClearance ? { breakClearance: true } : {}),
-    ...(line.ownBandClearance ? { ownBandClearance: true } : {}),
-    ...(line.anchorClearanceBefore !== undefined
-      ? { anchorClearanceBefore: line.anchorClearanceBefore }
-      : {}),
-    ...(line.firstLineOffset ? { firstLineOffset: line.firstLineOffset } : {}),
-    ...(line.wrapSegment ? { wrapSegment: Object.freeze({ ...line.wrapSegment }) } : {}),
-    ...(line.wrapPassages
-      ? { wrapPassages: Object.freeze(line.wrapPassages.map((passage) => Object.freeze(passage))) }
-      : {}),
-    ...(line.wrapMirrored ? { wrapMirrored: true } : {}),
-    ...(line.anchorRevisions ? { anchorRevisions: Object.freeze(line.anchorRevisions) } : {}),
-    ...(line.changeSites ? { changeSites: Object.freeze(line.changeSites) } : {}),
-  }) as PendingLine;
+  return copyLineHangingPunctuation(
+    line,
+    Object.freeze({
+      spans: line.spans.map((span) =>
+        Object.freeze({ ...span, box: Object.freeze({ ...span.box }) })
+      ),
+      drawings: line.drawings.map((drawing) =>
+        Object.freeze({
+          ...drawing,
+          paintBounds: Object.freeze({ ...drawing.paintBounds }),
+          hitBounds: Object.freeze({ ...drawing.hitBounds }),
+        })
+      ),
+      start: line.start,
+      end: line.end,
+      width: line.width,
+      height: line.height,
+      baseline: line.baseline,
+      leading: line.leading,
+      trailingSpacing: line.trailingSpacing,
+      ...(line.pageBreakAfter ? { pageBreakAfter: true } : {}),
+      ...(line.columnBreakAfter ? { columnBreakAfter: true } : {}),
+      ...(line.manualBreakAfter ? { manualBreakAfter: true } : {}),
+      ...(line.spaceShrink ? { spaceShrink: true } : {}),
+      ...(line.deletedRanges ? { deletedRanges: Object.freeze(line.deletedRanges) } : {}),
+      ...(line.exclusionSkipBefore ? { exclusionSkipBefore: line.exclusionSkipBefore } : {}),
+      ...(line.breakClearance ? { breakClearance: true } : {}),
+      ...(line.ownBandClearance ? { ownBandClearance: true } : {}),
+      ...(line.anchorClearanceBefore !== undefined
+        ? { anchorClearanceBefore: line.anchorClearanceBefore }
+        : {}),
+      ...(line.firstLineOffset ? { firstLineOffset: line.firstLineOffset } : {}),
+      ...(line.wrapSegment ? { wrapSegment: Object.freeze({ ...line.wrapSegment }) } : {}),
+      ...(line.wrapPassages
+        ? {
+            wrapPassages: Object.freeze(line.wrapPassages.map((passage) => Object.freeze(passage))),
+          }
+        : {}),
+      ...(line.wrapMirrored ? { wrapMirrored: true } : {}),
+      ...(line.anchorRevisions ? { anchorRevisions: Object.freeze(line.anchorRevisions) } : {}),
+      ...(line.changeSites ? { changeSites: Object.freeze(line.changeSites) } : {}),
+    }) as PendingLine
+  );
 }
 
 /**
