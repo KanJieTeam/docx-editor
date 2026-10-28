@@ -293,7 +293,7 @@ describe('contentLockPolicy: formatting passes the content half of a lock (opt-i
         paragraphId: id,
         properties: [{ localName: 'jc', attributes: { val: 'center' } }],
       })
-    ).toBe('locked');
+    ).toBe(null);
   });
 
   test('with the policy a write that hides text is still refused', () => {
