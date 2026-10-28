@@ -21,6 +21,11 @@ export interface ParagraphFlowOptions {
   readonly inlineObjectsBesideFloats?: boolean;
   /** Square wrapping on the largest side breaks a tie to the physical left (mode 15 and later). */
   readonly largestWrapTieLeft?: boolean;
+  /**
+   * A Korean paragraph-final mark that hangs lets the text before it fill the measure (mode 15
+   * and later). Otherwise that last line keeps its natural width.
+   */
+  readonly koreanHangingLineFills?: boolean;
   /** A body paragraph, where a column break ends its column. */
   readonly columnBreaksEndColumns?: boolean;
   /** The paragraph mark after a closing page break takes a line on the next page. */

@@ -19,6 +19,7 @@ import type { FieldAwarePiece } from './field-projection.ts';
 import { lineOpenDecisionAt, wordBoundaries } from './cjk-line-break.ts';
 import type { CjkParagraphBreaks } from './cjk-paragraph-breaks.ts';
 import { canHangCjkPunctuation } from './cjk-spacing.ts';
+import { paragraphFinalAt } from './paragraph-hanging-punctuation.ts';
 import type { CjkParagraphTypography } from './cjk-typography.ts';
 import { measureInlineDrawing } from './drawing-layout.ts';
 import { isLayoutOwnedPiece } from './layout-owned-piece.ts';
@@ -45,6 +46,7 @@ export function anchorLineStartsByModelOffset(input: {
   const { pieces, measurer, available, firstLineOffset, anchorStarts, equationLayoutOf } = input;
   const out = new Map<number, number>();
   if (anchorStarts.length === 0) return out;
+  const paragraphFinal = paragraphFinalAt(pieces);
   let probeLineStart = pieces[0]?.start ?? 0;
   const lineStarts = [probeLineStart];
   let probeWidth = 0;
@@ -140,7 +142,14 @@ export function anchorLineStartsByModelOffset(input: {
       }
       const hangs =
         (input.typography?.hangingPunctuation ?? input.typography?.overflowPunctuation) &&
-        canHangCjkPunctuation(candidate, piece, probeLineAvail() - probeWidth, width, measurer);
+        canHangCjkPunctuation(
+          candidate,
+          piece,
+          probeLineAvail() - probeWidth,
+          width,
+          measurer,
+          paragraphFinal(pieceIndex, boundary)
+        );
       const fitWidth = (input.seamNaturalWidths?.get(piece) ?? width) + gap();
       if (!hangs && probeWidth > 0 && probeWidth + fitWidth > probeLineAvail()) {
         if (probeDecision === 'forbidden' && probeWordStartWidth <= 0) {

@@ -135,6 +135,10 @@ export const MODE_RULES = {
     'A kept row group that exceeds a fresh page starts beside preceding content, except directly below authored headers',
     'ECMA-376 Part 1 §17.3.1.15 keepNext'
   ),
+  koreanHangingLineFills: modern(
+    'A Korean paragraph-final mark that hangs past the margin lets the text before it fill the measure. Earlier modes keep that last line at its natural width',
+    'ECMA-376 Part 1 §17.3.1.21 overflowPunct'
+  ),
   largestWrapTieLeft: modern(
     'Square wrapping on the largest side keeps text on the physical left when both sides are equally wide; earlier modes keep it on the right',
     'ECMA-376 Part 1 §20.4.2.17 wrapSquare'

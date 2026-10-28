@@ -127,6 +127,7 @@ export function loadFixture(options: FixtureOptions = {}) {
   const layout = layoutSemanticDocument(pkg.parts.get(pkg.mainDocumentPart)!, 0, {
     measurer,
     styleCascade: dependencies.styleCascade(),
+    ...(options.compatibility === undefined ? {} : { compatibilityMode: options.compatibility }),
     geometry: {
       width: (options.available ?? 680) + 20,
       height: 500,

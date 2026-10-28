@@ -131,6 +131,9 @@ export function cjkParagraphBreaks(
     eastAsianContext.push(context || isCjk(cluster.text.codePointAt(0)!));
   }
   const languages = pieces.map((piece) => eastAsianLanguage(piece.props));
+  // The paragraph's last cluster before trailing whitespace.
+  let lastVisible = clusters.length - 1;
+  while (lastVisible > 0 && /^\s+$/u.test(clusters[lastVisible]!.text)) lastVisible--;
   const tables = new Map<string, ReturnType<typeof kinsokuCharacters>>();
   const tableFor = (language: string) => {
     let table = tables.get(language);
@@ -190,13 +193,14 @@ export function cjkParagraphBreaks(
           ? detectedLanguage
           : undefined);
       if (language || previousLanguage) {
-        // Korean overflow punctuation wraps by itself. Explicit custom prohibitions still win.
+        // Korean overflow punctuation wraps by itself. At the paragraph end only 。 and 、
+        // do; any other final mark stays with its character and hangs.
         const koreanOverflowMark =
           language !== undefined &&
           /^ko(?:-|$)/.test(language) &&
           (policy.hangingPunctuation ?? policy.overflowPunctuation) &&
           /^[\p{Pe}\p{Pf}\p{Po}]$/u.test(right.text) &&
-          policy.settings?.before[language] === undefined;
+          (index < lastVisible || '。、'.includes(right.text));
         forbidden =
           (!koreanOverflowMark &&
             (language

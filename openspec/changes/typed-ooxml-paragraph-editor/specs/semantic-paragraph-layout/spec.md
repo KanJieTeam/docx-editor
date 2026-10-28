@@ -617,7 +617,7 @@ With `w:overflowPunct` on, the layout engine SHALL let line-end punctuation hang
 
 ### Requirement: Language-specific hanging punctuation
 
-When a justified paragraph enables hanging punctuation, the punctuation run's language SHALL select its hanging characters. Japanese `〕》〉！？：；・`, Chinese `．`, and Korean punctuation SHALL NOT hang. Korean overflow punctuation SHALL be able to start the next line unless explicit custom line-start rules forbid it.
+When a justified paragraph enables hanging punctuation, the punctuation run's language SHALL select its hanging characters. Japanese `〕》〉！？：；・`, ASCII `! ? : ; ) ] }`, `％`, and `°`, Simplified Chinese `．`, and Korean punctuation SHALL NOT hang, except that a Korean paragraph-final mark other than `。` or `、` SHALL hang. Korean overflow punctuation SHALL start the next line.
 
 #### Scenario: The punctuation run selects the hanging rule
 
@@ -631,7 +631,14 @@ When a justified paragraph enables hanging punctuation, the punctuation run's la
 - **GIVEN** a Korean run ending a justified line with hanging enabled
 - **WHEN** its next punctuation mark does not fit inside the measure
 - **THEN** the mark starts the next line without moving the preceding character
-- **AND** an explicit custom line-start prohibition still keeps that mark with its preceding character
+- **AND** a paragraph-final `！` hangs instead, while a paragraph-final `。` starts the next line
+
+#### Scenario: Traditional Chinese hangs a full-width full stop
+
+- **GIVEN** a justified line of Traditional Chinese text with hanging enabled
+- **WHEN** a full-width full stop `．` overflows the measure
+- **THEN** the mark hangs
+- **AND** the same mark in Simplified Chinese wraps with its preceding character
 
 ### Requirement: Alignment before hanging punctuation
 
@@ -642,6 +649,13 @@ When line-end punctuation hangs, the preceding text SHALL fill the measure, incl
 - **GIVEN** a justified line of nineteen 24 pt ideographs and a hanging 24 pt full stop
 - **WHEN** the line's measure is 468 pt and the paragraph ends after the mark
 - **THEN** the full stop starts at 468 pt and ends at 492 pt relative to the line origin
+
+#### Scenario: A Korean final line in an earlier compatibility mode
+
+- **GIVEN** a justified Korean paragraph that ends with a hanging `！`
+- **WHEN** the document declares compatibility mode 14
+- **THEN** the final line keeps its natural width
+- **AND** in mode 15 the text before the mark fills the measure
 
 ### Requirement: East Asian punctuation fitting on mixed lines
 

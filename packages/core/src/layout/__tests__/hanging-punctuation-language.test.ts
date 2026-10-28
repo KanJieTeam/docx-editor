@@ -12,7 +12,7 @@ const texts = (result: ReturnType<typeof loadFixture>) =>
   result.lines.map((line) => line.spans.map((span) => span.text).join(''));
 
 for (const jc of ['both', 'distribute']) {
-  for (const mark of [...'〕》〉！？：；・']) {
+  for (const mark of [...'〕》〉！？：；・!?:;)]}％°']) {
     test(`${jc}: Japanese ${mark} wraps with its preceding ideograph`, () => {
       const result = loadFixture({
         text: H + mark + '国',
@@ -136,15 +136,7 @@ test('a Chinese final fullwidth dot wraps instead of hanging', () => {
   expect(texts(result)).toEqual([H.slice(1), '国．']);
 });
 
-test('Korean custom line-start prohibitions and nonjustified rules remain active', () => {
-  const custom = loadFixture({
-    text: H + '！国',
-    language: 'ko-KR',
-    available: 468,
-    paragraphProperties: properties(),
-    lineStartRule: { language: 'ko-kr', characters: '！' },
-  });
-  expect(texts(custom)).toEqual([H.slice(1), '国！国']);
+test('Korean nonjustified lines keep the mark with its preceding character', () => {
   const left = loadFixture({
     text: H + '！国',
     language: 'ko-KR',
@@ -152,4 +144,78 @@ test('Korean custom line-start prohibitions and nonjustified rules remain active
     paragraphProperties: properties('left'),
   });
   expect(texts(left)).toEqual([H.slice(1), '国！国']);
+});
+
+const caretXs = (result: ReturnType<typeof loadFixture>) => {
+  const line = result.lines[0]!;
+  const id = line.range.paragraphId;
+  return [19, 20].map(
+    (offset) => caretAt(result.layout, { paragraphId: id, offset }, measurer)!.x - line.box.x
+  );
+};
+
+test('a Traditional Chinese fullwidth dot hangs, mid-paragraph and at the end', () => {
+  const middle = loadFixture({
+    text: H + '．国',
+    language: 'zh-TW',
+    available: 468,
+    paragraphProperties: properties(),
+  });
+  expect(texts(middle)).toEqual([H + '．', '国']);
+  const final = loadFixture({
+    text: H + '．',
+    language: 'zh-TW',
+    available: 468,
+    paragraphProperties: properties(),
+  });
+  expect(texts(final)).toEqual([H + '．']);
+  expect(caretXs(final)[0]).toBeCloseTo(468, 6);
+  expect(caretXs(final)[1]).toBeCloseTo(492, 6);
+});
+
+for (const mark of ['！', '.']) {
+  for (const compatibility of [14, 15] as const) {
+    test(`a Korean paragraph-final ${mark} hangs in mode ${compatibility}`, () => {
+      const result = loadFixture({
+        text: H + mark,
+        language: 'ko-KR',
+        available: 468,
+        compatibility,
+        paragraphProperties: properties(),
+      });
+      expect(texts(result)).toEqual([H + mark]);
+      // Mode 15 lets the text before the mark fill the measure; mode 14 keeps natural widths.
+      const fill = compatibility === 15 ? 468 : 456;
+      expect(caretXs(result)[0]).toBeCloseTo(fill, 6);
+      expect(caretXs(result)[1]).toBeCloseTo(fill + 24, 6);
+    });
+  }
+}
+
+for (const mark of ['。', '、']) {
+  test(`a Korean paragraph-final ${mark} starts the next line`, () => {
+    const result = loadFixture({
+      text: H + mark,
+      language: 'ko-KR',
+      available: 468,
+      compatibility: 15,
+      paragraphProperties: properties(),
+    });
+    expect(texts(result)).toEqual([H, mark]);
+  });
+}
+
+test('a custom Korean line-start list does not keep a mid-paragraph mark on its line', () => {
+  const hangul = '가'.repeat(19);
+  const load = (text: string) =>
+    loadFixture({
+      text,
+      language: 'ko-KR',
+      available: 468,
+      compatibility: 15,
+      paragraphProperties: properties(),
+      lineStartRule: { language: 'ko-KR', characters: '！' },
+    });
+  expect(texts(load(hangul + '！가'))).toEqual([hangul, '！가']);
+  expect(texts(load(hangul + '！'))).toEqual([hangul + '！']);
 });
