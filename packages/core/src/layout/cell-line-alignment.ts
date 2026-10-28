@@ -9,6 +9,7 @@ import { alignLineWithPictures } from './line-picture-alignment.ts';
 import {
   alignSpans,
   boxLineSetsLikeLastLine,
+  paragraphDistributedSpacing,
   lineAlignmentMeasure,
   lineAlignOffset,
   type Alignment,
@@ -65,7 +66,8 @@ export function alignCellLine(
         shared.rtl,
         shared.inTableCell,
         pendingLine.spaceShrink === true,
-        measure.passages
+        measure.passages,
+        paragraphDistributedSpacing(shared.props, shared.styleCascade)
       ),
     (aligned) => lineAlignOffset(placedSpans, aligned, alignment, measure.available, measure.used)
   );

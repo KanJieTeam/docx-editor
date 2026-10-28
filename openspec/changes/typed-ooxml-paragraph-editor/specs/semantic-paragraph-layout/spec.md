@@ -11,6 +11,28 @@ The layout engine SHALL stretch the final line of a paragraph with `w:jc` set to
 - **THEN** text fills each passage without crossing the floating object
 - **AND** the source text, formatting, and source positions remain unchanged
 
+#### Scenario: Distributed line spreads its characters
+
+- **GIVEN** a left-to-right distributed paragraph in a package with a legacy compatibility mode or no mode, or in a modern-mode package whose styles part has a `w:rPrDefault` element, even an empty one
+- **WHEN** layout aligns any line of the paragraph
+- **THEN** each space between the first and last character first takes a share of the slack: up to 45 percent of its own advance in a modern mode, and up to its face's average character width less its own advance in a legacy mode
+- **AND** the rest of the slack goes in equal steps after every character, so a single word reaches both edges
+- **AND** a line whose spaces can take all its slack sets as a justified line
+- **AND** a single character, or a single right-to-left word, is centered
+- **AND** in a modern mode, a run whose effective `w:kern` is not 0 and is at most its font size opens no gap inside its words or against the letters beside it, and still opens one after each space and at each East Asian character
+- **AND** a single kerned word in a modern mode is centered, and a legacy mode spreads kerned runs too
+- **AND** caret placement and hit testing follow the spread characters
+- **AND** screen paint keeps underline, highlight, and revision marks continuous across the gaps, and the PDF joins a single underline across them
+
+#### Scenario: Distributed line has nothing to stretch
+
+- **GIVEN** a distributed paragraph in a modern-mode package with no `w:rPrDefault` element, or a right-to-left distributed paragraph
+- **WHEN** layout aligns a line that holds a single word or a single character
+- **THEN** the line is centered in its measure
+- **AND** spaces before the line's first character are not stretched
+- **AND** a justified paragraph with the same line keeps it at its start edge
+- **AND** a distributed line with a tab or a float advance keeps its reserved positions
+
 ### Requirement: Keeps beside a row taller than a page
 
 A `w:keepNext` paragraph, a chain of them, or a kept row before a `w:cantSplit` table row taller than a page SHALL move to the next page once, and the row SHALL start on the page after it. Content that already starts its page SHALL stay there. This rule SHALL apply in compatibility modes 14 and 15, for tables with one row or more.
