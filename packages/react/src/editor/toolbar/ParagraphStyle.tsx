@@ -28,6 +28,7 @@ import { useDocxEditor } from '../context';
 import { useEditorState } from '../useEditorState';
 import { useEditorCommand } from '../useEditorCommand';
 import { useToolbarLabel } from './toolbar-context';
+import { paragraphStyleLabel } from './paragraph-style-label';
 import { chromeControlForSlot, guardToolbarMousedown } from './ToolbarButton';
 import { Slot } from './Slot';
 import { paragraphStyleDisplayName } from '../../lib/stylePreview';
@@ -179,14 +180,14 @@ function ParagraphStyleTrigger({ asChild, className, children }: ParagraphStyleP
   };
   // No pStyle (the document default) shows the registry's placeholder — "Normal text",
   // via i18n, the way the chrome spec labels the unstyled state. A styleId shows its
-  // document-declared display name, falling back to the id itself.
+  // localized built-in label or document-declared name, falling back to the id itself.
   const current = context.options.find((option) => option.styleId === context.value);
   const display =
     children ??
     (context.value === null ? (
       <span>{control?.valueKey ? label(control.valueKey) : '—'}</span>
     ) : (
-      <span>{current?.name ?? context.value}</span>
+      <span>{current ? paragraphStyleLabel(current, label) : context.value}</span>
     ));
   if (asChild) return <Slot {...shared}>{display}</Slot>;
   return (
@@ -219,6 +220,7 @@ function ParagraphStyleContent({ asChild, className, children }: ParagraphStyleP
 }
 
 function ParagraphStyleItem({ value, asChild, className, children }: ParagraphStyleItemProps) {
+  const label = useToolbarLabel();
   const editor = useDocxEditor();
   const context = useParagraphStyleContext();
   if (!context) return null;
@@ -240,7 +242,9 @@ function ParagraphStyleItem({ value, asChild, className, children }: ParagraphSt
   // The default label renders the style's NAME in the style's own face. Custom children
   // replace it wholesale.
   const display = children ?? (
-    <span style={option ? previewStyle(option.preview) : undefined}>{option?.name ?? value}</span>
+    <span style={option ? previewStyle(option.preview) : undefined}>
+      {option ? paragraphStyleLabel(option, label) : value}
+    </span>
   );
   if (asChild) return <Slot {...shared}>{display}</Slot>;
   return (

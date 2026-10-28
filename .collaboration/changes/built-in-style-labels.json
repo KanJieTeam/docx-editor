@@ -1,0 +1,14 @@
+{
+  "impact": "no-impact",
+  "fields": [],
+  "before": "The compound style picker displays document names for built-in paragraph styles.",
+  "after": "The compound style picker localizes known built-in style labels in the host interface.",
+  "reason": "Only host-local labels change. Document style names, style IDs, shared operations, and collaboration formats do not change. Exact-main and candidate controls both show a pre-existing remote formatting snapshot refresh limit; these tests assert canonical style metadata convergence.",
+  "tests": [
+    "packages/react/test/paragraph-style-i18n.test.tsx",
+    "packages/vue/test/paragraph-style-i18n.test.ts",
+    "packages/pro/src/collaboration/__tests__/document-style-label-locales.test.tsx"
+  ],
+  "changeset": "built-in-style-labels",
+  "migration": null
+}

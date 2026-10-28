@@ -352,7 +352,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'The style picker applies document styles, including custom styles with their numbering and indents. Pressing Enter at the end of a paragraph starts the next one in the style that the current style names as its follower (w:next), so a heading is followed by body text. Defining a new style in the UI is not supported yet.',
+      'The style picker applies document styles, including custom styles with their numbering and indents. React and Vue localize Normal, Title, Subtitle, and Heading 1–3 labels. Other labels come from the document. Pressing Enter at the end of a paragraph starts the next one in the style that the current style names as its follower (w:next), so a heading is followed by body text. Defining a new style in the UI is not supported yet.',
   },
   {
     id: 'paragraphs.borders',

@@ -15,6 +15,7 @@ import {
 } from 'vue';
 import type { DocxEditorChildren } from '../../docx-editor-children';
 import { useToolbarLabel } from './toolbar-context';
+import { paragraphStyleLabel } from './paragraph-style-label';
 import { chromeControlForSlot, guardToolbarMousedown } from './ToolbarButton';
 import { Slot } from './Slot';
 import {
@@ -94,7 +95,7 @@ const ParagraphStyleTrigger = defineComponent({
         slots.default?.() ??
         (context.value.value === null
           ? [<span>{control?.valueKey ? label(control.valueKey) : '—'}</span>]
-          : [<span>{current?.name ?? context.value.value}</span>]);
+          : [<span>{current ? paragraphStyleLabel(current, label) : context.value.value}</span>]);
       if (props.asChild) return <Slot {...shared}>{{ default: () => display }}</Slot>;
       return (
         <button type="button" {...shared}>
@@ -144,6 +145,7 @@ const ParagraphStyleItem = defineComponent({
     className: { type: String, default: undefined },
   },
   setup(props, { slots }) {
+    const label = useToolbarLabel();
     const context = useParagraphStyleContext();
     const editor = useDocxEditor();
     return () => {
@@ -165,7 +167,7 @@ const ParagraphStyleItem = defineComponent({
       };
       const display = slots.default?.() ?? [
         <span style={option ? previewStyle(option.preview) : undefined}>
-          {option?.name ?? props.value}
+          {option ? paragraphStyleLabel(option, label) : props.value}
         </span>,
       ];
       if (props.asChild) return <Slot {...shared}>{{ default: () => display }}</Slot>;
