@@ -1,10 +1,12 @@
 // Read only the run properties whose typography the equation lane represents.
 // Unknown properties retain the bounded fallback rather than being discarded.
+import { classifyFontSlot, type FontSlot } from './font-slot-classes.ts';
 import { WML_NAMESPACE_URI, XML_NAMESPACE_URI } from './ooxml-shared.ts';
 import {
   EQUATION_DEFAULT_MATH_FONT,
   equationControlPropertiesAreDefault,
   equationDefaultRunSizePt,
+  equationLanguagePropertyIsSupported,
   equationRunPropertiesAreDefault,
 } from './omml-control-defaults.ts';
 import type { OoxmlElement, OoxmlGenericElementNode, OoxmlNode } from './ooxml-tree.ts';
@@ -39,8 +41,60 @@ function toggle(node: OoxmlElement, namespace: string): boolean | null {
 
 type MutableRunFormat = { -readonly [K in keyof EquationRunFormat]: EquationRunFormat[K] };
 
-/** Read one `w:rPr` or `m:rPr` into `format`. False means an unsupported property. */
-function readRunProperties(child: OoxmlElement, word: boolean, format: MutableRunFormat): boolean {
+const FONT_SLOTS: readonly FontSlot[] = ['ascii', 'hAnsi', 'eastAsia', 'cs'];
+
+/**
+ * The `w:rFonts` slots that the characters of `text` draw through, with the slot policy that
+ * text layout uses (`classifyFontSlot`). Common characters, such as spaces, punctuation, and
+ * operators, take a neighbour's slot, so they add no slot beside strong text. Text of only
+ * common characters takes `w:ascii` when it is ASCII and `w:hAnsi` otherwise.
+ */
+function textFontSlots(text: string): ReadonlySet<FontSlot> {
+  const slots = new Set<FontSlot>();
+  let ascii = true;
+  for (const character of text) {
+    const codePoint = character.codePointAt(0)!;
+    ascii &&= codePoint < 0x80;
+    const classified = classifyFontSlot(codePoint);
+    // A script outside the slot policy, such as Armenian, draws in the w:hAnsi face.
+    if (classified === undefined) slots.add('hAnsi');
+    else if (classified) slots.add(classified.slot);
+  }
+  if (slots.size === 0 && text.length > 0) slots.add(ascii ? 'ascii' : 'hAnsi');
+  return slots;
+}
+
+/**
+ * The one face that a run's `w:rFonts` gives its text. Undefined means no named face, and
+ * null means the text needs two faces.
+ *
+ * Each character takes the face of its own slot: for example `w:ascii` for ASCII letters and
+ * digits, `w:eastAsia` for East Asian scripts, `w:cs` for complex scripts such as Hebrew,
+ * Arabic, and Thai, and `w:hAnsi` for other Latin, Greek, and Cyrillic text. So Latin text
+ * keeps its Latin face beside a different East Asian or complex-script face. A slot that
+ * names no face does not choose the run face, so `w:cs` alone gives ASCII digits no face.
+ */
+function runFace(fonts: ReadonlyMap<FontSlot, string>, text: string): string | undefined | null {
+  let face: string | undefined;
+  for (const slot of textFontSlots(text)) {
+    const family = fonts.get(slot);
+    if (family === undefined) continue;
+    if (face !== undefined && face !== family) return null;
+    face = family;
+  }
+  return face;
+}
+
+/**
+ * Read one `w:rPr` or `m:rPr` into `format`. False means an unsupported property. The named
+ * `w:rFonts` slots go into `fonts`; the caller resolves them against the run text.
+ */
+function readRunProperties(
+  child: OoxmlElement,
+  word: boolean,
+  format: MutableRunFormat,
+  fonts: Map<FontSlot, string> = new Map()
+): boolean {
   if (child.attributes.length !== 0) return false;
   const namespace = word ? WML_NAMESPACE_URI : MATH;
   const properties = new Set<string>();
@@ -55,25 +109,18 @@ function readRunProperties(child: OoxmlElement, word: boolean, format: MutableRu
     properties.add(property.localName);
     if (word && property.localName === 'rFonts') {
       if (property.children.length !== 0) return false;
-      const slots = new Set<string>();
-      let family: string | undefined;
       for (const attr of property.attributes) {
+        const slot = FONT_SLOTS.find((name) => name === attr.localName);
         if (
           attr.namespaceUri !== namespace ||
-          !['ascii', 'hAnsi', 'eastAsia', 'cs'].includes(attr.localName) ||
-          slots.has(attr.localName)
-        )
-          return false;
-        slots.add(attr.localName);
-        if (
+          slot === undefined ||
+          fonts.has(slot) ||
           attr.value.length === 0 ||
-          attr.value.trim() !== attr.value ||
-          (family !== undefined && family !== attr.value)
+          attr.value.trim() !== attr.value
         )
           return false;
-        family = attr.value;
+        fonts.set(slot, attr.value);
       }
-      if (family !== undefined) format.fontFamily = family;
     } else if (word && (property.localName === 'sz' || property.localName === 'szCs')) {
       const attribute = property.attributes[0];
       if (
@@ -88,6 +135,9 @@ function readRunProperties(child: OoxmlElement, word: boolean, format: MutableRu
       if (size !== undefined && size !== points) return false;
       size = points;
       if (property.localName === 'sz') format.fontSizePt = points;
+    } else if (word && property.localName === 'lang') {
+      // Language takes no part in equation layout. The source keeps it on save.
+      if (!equationLanguagePropertyIsSupported(property)) return false;
     } else if (!word && property.localName === 'sty') {
       if (property.children.length !== 0 || property.attributes.length > 1) return false;
       const attribute = property.attributes[0];
@@ -144,18 +194,40 @@ export function equationRunFormat(run: OoxmlElement): EquationRunFormat | null {
 function readRunFormat(run: OoxmlElement): EquationRunFormat | null {
   if (run.attributes.length !== 0) return null;
   const format: MutableRunFormat = {};
+  const fonts = new Map<FontSlot, string>();
   const seen = new Set<string>();
+  let text = '';
   for (const child of run.children) {
     if (child.kind === 'textValue') return null;
-    if (element(child, MATH, 't')) continue;
+    if (element(child, MATH, 't')) {
+      for (const value of child.children) if (value.kind === 'textValue') text += value.value;
+      continue;
+    }
     const word = element(child, WML_NAMESPACE_URI, 'rPr');
     if (!word && !element(child, MATH, 'rPr')) return null;
     const namespace = word ? WML_NAMESPACE_URI : MATH;
     if (seen.has(namespace)) return null;
     seen.add(namespace);
-    if (!readRunProperties(child, word, format)) return null;
+    if (!readRunProperties(child, word, format, fonts)) return null;
   }
+  const face = runFace(fonts, text);
+  if (face === null) return null;
+  if (face !== undefined) format.fontFamily = face;
+  // A format keeps compact replacement refused, so a language is never written away. A run
+  // whose only other properties are default leaves the decision to the default reader.
+  if (Object.keys(format).length === 0 && runNamesLanguage(run)) return null;
   return Object.freeze(format);
+}
+
+function runNamesLanguage(run: OoxmlElement): boolean {
+  return run.children.some(
+    (child) =>
+      child.kind !== 'textValue' &&
+      element(child, WML_NAMESPACE_URI, 'rPr') &&
+      child.children.some(
+        (property) => property.kind !== 'textValue' && element(property, WML_NAMESPACE_URI, 'lang')
+      )
+  );
 }
 
 const TRACKED_CONTROL_ATTRIBUTES: ReadonlySet<string> = new Set(['id', 'author', 'date']);

@@ -77,6 +77,36 @@ test.each([
   expect(canonicalOoxmlFingerprint(read(saved))).toBe(before);
 });
 
+const slotFonts =
+  '<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="East Face" w:cs="Complex Face"/>';
+
+test.each([
+  ['', '1234', '1234', 'Arial', true],
+  ['<m:rPr><m:nor/></m:rPr>', ' if ', ' if ', 'Arial', false],
+  ['<m:rPr><m:sty m:val="b"/></m:rPr>', '1234', '𝟏𝟐𝟑𝟒', 'Cambria Math', false],
+] as const)(
+  'keeps the Latin face and size when other font slots name other faces (%s)',
+  (mathProperties, text, expected, family, italic) => {
+    const { part, projection } = project(
+      run(text, `${mathProperties}<w:rPr>${slotFonts}<w:sz w:val="36"/></w:rPr>`) + run('x')
+    );
+    const before = canonicalOoxmlFingerprint(part);
+    const nodes = texts(layoutEquation(projection, fixed, resolveRunStyle([])).geometry);
+    expect(nodes[0]).toMatchObject({ kind: 'text', text: expected, fontSizePt: 18 });
+    expect(nodes[0]?.runStyle).toMatchObject({ fontFamily: family, italic });
+    expect(nodes[1]).toMatchObject({ kind: 'text', text: '𝑥' });
+    expect(canonicalOoxmlFingerprint(part)).toBe(before);
+    const saved = serializeOoxmlPart(part);
+    expect(saved).toContain('w:eastAsia="East Face"');
+    expect(canonicalOoxmlFingerprint(read(saved))).toBe(before);
+  }
+);
+
+test('keeps the bounded fallback for a run whose text needs two authored faces', () => {
+  const { projection } = project(run('1中', `<w:rPr>${slotFonts}</w:rPr>`));
+  expect(projection?.expression).toMatchObject({ kind: 'fallback' });
+});
+
 test('keeps mathematical letters and symbols in the math face beside authored-face digits', () => {
   const { projection } = project(run('x12+α', face('Arial', '<w:b/>')));
   const geometry = layoutEquation(projection, fixed, resolveRunStyle([])).geometry;
@@ -110,17 +140,42 @@ test.each([
   expect(canonicalOoxmlFingerprint(part)).toBe(before);
 });
 
-test.each([
-  ['i', false, true],
-  ['b', true, false],
-  ['bi', true, true],
-] as const)('uses explicit math style %s for authored-face digits', (style, bold, italic) => {
-  const { projection } = project(
-    run('12', `<m:rPr><m:sty m:val="${style}"/></m:rPr>${face('Arial')}`)
-  );
+test('uses explicit math style i for authored-face digits', () => {
+  const { projection } = project(run('12', `<m:rPr><m:sty m:val="i"/></m:rPr>${face('Arial')}`));
   const [node] = texts(layoutEquation(projection, fixed, resolveRunStyle([])).geometry);
   expect(node?.text).toBe('12');
-  expect(node?.runStyle).toMatchObject({ fontFamily: 'Arial', bold, italic });
+  expect(node?.runStyle).toMatchObject({ fontFamily: 'Arial', bold: false, italic: true });
+});
+
+test.each(['b', 'bi'] as const)(
+  'keeps mathematical bold digits in the math face for math style %s',
+  (style) => {
+    const { projection } = project(
+      run('123', `<m:rPr><m:sty m:val="${style}"/></m:rPr>${face('Arial')}`)
+    );
+    const [node] = texts(layoutEquation(projection, fixed, resolveRunStyle([])).geometry);
+    expect(node?.text).toBe('𝟏𝟐𝟑');
+    expect(node?.runStyle).toMatchObject({
+      fontFamily: 'Cambria Math',
+      bold: false,
+      italic: false,
+    });
+  }
+);
+
+test.each([
+  ['b', '𝐱𝟏𝟐'],
+  ['bi', '𝒙𝟏𝟐'],
+] as const)('keeps a mixed run with math style %s in one math-face node', (style, expected) => {
+  const { part, projection } = project(
+    run('x12', `<m:rPr><m:sty m:val="${style}"/></m:rPr>${face('Arial', '<w:b/>')}`)
+  );
+  const before = canonicalOoxmlFingerprint(part);
+  const nodes = texts(layoutEquation(projection, fixed, resolveRunStyle([])).geometry);
+  expect(nodes.map((node) => [node.text, node.runStyle?.fontFamily])).toEqual([
+    [expected, 'Cambria Math'],
+  ]);
+  expect(canonicalOoxmlFingerprint(part)).toBe(before);
 });
 
 test.each(['Cambria Math', 'CAMBRIA MATH'])(
