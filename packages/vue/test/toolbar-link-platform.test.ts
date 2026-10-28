@@ -2,7 +2,7 @@ import './dom-setup.ts';
 
 import { afterEach, expect, test } from 'bun:test';
 import { createSSRApp, h, type App } from 'vue';
-import { renderToString } from '@vue/server-renderer';
+import { renderToString } from 'vue/server-renderer';
 import { DocxEditorRoot } from '../src/editor/DocxEditorRoot';
 import { DocxEditorViewport } from '../src/editor/DocxEditorViewport';
 import { DocxEditorContent } from '../src/editor/DocxEditorContent';
