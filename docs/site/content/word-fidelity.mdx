@@ -403,6 +403,8 @@ East Asian layout keeps punctuation, graphemes, and full-width number groups tog
 
 Justified lines compare space compression with the expansion needed for an earlier break. Hyphenated fragments and currency or math symbols participate in this fit calculation. Plain `REF` results can complete a word; changing `PAGEREF` and `NOTEREF` results cannot.
 
+In compatibility mode 15 and later, left-to-right justified text beside floating objects compresses spaces within each passage independently. Spaces never lend capacity across the object. Each passage keeps its own text and caret geometry. Right-to-left and mixed-direction passages retain their existing line-break behavior.
+
 Modern Latin justification includes terminal footnote and endnote citations when testing whether a complete word fits. Citations keep their formatting and model positions. Marks with reserved page-local widths retain their existing line-break behavior.
 
 East Asian font hints select the document's East Asian face for supported punctuation, symbols, Greek, and Cyrillic ranges. Combining marks and joined emoji keep their base character's slot across text runs. Explicit symbol fonts retain their selected face.
