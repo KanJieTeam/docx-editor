@@ -22,6 +22,12 @@ export interface CjkTypographySettings {
    * @internal
    */
   readonly eastAsianSpacing?: false;
+  /**
+   * A legacy compatibility mode (`lineEndPunctuationAtEveryAlignment`): line-end punctuation
+   * hangs at every paragraph alignment, and the paragraph kinsoku switch does not stop it.
+   * @internal
+   */
+  readonly legacyLineEndPunctuation?: true;
   /** Whitespace compression selected by `w:characterSpacingControl`. */
   readonly compression:
     | 'doNotCompress'
@@ -39,9 +45,11 @@ export interface CjkParagraphTypography {
   /** Authored `w:overflowPunct` switch. */
   readonly overflowPunctuation: boolean;
   /**
-   * Line-end punctuation may hang past the margin: the authored switch is on, the paragraph is
-   * justified, and the document defaults name an East Asian face (`sourceEastAsianFont`).
-   * Absent (no paragraph properties resolved) means the authored switch decides.
+   * Line-end punctuation may hang past the margin: the authored switch is on, and either the
+   * paragraph is distributed, or the document defaults name an East Asian face
+   * (`sourceEastAsianFont`) and the paragraph is justified. Legacy compatibility modes hang at
+   * every alignment then (`legacyLineEndPunctuation`). Absent (no paragraph properties
+   * resolved) means the authored switch decides.
    */
   readonly hangingPunctuation?: boolean;
   readonly characterWrap: boolean;
@@ -56,6 +64,14 @@ export interface CjkParagraphTypography {
    * @internal
    */
   readonly automaticSpacingNeedsEastAsianFont?: true;
+  /**
+   * Kana may compress to pull a line-start-prohibited character onto a full line
+   * (`compressPunctuationAndJapaneseKana`): the paragraph is distributed, or the document
+   * defaults name an East Asian face and the paragraph is justified, or any alignment in a
+   * legacy compatibility mode.
+   * @internal
+   */
+  readonly kanaLineFit?: true;
 }
 
 export const DEFAULT_CJK_TYPOGRAPHY: CjkParagraphTypography = Object.freeze({
@@ -144,19 +160,36 @@ export function resolveCjkTypography(
   // runs that author an East Asian font.
   const spacingOff = settings?.eastAsianSpacing === false;
   if (spacingOff && !distributed) autoSpaceDN = autoSpaceDE = false;
-  // Punctuation hangs only in justified paragraphs, full-width and Latin alike. Left, centered,
-  // and right-aligned lines keep line-end punctuation inside the margin. A document whose
-  // defaults name no East Asian face hangs no punctuation at all.
+  // Punctuation hangs in justified paragraphs, full-width and Latin alike. Left, centered, and
+  // right-aligned lines keep line-end punctuation inside the margin, except in legacy modes. A
+  // document whose defaults name no East Asian face hangs punctuation in distributed
+  // paragraphs only.
+  const eastAsianDefaults = settings?.sourceEastAsianFont === true;
+  const hangingAlignment =
+    justified || settings?.legacyLineEndPunctuation === true ? eastAsianDefaults : false;
   return {
     settings,
     kinsoku,
     overflowPunctuation,
-    hangingPunctuation: overflowPunctuation && justified && settings?.sourceEastAsianFont === true,
+    hangingPunctuation:
+      overflowPunctuation && settings !== undefined && (distributed || hangingAlignment),
     characterWrap,
     autoSpaceDN,
     autoSpaceDE,
     ...(spacingOff && distributed ? { automaticSpacingNeedsEastAsianFont: true as const } : {}),
+    ...(settings?.compression === 'compressPunctuationAndJapaneseKana' &&
+    (distributed || hangingAlignment)
+      ? { kanaLineFit: true as const }
+      : {}),
   };
+}
+
+/**
+ * Whether a Korean paragraph-final mark other than `。` or `、` may hang. A legacy compatibility
+ * mode that compresses punctuation starts the next line with it instead.
+ */
+export function koreanFinalMarkHangs(settings: CjkTypographySettings | undefined): boolean {
+  return !(settings?.legacyLineEndPunctuation === true && settings.compression !== 'doNotCompress');
 }
 
 export function eastAsianLanguage(props: readonly OoxmlProperty[]): string | undefined {
