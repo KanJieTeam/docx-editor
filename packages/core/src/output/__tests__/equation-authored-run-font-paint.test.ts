@@ -35,6 +35,7 @@ test('paints authored digit faces and inherited normal text without restyling ma
   const container = document.createElement('div');
   paintSemanticLayout(container, layout, { scale: 1 });
   const nodes = Array.from(container.querySelectorAll<HTMLElement>('.docx-equation-text'));
+  // The spaced `+` and the letter after it share a face, so one span draws both.
   expect(nodes.map((node) => node.textContent)).toEqual(['𝑥', '12', '+𝛼', 'normal']);
   expect(nodes[0]?.style.fontFamily).toContain('Cambria Math');
   expect(nodes[0]?.style.fontStyle).toBe('normal');
