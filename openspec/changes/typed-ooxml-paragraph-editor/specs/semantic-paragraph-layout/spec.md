@@ -468,7 +468,7 @@ Row and column insertion, deletion, and column resize commits SHALL publish `flo
 
 ### Requirement: Passage-local justified space compression
 
-For modern left-to-right justified text beside floating objects, the layout engine SHALL test complete words against the current passage. It SHALL apply the existing compression floor and compression-versus-expansion rule to that passage's eligible spaces. It SHALL NOT borrow space capacity across a floating object. Right-to-left and mixed-direction passages SHALL retain their existing behavior.
+For modern left-to-right justified text beside floating objects, the layout engine SHALL test complete words against the current passage. It SHALL apply the existing compression floor and compression-versus-expansion rule to that passage's eligible spaces. It SHALL NOT borrow space capacity across a floating object. A left-to-right paragraph that contains right-to-left runs SHALL compress in the same way. Right-to-left paragraphs SHALL retain their existing behavior.
 
 #### Scenario: A narrow passage keeps one more word
 
@@ -485,6 +485,14 @@ For modern left-to-right justified text beside floating objects, the layout engi
 - **AND** an earlier passage has spare compression capacity
 - **WHEN** the layout engine tests the later passage's next word
 - **THEN** that word wraps instead of borrowing capacity across the floating object
+
+#### Scenario: A right-to-left run keeps compression in its left-to-right paragraph
+
+- **GIVEN** a justified left-to-right paragraph beside a floating object in compatibility mode 15 or later
+- **AND** the paragraph contains a right-to-left run
+- **WHEN** a passage can keep one more word by compressing its spaces
+- **THEN** the passage keeps that word, also when the right-to-left run is on that line
+- **AND** a space after a right-to-left word that ends a passage stays at the end of that passage, so the next passage starts at the edge of the floating object
 
 #### Scenario: A compressed passage ends at the floating object
 
@@ -808,11 +816,12 @@ Semantic layout SHALL place a supported terminal exact row's simple bottom rule 
 #### Scenario: A repeated header stays above a splittable row whose first line does not fit
 
 - **WHEN** compatibility mode is 14 or earlier, or absent
-- **AND** the next row on a continuation page can split, holds only paragraphs, and has no vertical merge
-- **AND** the first line of one of its cells does not fit below the repeated header rows
+- **AND** the next row on a continuation page can split and has no vertical merge
+- **AND** the first line of one of its cells, or the first row of a nested table that opens a cell, does not fit below the repeated header rows
 - **THEN** the header rows repeat, and the row stays whole below them and runs past the bottom margin, or past the bottom edge of the page
+- **AND** this also holds when the row is taller than a page
 - **AND** the content after the row starts on the next page
-- **AND** in compatibility mode 15 and later the repeat is omitted and the row starts the page
+- **AND** in compatibility mode 15 and later the repeat is omitted, and the row starts the page with every cell
 
 #### Scenario: A tall row splits before mode 15 outside the text-only case
 
