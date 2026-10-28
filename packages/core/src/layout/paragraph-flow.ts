@@ -22,6 +22,7 @@ import { paragraphSpanMetadata } from './paragraph-span-metadata.ts';
 import {
   endsAtHyphenBreak,
   fitsWithSpaceShrink,
+  createShrinkProbe,
   opensWithHangingSpace,
   lineEndAt,
 } from './paragraph-space-shrink.ts';
@@ -529,6 +530,7 @@ export function breakParagraph(
     initialMetrics: measurer.lineMetrics(lineStartStyle),
   });
   const availableIntervals = exclusionProbe.intervals;
+  const probeX = createShrinkProbe(activeExclusionZones, availableIntervals, pieces, paragraphRtl);
 
   /**
    * First usable x at or after the pen, with the first-line indent preserved.
@@ -1429,14 +1431,10 @@ export function breakParagraph(
       const borrowsSpace =
         overflows &&
         flow?.justifySpaceShrink === true &&
-        // A word split across source runs overflows on a later piece than the one
-        // that opened it, where the open decision is `continues`. The shrink test
-        // still applies to the whole word: `wordStartSpan` says where it began.
+        // A word split across runs still borrows from the span where the word began.
         (opensWord || (openDecision === 'continues' && wordStartSpan > 0)) &&
         // Text after a right, center or decimal tab is placed against its stop, not justified.
         alignedTabRight === 0 &&
-        !flow.pageExclusionZones?.length &&
-        sameParagraphAnchorStarts.length === 0 &&
         line.drawings.length === 0 &&
         (placeableSuffixes[pieceIndex]![boundary] === 1 || endsParagraph(pieceIndex, boundary)) &&
         fitsWithSpaceShrink(
@@ -1453,7 +1451,8 @@ export function breakParagraph(
             (boundary < piece.text.length
               ? !layoutOwned && (piece.text[boundary] === ' ' || endsAtHyphenBreak(candidate))
               : opensWithHangingSpace(pieces[pieceIndex + 1])),
-          followingWidth ?? 0
+          followingWidth ?? 0,
+          probeX(lineOrigin() + line.width)
         );
       // Leading tabs define the opening word's remaining measure. Chop the word
       // there instead of closing a line that contains only those tabs.

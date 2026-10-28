@@ -335,6 +335,26 @@ Row and column insertion, deletion, and column resize commits SHALL publish `flo
 - **WHEN** a middle-table column resize converges without repagination before the following page
 - **THEN** preceding and following unchanged pages retain stable identities
 
+### Requirement: Passage-local justified space compression
+
+For modern left-to-right justified text beside floating objects, the layout engine SHALL test complete words against the current passage. It SHALL apply the existing compression floor and compression-versus-expansion rule to that passage's eligible spaces. It SHALL NOT borrow space capacity across a floating object. Right-to-left and mixed-direction passages SHALL retain their existing behavior.
+
+#### Scenario: A narrow passage keeps one more word
+
+- **GIVEN** a 66 pt passage beside a square-wrapped picture and words whose natural widths total 68 pt
+- **AND** its two 4 pt spaces can each compress by 1 pt under the existing admission rule
+- **WHEN** the layout engine breaks the justified paragraph in compatibility mode 15 or later
+- **THEN** all three words remain in that passage
+- **AND** their published span and caret geometry fits within the passage
+- **AND** source text, formatting, and image parts remain unchanged
+
+#### Scenario: Earlier passages cannot subsidize a later passage
+
+- **GIVEN** a later passage whose words exceed its own eligible compression budget
+- **AND** an earlier passage has spare compression capacity
+- **WHEN** the layout engine tests the later passage's next word
+- **THEN** that word wraps instead of borrowing capacity across the floating object
+
 ### Requirement: Automatic inter-script spacing
 
 Semantic layout SHALL resolve `w:autoSpaceDE` and `w:autoSpaceDN` through the paragraph cascade, with enabled defaults. It SHALL add bounded layout advances at supported East Asian and Latin-letter or ASCII-digit boundaries. It SHALL preserve source text and canonical UTF-16 offsets. Line fitting, paint, caret geometry, and anchor prediction SHALL use the same advances. Authored character spacing and unsupported run forms SHALL retain their existing behavior.
