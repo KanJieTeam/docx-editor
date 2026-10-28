@@ -1499,9 +1499,10 @@ export function breakParagraph(
         // The pen of an empty line may already stand in a later passage: the test above is
         // the room ahead of it, not the line's capacity from its origin.
         if (!ensurePlacementWidth(fitWidth)) continue;
-      } else if (borrowsSpace && endsParagraph(pieceIndex, boundary)) {
+      } else if (borrowsSpace) {
+        line.borrowedSpace = true;
         // Only this admission may compress the paragraph's last line when it is aligned.
-        line.spaceShrink = true;
+        if (endsParagraph(pieceIndex, boundary)) line.spaceShrink = true;
       }
       // Overflow can close the previous line after the clearance check above.
       // Recheck the newly opened line before placing this candidate, including

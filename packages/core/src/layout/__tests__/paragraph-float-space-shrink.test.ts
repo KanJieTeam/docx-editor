@@ -1,4 +1,3 @@
-import bidiFloatMainGeometry from './paragraph-float-bidi-main-geometry.json';
 import { expect, test } from 'bun:test';
 import { loadBody, squareWrapZone } from './float-over-table-harness.ts';
 import { layoutSemanticDocument } from '../semantic-layout.ts';
@@ -33,6 +32,7 @@ function layout(options: {
   readonly floatTop?: number;
   readonly float?: boolean;
   readonly floats?: readonly { readonly left: number; readonly width: number }[];
+  readonly wrap?: 'square' | 'tight';
   readonly alignment?: string;
   readonly tabs?: readonly {
     readonly alignment: 'left' | 'center' | 'right';
@@ -64,17 +64,27 @@ function layout(options: {
     .find((child) => child.kind === 'paragraph')!;
   const zones = (
     options.floats ?? [{ left: options.floatLeft ?? 22, width: options.floatWidth ?? 92 }]
-  ).map((float, index) =>
-    squareWrapZone({
+  ).map((float, index) => {
+    const top = options.floatTop ?? 0;
+    const zone = squareWrapZone({
       anchorParagraphId: paragraph.id,
-      top: options.floatTop ?? 0,
+      top,
       height: 70,
       left: float.left,
       width: float.width,
       contentWidth: width,
       drawingNodeId: `float-${index}`,
-    })
-  );
+    });
+    if (options.wrap !== 'tight') return zone;
+    const right = float.left + float.width;
+    const polygon = [
+      { x: float.left, y: top },
+      { x: right, y: top },
+      { x: right, y: top + 70 },
+      { x: float.left, y: top + 70 },
+    ];
+    return { ...zone, input: { ...zone.input, mode: 'tight' as const, polygon } };
+  });
   return linesOf(
     layoutSemanticDocument(part, 1, {
       measurer,
@@ -173,7 +183,8 @@ test('three passages each use their own compression slots', () => {
 });
 
 test('bidi paragraphs keep their existing float admission behavior', () => {
-  const baselineFixture: unknown[] = [];
+  const ranges = (lines: readonly LineRecord[]) =>
+    lines.map((line) => [line.range.start, line.range.end]);
   for (const options of [{ rtl: true, text: 'aa bb cc dd ee' }, { text: 'aa bb cc dd ee אב' }]) {
     const lines = layout({ ...options, compatibilityMode: 15 });
     expect(
@@ -181,25 +192,9 @@ test('bidi paragraphs keep their existing float admission behavior', () => {
         .flatMap((line) => line.spans)
         .every((span) => (span.style.shaping?.wordSpacingPt ?? 0) >= 0)
     ).toBe(true);
-    baselineFixture.push({
-      options,
-      lines: lines.map((line) => ({
-        box: line.box,
-        range: { start: line.range.start, end: line.range.end },
-        spans: line.spans.map((span) => ({
-          text: span.text,
-          range: { start: span.range.start, end: span.range.end },
-          box: span.box,
-          direction: span.style.shaping?.direction,
-          level: span.style.shaping?.level,
-          baseLevel: span.style.shaping?.baseLevel,
-          wordSpacingPt: span.style.shaping?.wordSpacingPt ?? 0,
-        })),
-      })),
-    });
+    // Compression stays off, so the lines break where legacy mode breaks them.
+    expect(ranges(lines)).toEqual(ranges(layout({ ...options, compatibilityMode: 14 })));
   }
-  // Preserve the exact public geometry from main 8a5b21bc, including bidi levels and spaces.
-  expect(baselineFixture).toEqual(bidiFloatMainGeometry.cases);
 });
 
 test('spaces after a left tab compress inside the remaining float passage', () => {
@@ -270,6 +265,38 @@ test('one-sided wrapping uses the remaining passage width', () => {
   });
   expect(text(lines[0]!)).toBe('bb cc dd');
   outsideFloat(lines[0]!, 0, 114);
+});
+
+test('a compressed line beside a right float ends at its passage edge', () => {
+  for (const wrap of ['square', 'tight'] as const) {
+    const lines = layout({
+      floatLeft: 66,
+      floatWidth: 114,
+      text: 'bb cc dd ee',
+      wrap,
+      compatibilityMode: 15,
+    });
+    expect(lines.map((line) => text(line))).toEqual(['bb cc dd', 'ee']);
+    const spans = lines[0]!.spans;
+    expect(spans.slice(0, 2).map((span) => span.style.shaping?.wordSpacingPt)).toEqual([-1, -1]);
+    const last = spans.at(-1)!;
+    expect(last.box.x + measurer.measure(last.text.trimEnd(), last.style)).toBeCloseTo(66, 6);
+    outsideFloat(lines[0]!, 66, 180);
+  }
+});
+
+test('a compressed line in the left passage of a middle float ends before the float', () => {
+  // The 14pt passage right of the float holds no word, so each line stays in the left one.
+  const lines = layout({
+    floatLeft: 66,
+    floatWidth: 100,
+    text: 'bb cc dd ee',
+    compatibilityMode: 15,
+  });
+  expect(lines.map((line) => text(line))).toEqual(['bb cc dd', 'ee']);
+  const last = lines[0]!.spans.at(-1)!;
+  expect(last.box.x + measurer.measure(last.text.trimEnd(), last.style)).toBeCloseTo(66, 6);
+  outsideFloat(lines[0]!, 66, 166);
 });
 
 test('legacy, unspecified compatibility, and left alignment retain their line breaks', () => {

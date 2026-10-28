@@ -486,6 +486,14 @@ For modern left-to-right justified text beside floating objects, the layout engi
 - **WHEN** the layout engine tests the later passage's next word
 - **THEN** that word wraps instead of borrowing capacity across the floating object
 
+#### Scenario: A compressed passage ends at the floating object
+
+- **GIVEN** a passage that ends at the near edge of a square- or tight-wrapped floating object
+- **AND** a line in that passage keeps its last word by compressing its spaces
+- **WHEN** the layout engine aligns the justified line
+- **THEN** the line's last word ends at the passage edge
+- **AND** no text of that line overlaps the floating object
+
 ### Requirement: Automatic inter-script spacing
 
 Semantic layout SHALL resolve `w:autoSpaceDE` and `w:autoSpaceDN` through the paragraph cascade, with enabled defaults. It SHALL add bounded layout advances at supported East Asian and Latin-letter or ASCII-digit boundaries. It SHALL preserve source text and canonical UTF-16 offsets. Line fitting, paint, caret geometry, and anchor prediction SHALL use the same advances. Authored character spacing and unsupported run forms SHALL retain their existing behavior.
