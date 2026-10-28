@@ -1008,7 +1008,10 @@
     "suggestingNeedsAuthor": "Vorschläge benötigen einen Autor. Legen Sie den Autor in der Editorkonfiguration fest.",
     "pictureSelected": "Ein Bild ist ausgewählt. Setzen Sie den Cursor in den Text, um ein Bild einzufügen.",
     "chartDrawing": "Dies ist ein Diagramm. Sie können es löschen, aber nicht wie ein Bild bearbeiten.",
-    "chartClipboard": "Die Auswahl enthält ein Diagramm. Diagramme können nicht kopiert, ausgeschnitten oder eingefügt werden."
+    "chartClipboard": "Die Auswahl enthält ein Diagramm. Diagramme können nicht kopiert, ausgeschnitten oder eingefügt werden.",
+    "nothingToUndo": null,
+    "nothingToRedo": null,
+    "outermostLevel": null
   },
   "equationPopup": {
     "apply": "Übernehmen",

@@ -59,7 +59,10 @@
     "lockedSectionBreak": "يحتوي عنصر تحكم محتوى مقفل أو مرتبط على المقطع التالي، لذا لا يمكن لهذا الفاصل تغييره.",
     "lockedContentBreak": "يقفل عنصر تحكم محتوى هذا النص، لذا لا يمكنك إدراج فاصل مقطع هنا.",
     "nothingToCopyFormatting": "حدد نصًا لنسخ تنسيقه",
-    "nothingToPaint": "حدد نصًا لتطبيق التنسيق عليه"
+    "nothingToPaint": "حدد نصًا لتطبيق التنسيق عليه",
+    "nothingToUndo": null,
+    "nothingToRedo": null,
+    "outermostLevel": null
   },
   "toolbar": {
     "ariaLabel": "شريط أدوات التنسيق",

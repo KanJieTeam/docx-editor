@@ -1,0 +1,15 @@
+{
+  "impact": "no-impact",
+  "fields": [],
+  "before": "Three disabled command reasons fall back to raw engine strings in every locale.",
+  "after": "The existing adapter translation path resolves three additional catalogue keys.",
+  "reason": "Only host-local UI labels change. Canonical documents, engine refusal strings, command admission, history, operations, persistence, and collaboration formats remain unchanged.",
+  "tests": [
+    "packages/i18n/src/disabled-history-indent.test.ts",
+    "packages/react/test/disabled-history-indent.test.tsx",
+    "packages/vue/test/disabled-history-indent.test.ts",
+    "packages/pro/src/collaboration/__tests__/document-disabled-reason-locales.test.tsx"
+  ],
+  "changeset": "disabled-history-indent-labels",
+  "migration": null
+}

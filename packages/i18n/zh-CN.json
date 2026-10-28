@@ -1008,7 +1008,10 @@
     "suggestingNeedsAuthor": "建议模式需要作者。请在编辑器配置中设置作者。",
     "pictureSelected": "已选中一张图片。请将光标放在文本中以插入图片。",
     "chartDrawing": "这是一个图表。可以删除它，但不能像图片一样编辑它。",
-    "chartClipboard": "所选内容包含图表。无法复制、剪切或粘贴图表。"
+    "chartClipboard": "所选内容包含图表。无法复制、剪切或粘贴图表。",
+    "nothingToUndo": null,
+    "nothingToRedo": null,
+    "outermostLevel": null
   },
   "equationPopup": {
     "apply": "应用",

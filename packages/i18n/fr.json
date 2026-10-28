@@ -1008,7 +1008,10 @@
     "suggestingNeedsAuthor": "Les suggestions nécessitent un auteur. Définissez l’auteur dans la configuration de l’éditeur.",
     "pictureSelected": "Une image est sélectionnée. Placez le curseur dans le texte pour insérer une image.",
     "chartDrawing": "Ceci est un graphique. Vous pouvez le supprimer, mais pas le modifier comme une image.",
-    "chartClipboard": "La sélection contient un graphique. Les graphiques ne peuvent pas être copiés, coupés ni collés."
+    "chartClipboard": "La sélection contient un graphique. Les graphiques ne peuvent pas être copiés, coupés ni collés.",
+    "nothingToUndo": null,
+    "nothingToRedo": null,
+    "outermostLevel": null
   },
   "equationPopup": {
     "apply": "Appliquer",

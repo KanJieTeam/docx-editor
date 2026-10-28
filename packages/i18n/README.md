@@ -65,6 +65,10 @@ const myLocale = {
 
 Missing or `null` keys keep the inherited catalog value. Without an outer `LocaleProvider`, they fall back to English.
 
+## Disabled controls
+
+Disabled Undo, Redo, and Decrease indent controls use catalog labels. Override `disabledReason.nothingToUndo`, `disabledReason.nothingToRedo`, and `disabledReason.outermostLevel` in your host catalog. Missing or `null` entries keep the inherited catalog value, then fall back to English. Engine refusal strings remain unchanged. Unknown diagnostics keep their exact fallback values.
+
 ## Right-to-left interfaces
 
 The Arabic (`ar`) and Hebrew (`he`) catalogs declare `_dir: 'rtl'`. Passing either catalog through `i18n` mirrors editor controls in React and Vue. Interface direction does not change the document's paragraph direction.

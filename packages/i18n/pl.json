@@ -1008,7 +1008,10 @@
     "suggestingNeedsAuthor": "Sugerowanie wymaga autora. Ustaw autora w konfiguracji edytora.",
     "pictureSelected": "Zaznaczono obraz. Umieść kursor w tekście, aby wstawić obraz.",
     "chartDrawing": "To jest wykres. Możesz go usunąć, ale nie możesz edytować go jak obrazu.",
-    "chartClipboard": "Zaznaczenie zawiera wykres. Wykresów nie można kopiować, wycinać ani wklejać."
+    "chartClipboard": "Zaznaczenie zawiera wykres. Wykresów nie można kopiować, wycinać ani wklejać.",
+    "nothingToUndo": null,
+    "nothingToRedo": null,
+    "outermostLevel": null
   },
   "equationPopup": {
     "apply": "Zastosuj",
