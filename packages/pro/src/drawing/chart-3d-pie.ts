@@ -3,25 +3,26 @@ Copyright (c) 2026 EigenPal, Inc. All rights reserved.
 Licensed under the EigenPal Pro Evaluation License 1.0 — see packages/pro/LICENSE.md.
 Production use requires a commercial agreement: licensing@eigenpal.com
 */
-// 3-D pie plots: the pie as a disc a quarter of its radius thick, tilted by rotX and seen in
-// perspective, its slices clockwise from rotY. Tops keep the slice colour; the rim darkens
-// towards the right. The disc is scaled to fit the plot area.
+// 3-D pie plots: the pie as a disc a fifth of its radius thick, tilted by rotX less a share for
+// perspective and seen square on, its slices clockwise from rotY. Tops keep the slice colour; the rim darkens
+// towards the right. The disc is scaled to a share of the plot area, a little above its middle.
 
 import { categoryLabel } from './chart-number-format.ts';
-import { CHART_EYE, FaceList, fitProjection, readView3D, shade, type Vec3 } from './chart-3d.ts';
+import { FaceList, fitProjection, readView3D, shade, type Vec3 } from './chart-3d.ts';
 import type { Box } from './chart-axes.ts';
-import { dataLabelFor, dataLabelText, elementText } from './chart-labels.ts';
+import { dataLabelFor, elementText } from './chart-labels.ts';
 import { childVal, type ChartModel, type ChartPlot } from './chart-model.ts';
 import type { PieContext } from './chart-pie.ts';
 import { seriesLook, variesByPoint } from './chart-series.ts';
-import { lineHeight, textBlock } from './chart-text.ts';
+import { dataLabelBlock, keepInChart, movedLabel } from './chart-data-label.ts';
 
 /** World radius; the projection scales it to the plot. */
 const R = 100;
 /** Disc thickness, as a share of the radius. */
-const THICKNESS = 0.24;
-/** Eye distance at perspective 30, as a multiple of the radius. */
-const PIE_EYE = 5;
+const THICKNESS = 0.196;
+/** The tilt shown is rotX times the cosine of this many degrees per perspective unit. */
+const PERSPECTIVE_FLATTEN = 0.46;
+const MAX_PERSPECTIVE = 80;
 /** Degrees per rim segment. */
 const STEP = 3;
 
@@ -43,6 +44,32 @@ function rimShade(degrees: number): number {
   return Math.min(0.9, Math.max(0.3, value));
 }
 
+/** An automatic plot area keeps this share of the chart's size clear on each side. */
+const AUTO_PLOT_INSET = 1 / 16;
+/** The disc fills this share of the plot's width or height, whichever binds first. */
+const DISC_WIDTH = 0.93;
+const DISC_HEIGHT = 0.92;
+/** The disc's middle sits this far down the plot. */
+const DISC_MIDDLE = 0.47;
+
+/**
+ * The box the disc is fitted to: inside the plot area, which an automatic layout insets from
+ * the chart (`chart`) by a share of its size.
+ */
+function discBox(plot: Box, chart: Box | undefined): Box {
+  const insetX = chart ? (chart.r - chart.l) * AUTO_PLOT_INSET : 0;
+  const insetY = chart ? (chart.b - chart.t) * AUTO_PLOT_INSET : 0;
+  const l = plot.l + insetX;
+  const r = Math.max(l + 1, plot.r - insetX);
+  const t = plot.t + insetY;
+  const b = Math.max(t + 1, plot.b - insetY);
+  const halfW = ((r - l) * DISC_WIDTH) / 2;
+  const halfH = ((b - t) * DISC_HEIGHT) / 2;
+  const cx = (l + r) / 2;
+  const cy = t + (b - t) * DISC_MIDDLE;
+  return { l: cx - halfW, r: cx + halfW, t: cy - halfH, b: cy + halfH };
+}
+
 /** Paint a 3-D pie plot inside `box`. */
 export function paintPie3D(plot: ChartPlot, box: Box, context: Pie3DContext): void {
   const series = plot.series[0];
@@ -51,9 +78,18 @@ export function paintPie3D(plot: ChartPlot, box: Box, context: Pie3DContext): vo
     (sum, value) => sum + (value !== null && value > 0 ? value : 0),
     0
   );
+  if (!Number.isFinite(total)) {
+    context.scene.ok = false;
+    return;
+  }
   if (!(total > 0)) return;
-  const view = { ...readView3D(context.model, 'pie'), rotY: 0, rightAngles: false };
-  const start = readView3D(context.model, 'pie').rotY;
+  const authored = readView3D(context.model, 'pie');
+  // Perspective does not bend the disc; it lowers the tilt the disc is seen at.
+  // Measured up to perspective 80; a larger one is seen as 80, so the tilt never turns over.
+  const perspective = Math.min(authored.perspective, MAX_PERSPECTIVE);
+  const tilt = authored.rotX * Math.cos((perspective * PERSPECTIVE_FLATTEN * Math.PI) / 180);
+  const view = { ...authored, rotX: tilt, rotY: 0, rightAngles: false, perspective: 0 };
+  const start = authored.rotY;
   const t = R * THICKNESS;
   const centre = { x: R, z: R };
   const count = series.values.length;
@@ -106,14 +142,11 @@ export function paintPie3D(plot: ChartPlot, box: Box, context: Pie3DContext): vo
       });
     }
   }
-  const bounds = context.bounds;
   const projection = fitProjection(
     view,
     { w: 2 * R, h: t, d: 2 * R },
-    box,
-    bounds
-      ? { eyePoints: CHART_EYE * Math.max(bounds.r - bounds.l, bounds.b - bounds.t), corners }
-      : { eyeBase: PIE_EYE * R, corners }
+    discBox(box, context.placed ? undefined : context.bounds),
+    { corners, exact: true }
   );
 
   const faces = new FaceList();
@@ -178,29 +211,51 @@ export function paintPie3D(plot: ChartPlot, box: Box, context: Pie3DContext): vo
     const spec = dataLabelFor(plot, series, slice.index);
     if (!spec) continue;
     const style = elementText(context.baseText, spec.txPr, context.look.resolveSchemeColor);
-    const text = dataLabelText(
+    const values = {
+      value: slice.value,
+      percent: slice.value / total,
+      category: categoryLabel(series, slice.index, context.date1904),
+      seriesName: series.name,
+      seriesFormat: series.formatCode,
+      date1904: context.date1904,
+      cell: series.labelRange?.[slice.index] ?? null,
+    };
+    const block = dataLabelBlock(
       spec,
-      slice.value,
-      slice.value / total,
-      categoryLabel(series, slice.index, context.date1904),
-      series.name,
-      series.formatCode,
-      context.date1904
+      values,
+      style,
+      context.bounds ? context.bounds.r - context.bounds.l : null,
+      context.look.resolveSchemeColor
     );
-    const block = textBlock(text, style);
-    const height = lineHeight(style) * block.lines;
+    const height = block.height;
     const middle = (slice.from + slice.to) / 2;
-    const outside = spec.position === 'outEnd';
-    const anchor = projection.point(at(slice, middle, outside ? R * 1.12 : R * 0.65, t));
-    const frame = block.width * 1.3 + style.sizePt * 2;
     const radians = (middle * Math.PI) / 180;
+    // An outside label touches the disc's outline with its nearest corner: the top rim on the
+    // far half, the bottom rim on the near half. A label moved by hand is moved from there.
+    const outside =
+      spec.position === 'outEnd' ||
+      (spec.moved !== null && !(spec.moved.xEdge && spec.moved.yEdge));
+    const rim = Math.cos(radians) >= 0 ? t : 0;
+    const anchor = projection.point(
+      outside ? at(slice, middle, R, rim) : at(slice, middle, R * 0.65, t)
+    );
+    const frame = block.frame;
     const shiftX = outside ? (block.width / 2) * Math.sin(radians) : 0;
     const shiftY = outside ? (-height / 2) * Math.cos(radians) : 0;
+    const natural = movedLabel(
+      spec.moved,
+      context.bounds,
+      anchor.x + shiftX,
+      anchor.y + shiftY,
+      block.width,
+      height
+    );
+    const centre = keepInChart(spec, natural, block.width, height, context.bounds);
     context.labels.push({
-      paragraphs: [[{ text, style }]],
+      paragraphs: block.paragraphs,
       align: 'ctr',
-      x: anchor.x + shiftX - frame / 2,
-      y: anchor.y + shiftY - height / 2,
+      x: centre.x - frame / 2,
+      y: centre.y - height / 2,
       width: frame,
       height,
       rotation: 0,

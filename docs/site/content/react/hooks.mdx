@@ -168,7 +168,7 @@ import { useEditorEvent } from '@docx-editor.dev/react';
 
 const lastSelection = useRef<unknown>(null);
 // `selectionChange` also fires for other state that moves without a document change, such
-// as the collaboration status, so compare the selection itself.
+// as the collaboration status or the page count, so compare the selection itself.
 useEditorEvent('selectionChange', (snapshot) => {
   if (snapshot.selection !== lastSelection.current) setPanelOpen(false);
   lastSelection.current = snapshot.selection;
@@ -648,7 +648,7 @@ Call the hook in a child component of the matching dialog. Each returns `values`
 | Hook | Draft type | Draft keys |
 | --- | --- | --- |
 | `usePageSetupDialog()` | `PageSetupDialogFields` | `pageWidth`, `pageHeight`, `orientation`, `marginTop`, `marginBottom`, `marginLeft`, `marginRight`, `scope` |
-| `useParagraphDialog()` | `UseParagraphDialogReturn['values']` | `alignment`, `indentLeft`, `indentRight`, `special`, `specialBy`, `spaceBefore`, `spaceAfter`, `lineRule`, `lineValue`, `contextualSpacing`, `keepNext`, `keepLines`, `widowControl`, `pageBreakBefore`, `tabStops`, `clearedAllTabStops` |
+| `useParagraphDialog()` | `UseParagraphDialogReturn['values']` | `direction`, `alignment`, `indentLeft`, `indentRight`, `special`, `specialBy`, `spaceBefore`, `spaceAfter`, `lineRule`, `lineValue`, `contextualSpacing`, `keepNext`, `keepLines`, `widowControl`, `pageBreakBefore`, `tabStops`, `clearedAllTabStops` |
 | `useTextFormFieldDialog()` | `TextFormFieldDialogFields` | `defaultText`, `type`, `maxLength`, `format`, `enabled` |
 | `useRevisionMarkupDialog()` | `ResolvedRevisionMarkup` | `insertions`, `deletions`, `changedLines`, `movedFrom`, `movedTo`, `cells`, `formatting`, `trackMoves`, `trackFormatting` |
 | `useWatermarkDialog()` | `WatermarkDialogFields` | `kind`, `imageData`, `imageName`, `scale`, `washout`, `text`, `fontFamily`, `fontSizePt`, `bold`, `italic`, `transparency`, `color`, `layout` |

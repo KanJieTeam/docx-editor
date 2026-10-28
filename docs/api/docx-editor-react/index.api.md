@@ -40,6 +40,7 @@ import { createDocumentRefresh } from '@docx-editor.dev/core/editor';
 import { createFontSource } from '@docx-editor.dev/core/editor';
 import { CSSProperties } from 'react';
 import { DEFAULT_FONT } from '@docx-editor.dev/core/editor';
+import { deferFonts } from '@docx-editor.dev/core/editor';
 import { defineFontResolver } from '@docx-editor.dev/core/editor';
 import { DocumentChange } from '@docx-editor.dev/core/contracts/editor';
 import { DocumentHandle } from '@docx-editor.dev/core/contracts/editor';
@@ -55,6 +56,9 @@ import { DocumentSearchOptions } from '@docx-editor.dev/core/editor';
 import { DocumentSource } from '@docx-editor.dev/core/contracts/editor';
 import { DocxDocument } from '@docx-editor.dev/core/contracts/types';
 import { DocxEditorInstance } from '@docx-editor.dev/core/editor';
+import { DrawingGraphicKind } from '@docx-editor.dev/core/store';
+import { DrawingSupport } from '@docx-editor.dev/core/store';
+import { DrawingSupportIssue } from '@docx-editor.dev/core/store';
 import { Editor } from '@docx-editor.dev/core/contracts/editor';
 import { EditorCommand } from '@docx-editor.dev/core/contracts/editor';
 import { EditorCommandExecute } from '@docx-editor.dev/core/editor';
@@ -486,6 +490,8 @@ export { DEFAULT_FONT }
 
 // @public
 export const DEFAULT_WATERMARK_PRESETS: readonly string[];
+
+export { deferFonts }
 
 export { defineFontResolver }
 
@@ -1796,6 +1802,7 @@ export interface DocxEditorUnsupportedElementProps extends UnsupportedElementRul
     children: (props: {
         element: UnsupportedElement;
     }) => ReactNode;
+    includePartial?: UnsupportedElementRule['includePartial'];
 }
 
 // @public
@@ -1875,6 +1882,12 @@ export type DocxFontsSource = DocxFontOrigin | readonly DocxFontOrigin[];
 
 // @public
 export type DocxSource = string | URL | Uint8Array | ArrayBuffer;
+
+export { DrawingGraphicKind }
+
+export { DrawingSupport }
+
+export { DrawingSupportIssue }
 
 export { Editor }
 

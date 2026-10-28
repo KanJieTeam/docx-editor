@@ -12,12 +12,16 @@ import { docx, paragraph } from './fixture.ts';
 const source = new Uint8Array(
   readFileSync(new URL('../../../examples/vite/public/sample.docx', import.meta.url))
 );
-test('the real editor demo exports strictly with notes, equations, checkboxes and international text', async () => {
+test('the editor demo exports with only packaged fonts and multilingual drawings', async () => {
   const original = source.slice();
-  const result = await exportPdf(source, { useSystemFonts: false });
+  const result = await exportPdf(source, {
+    useSystemFonts: false,
+    fidelityPolicy: 'best-effort',
+  });
   expect(source).toEqual(original);
-  expect(result.diagnostics).toEqual([]);
-  expect(result.pageCount).toBe(27);
+  // The demo names only fonts the packaged set serves, so nothing is substituted.
+  expect(result.diagnostics.map((entry) => entry.code)).toEqual([]);
+  expect(result.pageCount).toBe(30);
   const pdf = await getDocument({ data: result.bytes.slice(), useSystemFonts: false }).promise;
   try {
     const pages: string[] = [];
@@ -27,8 +31,7 @@ test('the real editor demo exports strictly with notes, equations, checkboxes an
     }
     const text = pages.join(' ').normalize('NFC');
     for (const required of [
-      'Georgia',
-      'Verdana',
+      'Calibri',
       'SMALL CAPS',
       '☐',
       '☑',
@@ -40,6 +43,11 @@ test('the real editor demo exports strictly with notes, equations, checkboxes an
       'Quadratic formula',
       'Standard footnote',
       'END OF COMPREHENSIVE',
+      'DrawingML diagrams and charts',
+      'Nested workflow',
+      'Delivery and capacity',
+      'Right to left text',
+      'Chinese Japanese and Korean text',
     ])
       expect(text).toContain(required);
     const equations = await (await pdf.getPage(18)).getTextContent();

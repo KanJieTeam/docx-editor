@@ -1,7 +1,7 @@
 import { stylesPartOf } from './ooxml-indexes.ts';
 import type { DrawingChartSummary } from './chart-summary.ts';
 import { projectLegacyVml, type LegacyGraphicProjection } from './legacy-vml-projection.ts';
-import { paintableMcFallback } from './mc-fallback-projection.ts';
+import { projectMcDrawingContent } from './mc-drawing-content.ts';
 // Bounded semantic projection for typed `w:drawing` nodes and run-level MC wrappers (task 3).
 //
 // Reads the canonical tree without mutating it. `mc:AlternateContent` branch selection is
@@ -11,7 +11,6 @@ import { sanitizeHref } from './sinks.ts';
 import { readDistances } from './drawing-distances.ts';
 import { readBlipEffects, type DrawingImageEffects } from './drawing-image-effects.ts';
 import { freezeVectorShapeComponent } from './drawing-vector-freeze.ts';
-import { wrapFootprintProjection } from './drawing-wrap-footprint.ts';
 import { hostsTextboxStory } from './group-textbox-projection.ts';
 import type { GroupTextboxProjection } from './group-textbox-projection.ts';
 import { HYPERLINK_RELATIONSHIP_TYPE, type RelationshipTargetResolver } from './hyperlink.ts';
@@ -56,11 +55,9 @@ import {
   type OoxmlPart,
 } from './ooxml-tree.ts';
 import { readEffectExtentFromNode, readExtent } from './drawing-anchor-extent.ts';
-import {
-  withAlternateContentGroupPictures,
-  type GroupPictureProjection,
-} from './drawing-group-picture.ts';
+import type { GroupPictureProjection } from './drawing-group-picture.ts';
 import { createDiagramPartResolver, type DiagramPartResolver } from './diagram-parts.ts';
+import { CHARTEX_MC_NAMESPACES } from './chartex-parts.ts';
 import { projectDrawingContent, withPictureClip } from './drawing-content-projection.ts';
 import { parseCropPercent } from './drawing-shape-readers.ts';
 import type { OoxmlPackage } from './ooxml-package.ts';
@@ -239,8 +236,14 @@ export interface DrawingProjection {
   readonly textboxStory: TextboxStoryProjection | null;
   /** Text box members of a `wpg:wgp` group, laid out read-only; absent when none has text. */
   readonly groupTextboxes?: readonly GroupTextboxProjection[];
-  /** The title and plot types of a chart that does not paint. */
+  /** The title and plot types of a chart: rendered, shown by its fallback, or a placeholder. */
   readonly chartSummary?: DrawingChartSummary;
+  /**
+   * The picture saved in the `mc:Fallback` of a chart's `mc:AlternateContent`, whichever
+   * branch the page shows, for an output that exports a chart as its saved picture. Absent
+   * when the fallback is not a picture that paints.
+   */
+  readonly chartFallbackPicture?: PictureProjection;
   /** Read-only preview of the supported native VML subset; the canonical XML is untouched. */
   readonly legacyGraphic?: LegacyGraphicProjection;
   /** Floating VML text art (a text watermark), fitted to the box by layout. */
@@ -322,6 +325,9 @@ export const DEFAULT_SUPPORTED_MC_REQUIRES: ReadonlySet<string> = new Set([
   'http://schemas.microsoft.com/office/word/2010/wordprocessingShape',
   'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup',
   'http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas',
+  // A chartex Choice is understood. It paints when a renderer supports the chart; otherwise
+  // the wrapper shows its fallback or the chart placeholder (`projectRunLevelMcDrawing`).
+  ...CHARTEX_MC_NAMESPACES,
 ]);
 
 const PIC_GRAPHIC_DATA_URI = 'http://schemas.openxmlformats.org/drawingml/2006/picture';
@@ -1535,7 +1541,7 @@ export function projectRunLevelMcDrawing(
     resolveSchemeColor?: ShapeSchemeColorResolver;
     resolveStyleMatrixReference?: ShapeStyleMatrixResolver;
     resolveDiagramParts?: DiagramPartResolver;
-    /** Answer an anchored payload that cannot paint with its wrap footprint (layout index). */
+    /** @deprecated Unsupported drawings retain visible placeholders; this option has no effect. */
     retainWrapFootprint?: boolean;
   }>
 ): DrawingProjection | null {
@@ -1545,28 +1551,24 @@ export function projectRunLevelMcDrawing(
     context.supportedMcRequires,
     context.limits
   );
-  if (atom.drawing === null) return null;
-  const projection = projectDrawing(atom.drawing, {
-    ...context,
-    namespaceScope: context.namespaceScope,
-  });
-  if (!projection) return null;
-  // An MC-wrapped payload the engine cannot draw (charts, diagrams, unsupported groups) shows
-  // its VML fallback when that paints. Otherwise it stays invisible: a placeholder card over
-  // letterhead furniture would be noisier than either branch. Text boxes carry a renderable
-  // story and pass through. Layout still reserves the extent or the anchor's wrap area.
-  if (
-    projection.picture === null &&
-    projection.vectorShape === null &&
-    projection.groupPicture === null &&
-    !hostsTextboxStory(projection)
-  ) {
-    const fallback = paintableMcFallback(wrapper, context.ownerPartName);
-    if (fallback) return fallback;
-    return context.retainWrapFootprint ? wrapFootprintProjection(projection) : null;
-  }
-  // Layout applies the same rule to a group picture whose resource fails.
-  return withAlternateContentGroupPictures(projection);
+  return projectMcDrawingContent(
+    wrapper,
+    context,
+    atom.drawing,
+    () => {
+      const state = createWalkState();
+      const selected = selectCompatibilityBranch(
+        wrapper,
+        state,
+        context.limits,
+        context.namespaceScope,
+        context.supportedMcRequires
+      );
+      return { branch: selected.branch, refused: state.refused };
+    },
+    projectDrawing,
+    (anchor) => readDocPrMetadata(anchor, true)
+  );
 }
 
 /**
@@ -1670,7 +1672,6 @@ function collectDrawingsInPartBounded(
         resolveSchemeColor: ctx.resolveSchemeColor,
         resolveStyleMatrixReference: ctx.resolveStyleMatrixReference,
         resolveDiagramParts: ctx.resolveDiagramParts,
-        retainWrapFootprint: atomIndex !== undefined,
       });
       if (projected) {
         if (!projected.footprintOnly) out.push(projected);

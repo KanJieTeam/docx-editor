@@ -9,6 +9,7 @@ import type { PaginatedSurfaceRuntimeOptions } from './surface-runtime-options.t
 import { endEditorPreview, registerEditorPreviewHost } from './editor-preview.ts';
 import { registerRefreshHost, type RefreshHost } from './document-refresh-host.ts';
 import { reviewChangesLocked } from './command-protection.ts';
+import { createPlacementKeeper, createReviewRanker } from './review-ranking.ts';
 import { resolvedFontMeasurement } from './resolved-font-measurement.ts';
 import { updateSurfaceMeasurement } from './surface-measurement.ts';
 import { createLiveFontResolution, liveFontFamilies } from './live-font-resolution.ts';
@@ -46,7 +47,6 @@ import { createDocumentProtectionCommands } from './docx-editor-protection.ts';
 import {
   anchorLineY,
   firstReviewRange,
-  reviewItemGeometry,
   reviewItemKey,
   type ReviewItem,
   type ReviewParagraphAnchor,
@@ -155,8 +155,8 @@ import {
   gateModeOf,
   isContentControlEditorCommand,
 } from './content-controls.ts';
+import { imageContextEqual } from './image-state-rules.ts';
 import {
-  imageContextEqual,
   selectedImageStateOf,
   canExecuteImageCommand as canExecuteImageCommandOf,
   canAsyncImageCommand as canAsyncImageCommandOf,
@@ -176,7 +176,16 @@ import {
   composeFontConfiguration,
   normalizeFontResolverResult,
   type FontConfigurationBase,
+  type FontConfigurationFragment,
 } from './font-composition.ts';
+import { splitDeferredAnswer } from '../layout/font-deferred.ts';
+import {
+  createLateFontArrival,
+  lateFacesInstalled,
+  lateFontOrigins,
+  type LateFontDelivery,
+} from './late-font-arrival.ts';
+import { initializeHarfBuzz } from '../layout/harfbuzz-shaper.ts';
 import { availableFontFamilies, configuredDefaultFontFamily } from './font-catalog.ts';
 import {
   documentFontResolutionRequest,
@@ -388,6 +397,16 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
   // What the last emitted tick reported, so a publish that moved nothing observable stays
   // quiet — and one that moved only surface state does not. See `surface-publish-signal.ts`.
   const publishSignal = createPublishSignal();
+  /** One page-count notice per task, after the render that moved it. */
+  let pagesNoticeQueued = false;
+  const pagesNotice = (): void => {
+    if (pagesNoticeQueued) return;
+    pagesNoticeQueued = true;
+    globalThis.queueMicrotask(() => {
+      pagesNoticeQueued = false;
+      if (!destroyed) emitSelectionChange();
+    });
+  };
   /** The revision the last surface publish showed; see the idle anchor warm-up. */
   let lastPublishedRevision: number | undefined;
   const views = createEditorViews({
@@ -436,18 +455,31 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
           liveFontFamilies(session, caret, configuredDefaultFontFamily(fontConfiguration())),
       };
     },
-    async (families) => {
+    async (families, late?: LateFontDelivery) => {
       const target = preparedFontSession ? { session: preparedFontSession } : surface;
-      if (target) await resolveDocumentFonts(loadSeq, target, families);
+      lateFonts.settle(late); // quietly; every install exit announces below, refused or thrown
+      try {
+        if (target) await resolveDocumentFonts(loadSeq, target, families, late?.full);
+      } finally {
+        if (late && !destroyed) (bump(), emitSelectionChange());
+      }
     }
   );
   let fontsResolving = false;
+  const lateFonts = createLateFontArrival({
+    deliver: (generation, delivery) => liveFonts.deliver(generation, delivery),
+    changed: () => (bump(), emitSelectionChange()),
+    report: (cause) => reportFontError(toEditorFontError(cause)),
+  });
   /**
    * Local-resolution probe for the compatibility notice, created against the attached
    * container's document and dropped with it — a probe answers for ONE platform's font
    * set, and headless (no container) honestly reports nothing substituted.
    */
   let localFontProbe: ((family: string) => boolean) | null = null;
+  const documentFontsNow = () => surface?.session.documentFonts() ?? [];
+  // Unfiltered until an on-demand answer says what is served; installed-only after that.
+  const listable = (f: string) => (!!configuredFonts && !fontConfiguration()) || probeLocalFont(f);
   const probeLocalFont = (family: string): boolean => {
     if (!localFontProbe) {
       localFontProbe = createLocalFontProbe(
@@ -473,7 +505,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
    * combines admitted document aliases with platform and metric-twin checks.
    */
   const deriveFontSubstitutions = (): readonly string[] => {
-    if (!surface || fontsResolving) return EMPTY_FONT_SUBSTITUTIONS;
+    if (!surface || fontsResolving || lateFonts.pending()) return EMPTY_FONT_SUBSTITUTIONS;
     return detectFontSubstitutions(
       surface.session.renderedFontFamilies(),
       fontFamilyCovered,
@@ -740,8 +772,12 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         // The caret is not the only observable thing that moves: an armed typing format, an
         // open furniture story, how a drawing came to be selected and the format painter's
         // arming all move without it, and each has no other channel to a host.
-        if (!reviewVisibilityMoved && !publishSignal.moved(state, surface)) return;
-        emitSelectionChange();
+        const moved = publishSignal.moved(state, surface);
+        if (!reviewVisibilityMoved && moved === 'nothing') return;
+        // Only the page count: a background layout, still inside its render. Heard after it,
+        // so a host reading the snapshot cannot commit buffered typing in the middle of one.
+        if (!reviewVisibilityMoved && moved === 'pages') pagesNotice();
+        else emitSelectionChange();
       },
     } as PaginatedSurfaceOptions & { readonly onTrackedChange?: () => void });
     if (!result.ok) {
@@ -867,6 +903,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       reviewAuthorSlots = createStableReviewAuthorSlots();
       reviewAuthorVisibility.showAll();
       forgetFonts();
+      lateFonts.clear();
       // BEFORE the mount, so the initial paint materializes the pages actually in view.
       // Only here, never in `mountBytes`: the font remount and `attach` re-enter that
       // function for the SAME document and must keep the reader's place.
@@ -933,7 +970,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
   async function resolveDocumentFonts(
     seq: number,
     mounted: { readonly session: preparedOpen.FontSession },
-    families: readonly string[]
+    families: readonly string[],
+    late?: FontConfigurationFragment
   ): Promise<void> {
     const lifetime = fontLifetime.capture();
     const current = () => !destroyed && seq === loadSeq && lifetime.current();
@@ -943,6 +981,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     const embedded = mounted.session.embeddedFonts();
     // The zero-config, nothing-embedded common case does NO font work at all: no
     if (!configured && embedded.length === 0) return;
+    if (late && lateFacesInstalled(late, resolvedFontConfiguration)) return;
+    if (!late && !resolvedFontConfiguration) initializeHarfBuzz().catch(() => {});
     fontsResolving = true;
     bump();
     try {
@@ -964,18 +1004,24 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       const fallbacks = canProbe
         ? fallbacksForMissingFamilies(documentFonts.fallbacks, probeLocalFont)
         : documentFonts.fallbacks;
-      const raw =
-        typeof configured !== 'function'
+      const onOriginFailure = ({ cause }: { cause: unknown }) =>
+        reportForLoad(toEditorFontError(cause));
+      const answer = late
+        ? await composeFontOrigins(lateFontOrigins(late, resolvedFontConfiguration), request, {
+            onOriginFailure,
+          })
+        : typeof configured !== 'function'
           ? configured
           : resolvedFontConfiguration
             ? await composeFontOrigins(
                 [resolvedFontConfiguration, defineFontResolver((next) => configured(next))],
                 request,
-                { onOriginFailure: ({ cause }) => reportForLoad(toEditorFontError(cause)) }
+                { onOriginFailure }
               )
             : await configured(request);
+      const { now: raw, later } = answer ? splitDeferredAnswer(answer) : { now: answer };
       const explicit: FontConfigurationBase | undefined =
-        typeof configured === 'function' ? normalizeFontResolverResult(raw) : raw;
+        typeof configured === 'function' || late ? normalizeFontResolverResult(raw) : raw;
       // Awaiting handed control back: this load may have been superseded (or the editor
       // destroyed) while the resolver ran; installing its answer would overwrite newer fonts.
       if (!current()) {
@@ -983,6 +1029,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         return;
       }
       resolvedFontConfiguration = raw;
+      if (later) lateFonts.track(later, raw, lifetime.generation, current);
       if (
         embedded.length === 0 &&
         (!explicit || (raw?.supportedFamilies?.length && !normalizeFontResolverResult(raw)))
@@ -1172,7 +1219,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         documentSubstitutedFamilies = admittedDocumentSubstitutions(
           fonts,
           documentFonts,
-          shaping.fonts
+          shaping.fonts,
+          explicit?.substitutions
         );
         // HarfBuzz can only shape faces whose bytes reached its resource snapshot. A run may
         // still name a locally installed browser face (Helvetica is the common macOS case):
@@ -1577,16 +1625,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     return surface?.activeReviewKey() ?? null;
   }
 
-  /** Per narrowed queue, weakly: the rail's and the commands' queries keep separate ranks. */
-  const rankings = new WeakMap<
-    readonly ReviewItem[],
-    {
-      readonly anchors: Map<string, ReviewParagraphAnchor> | null;
-      readonly revision: number;
-      readonly geometries: readonly ({ readonly pageIndex: number; readonly y: number } | null)[];
-      readonly order: readonly number[];
-    }
-  >();
+  const rankReviewItems = createReviewRanker();
+  const keepPlacements = createPlacementKeeper<ReviewItemPlacement>();
 
   /** The queue plus geometry, per call; the session memoizes the queue per revision. */
   function reviewPlacements(query?: ReviewItemQuery): readonly ReviewItemPlacement[] {
@@ -1611,42 +1651,27 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       const home = furnitureHomeOf(item);
       return home === null ? 1 : home.kind === 'header' ? 0 : 2;
     };
-    // Geometry and rank depend on the queue, the layout, and the package alone; a commit's
-    // several reads (rail, commands, highlights) share them instead of sorting every card.
     const revision = surface?.session.packageRevision() ?? -1;
-    let ranking = rankings.get(items);
-    if (!ranking || ranking.anchors !== anchors || ranking.revision !== revision) {
-      const geometries = items.map((item) => (anchors ? reviewItemGeometry(item, anchors) : null));
-      const ranked = items.map((item, position) => ({
-        position,
-        pageIndex: geometries[position]?.pageIndex ?? null,
-        group: groupOf(item),
-      }));
-      ranked.sort((a, b) => {
-        const aPage = a.pageIndex ?? Number.MAX_SAFE_INTEGER;
-        const bPage = b.pageIndex ?? Number.MAX_SAFE_INTEGER;
-        if (aPage !== bPage) return aPage - bPage;
-        if (a.group !== b.group) return a.group - b.group;
-        return a.position - b.position;
-      });
-      ranking = { anchors, revision, geometries, order: ranked.map((entry) => entry.position) };
-      rankings.set(items, ranking);
-    }
+    const ranking = rankReviewItems(items, anchors, revision, groupOf);
     const { geometries, order } = ranking;
     const locked = reviewChangesLocked(surface);
-    return order.map((position) => {
-      const item = items[position]!;
-      return reviewItemPlacement(item, {
-        anchorY: geometries[position]?.y ?? null,
-        pageIndex: geometries[position]?.pageIndex ?? null,
-        // A paired replacement opens through its deletion, so both halves must be openable.
-        activatable: reviewItemWithHalves(item).every(reviewItemActivatable),
-        isActive:
-          activeKeys.size > 0 &&
-          reviewItemWithHalves(item).some((part) => activeKeys.has(reviewItemKey(part))),
-        locked,
-      });
-    });
+    return keepPlacements(
+      items,
+      anchors !== null,
+      order.map((position) => {
+        const item = items[position]!;
+        return reviewItemPlacement(item, {
+          anchorY: geometries[position]?.y ?? null,
+          pageIndex: geometries[position]?.pageIndex ?? null,
+          // A paired replacement opens through its deletion, so both halves must be openable.
+          activatable: reviewItemWithHalves(item).every(reviewItemActivatable),
+          isActive:
+            activeKeys.size > 0 &&
+            reviewItemWithHalves(item).some((part) => activeKeys.has(reviewItemKey(part))),
+          locked,
+        });
+      })
+    );
   }
 
   /** What the OPEN document asks for, or nothing when no document is mounted. */
@@ -1803,7 +1828,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
 
     fontMeasurement: () => ({
       measurer: shapedMeasurer && !stillOpening() ? ('shaped' as const) : ('fixed' as const),
-      resolving: fontsResolving || stillOpening(),
+      resolving: fontsResolving || lateFonts.pending() || stillOpening(),
       ...(shapedMeasurer && shapedProducer && !stillOpening() ? { producer: shapedProducer } : {}),
     }),
 
@@ -1819,6 +1844,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         configuredFonts = fonts;
         resolvedFontConfiguration = undefined;
         fontsResolving = false;
+        lateFonts.clear();
         // Removal drops the host faces now. A replacement keeps the current faces painted
         // until the new ones install, so the pages lay out once, not twice.
         if (!fonts) fallBackToDefaultFonts();
@@ -2120,11 +2146,10 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
 
     // Real derivations from the canonical trees (session-memoized), no longer stubs.
     getDocumentStyles: () => surface?.session.documentStyles() ?? [],
-    getDocumentFonts: () => surface?.session.documentFonts() ?? [],
-    // The picker's list: the configured catalog is offerable with no document at all,
-    // and the document's declared families join it once one is mounted.
+    getDocumentFonts: documentFontsNow,
+    // The picker's list: configured and document families, and presets this platform has.
     getAvailableFonts: () =>
-      availableFontFamilies(fontConfiguration(), surface?.session.documentFonts() ?? []),
+      availableFontFamilies(fontConfiguration(), documentFontsNow(), listable),
     getDocumentThemeColors: () => surface?.session.documentThemeColors() ?? [],
     getOutline: () => surface?.session.documentOutline() ?? [],
     getComments: () => [],
@@ -2512,6 +2537,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       refreshHost?.invalidate();
       destroyed = true;
       fontLifetime.dispose();
+      lateFonts.clear();
       suggestingReporter.dispose();
       openScheduler.cancel();
       zoomLane.detach();

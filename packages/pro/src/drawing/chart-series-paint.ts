@@ -25,7 +25,8 @@ import {
   type ChartPaint,
   type ChartStroke,
 } from './chart-style.ts';
-import { estimateTextWidth, lineHeight, textBlock, type ChartLabel } from './chart-text.ts';
+import { dataLabelBlock, movedLabel } from './chart-data-label.ts';
+import { estimateTextWidth, lineHeight, type ChartLabel } from './chart-text.ts';
 import { seriesErrorBars, seriesTrendlines } from './chart-trendline.ts';
 
 export interface SeriesMapping {
@@ -78,20 +79,20 @@ export function paintSeries(
     if (!spec) return;
     const style = elementText(context.baseText, spec.txPr, look.resolveSchemeColor);
     const category = map.categories?.labels[index] ?? null;
-    const text = dataLabelText(
-      spec,
+    const values = {
       value,
-      percent ? value / totals[index]! : null,
+      percent: percent ? value / totals[index]! : null,
       category,
-      series.name,
-      series.formatCode,
-      context.model.date1904
-    );
-    if (text === '') return;
-    const block = textBlock(text, style);
+      seriesName: series.name,
+      seriesFormat: series.formatCode,
+      date1904: context.model.date1904,
+      cell: series.labelRange?.[index] ?? null,
+    };
+    if (!spec.custom && dataLabelText(spec, values) === '') return;
+    const block = dataLabelBlock(spec, values, style, context.chartWidth, look.resolveSchemeColor);
     const width = block.width;
-    const height = lineHeight(style) * block.lines;
-    const frame = width * 1.3 + style.sizePt * 2;
+    const height = block.height;
+    const frame = block.frame;
     const gap = 0.48 * style.sizePt;
     let cx = anchor.x;
     let cy = anchor.y;
@@ -130,11 +131,13 @@ export function paintSeries(
       else if (position === 't') cy = anchor.y - reach - height / 2;
       else if (position === 'b') cy = anchor.y + reach + height / 2;
     }
+    const chart = { l: 0, t: 0, r: context.chartWidth, b: context.chartHeight };
+    const centre = movedLabel(spec.moved, chart, cx, cy, width, height);
     labels.push({
-      paragraphs: [[{ text, style }]],
+      paragraphs: block.paragraphs,
       align: 'ctr',
-      x: cx - frame / 2,
-      y: cy - height / 2,
+      x: centre.x - frame / 2,
+      y: centre.y - height / 2,
       width: frame,
       height,
       rotation: 0,

@@ -1,5 +1,6 @@
 import {
   createUnsupportedElementProjection,
+  unsupportedElementPaintOptions,
   validateUnsupportedElementRules,
 } from './unsupported-element-state.ts';
 import { DocumentSelectionHistory } from './document-selection-history.ts';
@@ -1802,12 +1803,12 @@ export function mountPaginatedSurface(
     },
   });
 
-  // A settled image resource must reach the screen on its own — nothing else may ever
-  // touch the document (a letterhead the user only reads). The flush is queued, not
-  // immediate, so a burst of settles (every image of a page decoding) lays out once; after
-  // destroy the scheduler is cancelled and the queued flush finds nothing pending.
+  // A settled image resource reaches the screen on its own through a queued flush, so a burst
+  // lays out once. A sliced opening's later slices and closing full layout read it anyway; a
+  // flush then would finish the paused slice and relay the prefix in one task.
   let resourceFlushQueued = false;
   onDrawingResourcesChanged = () => {
+    if (openingBlockLimit !== null) return;
     scheduler.invalidateAll(session.packageRevision(), 'drawing-resources');
     if (resourceFlushQueued) return;
     resourceFlushQueued = true;
@@ -2745,15 +2746,7 @@ export function mountPaginatedSurface(
         materialize: materializedSet,
         ariaHidden: false,
         drawingStrings,
-        unsupportedOwnerPartName: (nodeId) =>
-          partOfNodeId(session, nodeId)?.name ?? session.part().name,
-        unsupportedSource: (nodeId, ownerPartName) => {
-          const part = ownerPartName
-            ? session.currentPackage().parts.get(ownerPartName)
-            : partOfNodeId(session, nodeId);
-          const node = part ? findNode(part, nodeId) : null;
-          return node && node.kind !== 'textValue' ? node : null;
-        },
+        ...unsupportedElementPaintOptions(unsupportedProjection, session),
         breakMarkStrings,
         ...(options.fieldShading ? { fieldShading: options.fieldShading } : {}),
         ...(revisionStyles !== undefined ? { revisionStyles } : {}),
@@ -3460,7 +3453,7 @@ export function mountPaginatedSurface(
 
   hfScope = createHeaderFooterScopeController({
     session,
-    layout: editingLayout,
+    layout: () => currentLayout,
     sectionAtPage,
     revisionDisplayMode,
     revisionAuthorFilter: revisionFilter,
@@ -5428,8 +5421,10 @@ export function mountPaginatedSurface(
       unsupportedProjection.view(session).currentPackage();
       const geometryUnchanged = projection.geometryKey() === unsupportedProjection.geometryKey();
       if (geometryUnchanged) {
+        const paintChanged = projection.includePartial !== unsupportedProjection.includePartial;
         unsupportedProjection = projection;
         furnitureSource = createCurrentFurnitureSource(revisionFilter());
+        if (paintChanged) render(false);
         return;
       }
       flushPendingInputAndLayout();

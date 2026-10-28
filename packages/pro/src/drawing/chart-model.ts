@@ -96,6 +96,8 @@ export interface ChartSeries {
   readonly trendlines: readonly OoxmlElement[];
   /** `c:errBars` elements, in order. */
   readonly errorBars: readonly OoxmlElement[];
+  /** Cached text of the cells the data labels show (the 2012 label range extension). */
+  readonly labelRange: readonly (string | null)[] | null;
 }
 
 export interface ChartPlot {
@@ -279,17 +281,32 @@ interface Budget {
   remaining: number;
 }
 
+/** An authored count must fit the limit; only an absent count is inferred from points. */
+function cacheCount(cache: OoxmlElement, budget: Budget): number | null {
+  const raw = childVal(cache, 'ptCount')?.trim();
+  const count = childNumber(cache, 'ptCount', 0, MAX_POINTS_PER_SERIES);
+  if (child(cache, 'ptCount') && (!raw || !/^\+?\d+$/.test(raw) || count === null)) {
+    budget.remaining = -1;
+    return null;
+  }
+  return count;
+}
+
 /** The points of a cache (`c:strCache`, `c:numCache`, or a literal), placed by `@idx`. */
 function cachePoints(cache: OoxmlElement | null, budget: Budget): (string | null)[] | null {
   if (!cache) return null;
-  const count = childNumber(cache, 'ptCount', 0, MAX_POINTS_PER_SERIES);
+  const count = cacheCount(cache, budget);
+  if (budget.remaining < 0) return null;
   const points = children(cache, 'pt');
   let length = count ?? 0;
   const indexed: [number, string][] = [];
   for (const point of points) {
     const raw = schemaAttributeValue(point.attributes, 'idx');
     const index = raw !== undefined && /^\d{1,6}$/.test(raw) ? Number(raw) : -1;
-    if (index < 0 || index >= MAX_POINTS_PER_SERIES) continue;
+    if (index < 0 || index >= MAX_POINTS_PER_SERIES || (count !== null && index >= count)) {
+      budget.remaining = -1;
+      return null;
+    }
     indexed.push([index, textOf(child(point, 'v'))]);
     if (count === null) length = Math.max(length, index + 1);
   }
@@ -297,7 +314,7 @@ function cachePoints(cache: OoxmlElement | null, budget: Budget): (string | null
   budget.remaining -= length;
   if (budget.remaining < 0) return null;
   const out: (string | null)[] = Array.from({ length }, () => null);
-  for (const [index, value] of indexed) if (index < length) out[index] = value;
+  for (const [index, value] of indexed) out[index] = value;
   return out;
 }
 
@@ -330,9 +347,16 @@ function readData(source: OoxmlElement | null, budget: Budget): DataReference {
   if (multi) {
     const level = children(multi, 'lvl')[0] ?? null;
     if (level) {
-      const count = childNumber(multi, 'ptCount', 0, MAX_POINTS_PER_SERIES);
+      const count = cacheCount(multi, budget);
       const points = cachePoints(level, budget) ?? [];
       const length = count ?? points.length;
+      if (length < points.length) {
+        budget.remaining = -1;
+        return empty;
+      }
+      // cachePoints charged the populated level; include any declared empty positions too.
+      budget.remaining -= Math.max(0, length - points.length);
+      if (budget.remaining < 0) return empty;
       return {
         text: Array.from({ length }, (_, index) => points[index] ?? null),
         numbers: null,
@@ -395,7 +419,25 @@ function readSeries(ser: OoxmlElement, kind: ChartPlotKind, budget: Budget): Cha
       kind === 'bubble' ? (readData(child(ser, 'bubbleSize'), budget).numbers ?? null) : null,
     trendlines: children(ser, 'trendline').slice(0, 8),
     errorBars: children(ser, 'errBars').slice(0, 2),
+    labelRange: cachePoints(labelRangeCache(ser), budget),
   };
+}
+
+/** The element of `parent` named `localName` in any namespace: extension elements. */
+function anyChild(parent: OoxmlElement | null | undefined, localName: string): OoxmlElement | null {
+  for (const node of parent?.children ?? []) {
+    if (isElement(node) && node.localName === localName) return node;
+  }
+  return null;
+}
+
+/** `c15:dlblRangeCache` of a series: the cached cells its data labels show. */
+function labelRangeCache(ser: OoxmlElement): OoxmlElement | null {
+  for (const ext of children(child(ser, 'extLst'), 'ext')) {
+    const cache = anyChild(anyChild(ext, 'datalabelsRange'), 'dlblRangeCache');
+    if (cache) return cache;
+  }
+  return null;
 }
 
 const GROUPINGS = new Set(['clustered', 'stacked', 'percentStacked', 'standard']);
@@ -407,7 +449,7 @@ function readPlot(element: OoxmlElement, budget: Budget): ChartPlot | null {
   for (const ser of children(element, 'ser')) {
     if (series.length >= MAX_SERIES) return null;
     const read = readSeries(ser, known.kind, budget);
-    if (!read) return null;
+    if (!read || budget.remaining < 0) return null;
     series.push(read);
   }
   series.sort((a, b) => a.order - b.order);

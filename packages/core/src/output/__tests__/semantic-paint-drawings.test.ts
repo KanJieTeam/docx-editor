@@ -548,7 +548,28 @@ describe('paints non-fetching refusal cards', () => {
       null
     )!;
     expect(element.style.width).toBe(`${drawing.paintBounds.width}px`);
-    expect(element.textContent).toBe('Unsupported graphic (chart)');
+    expect(element.textContent).toBe('Chart not shown');
+  });
+
+  test('placeholder labels name each kind through the translated catalog', async () => {
+    const en = (await import('../../../../i18n/en.json')).default as {
+      image: { placeholder: Record<string, string> };
+    };
+    const { drawingPaintStringsFromTranslate } = await import('../drawing-paint-strings.ts');
+    const translated = drawingPaintStringsFromTranslate((key) => {
+      const [, group, kind] = key.split('.');
+      return group === 'placeholder' ? (en.image.placeholder[kind!] ?? key) : key;
+    });
+    const kinds = ['chart', 'diagram', 'shape', 'group', 'textbox', 'canvas', 'graphic'] as const;
+    for (const kind of kinds) {
+      expect(en.image.placeholder[kind]).toBeString();
+      expect(translated.nonPictureGraphic(kind)).toBe(en.image.placeholder[kind]!);
+      expect(DEFAULT_DRAWING_PAINT_STRINGS.nonPictureGraphic(kind)).toBe(
+        en.image.placeholder[kind]!
+      );
+    }
+    expect(translated.nonPictureGraphic('unknown')).toBe(en.image.placeholder.graphic!);
+    expect(en.image.placeholder.chart).toBe('Chart not shown');
   });
 });
 
@@ -893,4 +914,50 @@ describe('drawing membership belongs to the immutable layout', () => {
     detachDrawingUrlRegistry(container);
     expect(revoked).toEqual([url!, url!, url!]);
   });
+});
+
+test('a rebuilt image removes its custom preview registration when previews are disabled', async () => {
+  const { observeUnsupportedElements } = await import('../unsupported-elements.ts');
+  const container = document.createElement('div');
+  const { port } = fakeUrlPort();
+  const registry = drawingUrlRegistryFor(container, port);
+  // A duotone effect does not render, so the picture is partly supported and offered.
+  const xml = inlinePictureXml({
+    lum: '<a:duotone><a:prstClr val="black"/><a:srgbClr val="FFFFFF"/></a:duotone>',
+  });
+  const drawing = readyRecordFromXml(xml);
+  const source = drawingOf(load(xml));
+  const ctx = {
+    scale: 1,
+    strings: DEFAULT_DRAWING_PAINT_STRINGS,
+    imageUrlPort: port,
+    includePartial: true,
+    unsupportedSource: () => source,
+  };
+  const first = paintDrawingRecord(document, drawing, ctx, registry)!;
+  container.append(first);
+  let hosts: readonly import('../unsupported-elements.ts').UnsupportedElementHost[] = [];
+  const stop = observeUnsupportedElements(container, (next) => {
+    hosts = next;
+  });
+  try {
+    expect(hosts).toHaveLength(1);
+    hosts[0]!.slot.append(document.createElement('img'));
+    hosts[0]!.setCustomized(true);
+    expect(first.getAttribute('aria-hidden')).toBeNull();
+    const next = paintDrawingRecord(
+      document,
+      drawing,
+      { ...ctx, scale: 2, includePartial: false },
+      registry
+    )!;
+    expect(next).toBe(first);
+    expect(next.hasAttribute('data-docx-unsupported')).toBe(false);
+    expect(next.hasAttribute('data-docx-customized')).toBe(false);
+    expect(next.getAttribute('aria-hidden')).toBe('true');
+    expect(next.querySelector('img')).not.toBeNull();
+  } finally {
+    stop();
+    detachDrawingUrlRegistry(container);
+  }
 });

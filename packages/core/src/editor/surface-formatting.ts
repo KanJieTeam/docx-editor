@@ -47,6 +47,8 @@ import { paragraphFormattingEntry } from './surface-formatting-index.ts';
 import { paragraphAlignment } from '../layout/paragraph-flow.ts';
 import { paragraphLineSpacing } from '../layout/paragraph-style.ts';
 import { paragraphIsRtl } from '../layout/rtl-paragraph.ts';
+import { styleForFontSlot } from '../layout/script-itemization.ts';
+import { orderPositions } from '../layout/semantic-interaction.ts';
 import {
   cascadedParagraphAttributes,
   paragraphBreaksBefore,
@@ -451,6 +453,26 @@ export type InheritedRunDefaults = (
   runProperties: readonly SurfaceProperty[]
 ) => { readonly fontFamily: string | null; readonly fontSizeHalfPoints: number | null };
 
+/** A letter of any script; selected text without one does not decide the font box. */
+const LETTER = /\p{L}/u;
+
+/**
+ * The part of `span` the ordered range `from`-`to` covers. Layout spans are not clipped to the
+ * selection, so a selection that starts on the space after a Latin word must not count it.
+ */
+function selectedTextOf(
+  span: StyleSpanRecord,
+  from: SemanticPosition,
+  to: SemanticPosition
+): string {
+  const start = span.range.paragraphId === from.paragraphId ? from.offset : span.range.start;
+  const end = span.range.paragraphId === to.paragraphId ? to.offset : span.range.end;
+  return span.text.slice(
+    Math.max(0, start - span.range.start),
+    Math.max(0, end - span.range.start)
+  );
+}
+
 /** The formatting snapshot at a selection, for a toolbar to reflect. */
 export function formattingAt(
   layout: SemanticLayout,
@@ -504,13 +526,37 @@ export function formattingAt(
   // docDefaults, theme fonts). A caret in an empty paragraph inherits too.
   const hasDirect = (span: (typeof spans)[number], localName: string): boolean =>
     span.props.some((property) => property.localName === localName);
-  // The LATIN (ascii/hAnsi) face, deliberately, even for a span whose text paints through
-  // the eastAsia slot: a span's `style` carries the run's full resolution, so a mixed
-  // CJK+Latin run answers ONE family here, and it is the same slot the font picker writes
-  // (`w:ascii`/`w:hAnsi`) — pick a font and this readback reflects it. Word's single font
-  // box behaves the same way; a per-slot readback needs a per-slot control first.
+  // The face the span's text PAINTS in, by the painter's own rule (`styleForFontSlot`): East
+  // Asian text answers its `w:eastAsia` face, and a complex-script run already resolves
+  // `fontFamily` to its `w:cs` face. Chinese text in a Calibri+SimSun run reads SimSun; its
+  // Latin letters alone read Calibri.
+  //
+  // In a selection with East Asian text, selected text without a letter (spaces, punctuation,
+  // digits) does not vote. Between or inside Korean and Chinese words it paints through the
+  // Latin slot (`2024년`), and counting it made every such selection read blank. Elsewhere
+  // every span votes, so digits in another font still make a Latin selection read blank.
+  const eastAsian = spans.some((span) => span.fontSlot === 'eastAsia');
+  const { anchor, head } = selection;
+  const collapsed = anchor.paragraphId === head.paragraphId && anchor.offset === head.offset;
+  // Ordered once, only when it matters; a range that cannot be ordered reads whole spans.
+  const range =
+    !eastAsian || collapsed || cells?.length
+      ? null
+      : orderPositions(
+          selection,
+          // One paragraph is ordered by offset alone; skip the document-wide order walk.
+          anchor.paragraphId === head.paragraphId ? [] : (paragraphOrder ?? everyStoryOrder(layout))
+        );
+  const lettered = eastAsian
+    ? spans.filter((span) =>
+        LETTER.test(range ? selectedTextOf(span, range.from, range.to) : span.text)
+      )
+    : [];
+  const familySpans = lettered.length > 0 ? lettered : spans;
   const familyOf = (span: (typeof spans)[number]): string | null =>
-    span.style.fontFamily ?? inherited?.(span.range.paragraphId, span.props).fontFamily ?? null;
+    styleForFontSlot(span.style, span.fontSlot).fontFamily ??
+    inherited?.(span.range.paragraphId, span.props).fontFamily ??
+    null;
   const sizeOf = (span: (typeof spans)[number]): number =>
     hasDirect(span, 'sz')
       ? Math.round(span.style.fontSizePt * 2)
@@ -684,7 +730,9 @@ export function formattingAt(
     superscript: styles.length > 0 && styles.every((e) => e.verticalAlign === 'superscript'),
     subscript: styles.length > 0 && styles.every((e) => e.verticalAlign === 'subscript'),
     fontFamily:
-      spans.length > 0 ? agreedOver(spans.map(familyOf)) : (caretInherited?.fontFamily ?? null),
+      spans.length > 0
+        ? agreedOver(familySpans.map(familyOf))
+        : (caretInherited?.fontFamily ?? null),
     fontSizeHalfPoints:
       spans.length > 0
         ? agreedOver(spans.map(sizeOf))

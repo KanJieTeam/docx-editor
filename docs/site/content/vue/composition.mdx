@@ -405,6 +405,16 @@ The default slot replaces the whole first screen, and the first page then shows 
 
 Use `DocxEditorLoading.Spinner` or `DocxEditorLoadingSpinner` to style the packaged spinner.
 
+To add an animated loading screen, pass it in the default slot of `DocxEditorLoading`. The component keeps the screen mounted while the editor instance changes. This prevents that change from restarting the screen’s entry animation.
+
+```vue
+<DocxEditorLoading overlay>
+  <MyAnimatedLoadingScreen />
+</DocxEditorLoading>
+```
+
+Prefer this component to a loading screen controlled only by `isLoading || isOpening`. Both flags can briefly read `false` during editor replacement.
+
 ## Custom hyperlink popover
 
 `DocxEditorHyperLink` shows the link target and editing actions.

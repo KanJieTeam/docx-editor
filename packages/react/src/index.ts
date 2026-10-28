@@ -461,6 +461,7 @@ export {
   composeFontConfiguration,
   composeFontOrigins,
   createFontSource,
+  deferFonts,
   defineFontResolver,
   isFontResolver,
   loadFonts,
@@ -659,6 +660,11 @@ export {
   type UseRevisionMarkupDialogReturn,
 } from './editor/DocxEditorRevisionMarkupDialog';
 
+export type {
+  DrawingGraphicKind,
+  DrawingSupport,
+  DrawingSupportIssue,
+} from '@docx-editor.dev/core/store';
 export type {
   UnsupportedElement,
   UnsupportedElementLayout,

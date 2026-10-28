@@ -1,3 +1,6 @@
+import { customDrawingPreview } from './drawing-custom-preview.ts';
+import { drawingSourceIssues } from '../store/package/drawing-support-issues.ts';
+import { selectedDrawingGraphicKind } from '../store/package/drawing-graphic-kind.ts';
 import type { OoxmlElement } from '@docx-editor.dev/core/store';
 // Drawing paint dispatch (typed-drawings-and-images task 10).
 //
@@ -5,7 +8,7 @@ import type { OoxmlElement } from '@docx-editor.dev/core/store';
 // DOM is built with createElement/setAttribute/textContent only; styles use validated numbers
 // or fixed tokens — never raw authored markup or unescaped file-derived CSS.
 
-import { markUnsupportedElement } from './unsupported-elements.ts';
+import { clearUnsupportedElement, markUnsupportedElement } from './unsupported-elements.ts';
 import type {
   RenderableImageMime,
   ValidatedImageBytesHandle,
@@ -56,20 +59,16 @@ export interface PaintImageUrlPort {
   revoke(url: string): void;
 }
 
-/** Localized refusal labels; adapters supply i18n-backed implementations. */
-export interface DrawingPaintStrings {
-  readonly unsupportedFormat: (format: string) => string;
-  readonly nonPictureGraphic: (kind: string) => string;
-  readonly missingResource: string;
-  readonly externalResource: string;
-  readonly invalidResource: string;
-  readonly contentMismatch: string;
-  readonly decodeFailed: string;
-  readonly resourceLimit: string;
-  readonly pendingResource: string;
-}
+import type { DrawingPaintStrings } from './drawing-paint-strings.ts';
+export type { DrawingPaintStrings } from './drawing-paint-strings.ts';
+export {
+  DEFAULT_DRAWING_PAINT_STRINGS,
+  drawingPaintStringsCacheToken,
+  drawingPaintStringsFromTranslate,
+} from './drawing-paint-strings.ts';
 
 export interface DrawingPaintContext {
+  readonly includePartial?: boolean;
   readonly unsupportedSource?: (nodeId: string, ownerPartName?: string) => OoxmlElement | null;
   readonly scale: number;
   readonly strings: DrawingPaintStrings;
@@ -403,6 +402,13 @@ function paintPlaceholderCard(
         source?.namespaceUri ?? 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
       localName: source?.localName ?? 'drawing',
       source,
+      ...(source
+        ? {
+            drawingIssues: drawingSourceIssues(source, drawing.drawingNodeId),
+            graphicKind: selectedDrawingGraphicKind(source, drawing.drawingNodeId),
+          }
+        : {}),
+      support: 'unrendered',
       placement: 'inline',
       bounds: drawing.paintBounds,
       nodeId: drawing.drawingNodeId,
@@ -552,6 +558,7 @@ function paintReadyImage(
   // A group's vector members are rebuilt on every paint; only a lone image is reused.
   const reusable = !drawing.vectorShape && !drawing.frameEffects && !drawing.groupPictureLayers;
   if (reusable && readyImagePaintSignatures.get(outer) === paintSignature) return outer;
+  if (outer.hasAttribute('data-docx-unsupported')) clearUnsupportedElement(outer);
   outer.className = 'docx-drawing docx-drawing-ready';
   outer.style.cssText = '';
   if (!ctx.unbound) outer.dataset.drawingNodeId = drawing.drawingNodeId;
@@ -723,7 +730,17 @@ export function paintDrawingRecord(
   origin?: LayoutBox
 ): HTMLElement | null {
   const element = paintDrawingRecordElement(document, drawing, ctx, urlRegistry, origin);
-  if (element) applyDrawingRevisionPresentation(element, drawing, ctx);
+  if (element) {
+    customDrawingPreview(
+      element,
+      drawing,
+      ctx.includePartial === true,
+      ctx.includePartial
+        ? (ctx.unsupportedSource?.(drawing.drawingNodeId, drawing.ownerPartName) ?? null)
+        : null
+    );
+    applyDrawingRevisionPresentation(element, drawing, ctx);
+  }
   return element;
 }
 
@@ -772,8 +789,7 @@ function paintDrawingRecordElement(
       : null;
   // A group paints whole or not at all. Its vector members paint alone only while the
   // picture is pending. A picture that cannot paint turns the whole group into the refusal
-  // card of an unsupported group. Layout drops an MC-wrapped group whose resource fails, so
-  // that group never reaches this card.
+  // card of an unsupported group, including groups in alternative content.
   const layerFailed = drawing.groupPictureLayers?.some(
     (layer) => layer.resource.kind !== 'pending' && layerUrl(layer, ctx, urlRegistry) === null
   );
@@ -950,47 +966,4 @@ export function collectUsedDrawingResourceKeys(layout: SemanticLayout): Readonly
 /** Shared read-only membership for this immutable layout. */
 export function collectUsedDrawingElementKeys(layout: SemanticLayout): ReadonlySet<string> {
   return layoutDrawingKeys(layout).elementKeys;
-}
-
-export function drawingPaintStringsCacheToken(strings: DrawingPaintStrings): string {
-  return [
-    strings.missingResource,
-    strings.externalResource,
-    strings.invalidResource,
-    strings.contentMismatch,
-    strings.decodeFailed,
-    strings.resourceLimit,
-    strings.pendingResource,
-    strings.unsupportedFormat('probe'),
-    strings.nonPictureGraphic('probe'),
-  ].join('\0');
-}
-
-export const DEFAULT_DRAWING_PAINT_STRINGS: DrawingPaintStrings = Object.freeze({
-  unsupportedFormat: (format: string) => `Unsupported image format (${format})`,
-  nonPictureGraphic: (kind: string) => `Unsupported graphic (${kind})`,
-  missingResource: 'Image missing',
-  externalResource: 'External image not loaded',
-  invalidResource: 'Invalid image',
-  contentMismatch: 'Image content does not match its type',
-  decodeFailed: 'Image could not be decoded',
-  resourceLimit: 'Image exceeds size limits',
-  pendingResource: 'Loading image',
-});
-
-/** Build localized refusal strings from an i18n `t('image.*')` callback. */
-export function drawingPaintStringsFromTranslate(
-  t: (key: string, params?: Record<string, string | number>) => string
-): DrawingPaintStrings {
-  return Object.freeze({
-    unsupportedFormat: (format: string) => t('image.unsupportedFormat', { format }),
-    nonPictureGraphic: (kind: string) => t('image.nonPictureGraphic', { kind }),
-    missingResource: t('image.missingResource'),
-    externalResource: t('image.externalResource'),
-    invalidResource: t('image.invalidResource'),
-    contentMismatch: t('image.contentMismatch'),
-    decodeFailed: t('image.decodeFailed'),
-    resourceLimit: t('image.resourceLimit'),
-    pendingResource: t('image.pendingResource'),
-  });
 }

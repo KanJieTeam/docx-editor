@@ -356,3 +356,124 @@ test('empty fragments, arrays, and whitespace keep the default placeholder visib
   expect(fallback.hidden).toBe(true);
   expect(container.querySelector('.docx-unsupported-slot')?.textContent).toBe('0');
 });
+
+test('unsupported drawing alternatives expose one source and preserve both branches on save', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { unzipSync, zipSync, strFromU8, strToU8 } = await import('fflate');
+  const { DocxEditor } = await import('../src/index.ts');
+  const parts = unzipSync(
+    new Uint8Array(
+      readFileSync(
+        new URL('../../core/src/output/__tests__/fixtures/unsupported-chart.docx', import.meta.url)
+      )
+    )
+  );
+  parts['word/document.xml'] = strToU8(
+    strFromU8(parts['word/document.xml']!).replace(
+      /<w:drawing>[\s\S]*?<\/w:drawing>/,
+      (drawing) =>
+        `<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="wpc">${drawing}</mc:Choice><mc:Fallback><w:pict><v:group xmlns:v="urn:schemas-microsoft-com:vml" alt="Group structure chart" style="width:120pt;height:60pt"/></w:pict></mc:Fallback></mc:AlternateContent>`
+    )
+  );
+  const document = zipSync(parts);
+  let editor: import('@docx-editor.dev/core/editor').DocxEditorInstance | undefined;
+  let captured: import('@docx-editor.dev/core/layout').UnsupportedElement | undefined;
+  const view = render(
+    <DocxEditor
+      document={document}
+      chrome={false}
+      onReady={(value) => {
+        editor = value as typeof editor;
+      }}
+    >
+      <DocxEditor.UnsupportedElement>
+        {({ element }) => {
+          captured = element;
+          return <img alt="Server drawing preview" src="/preview.png" />;
+        }}
+      </DocxEditor.UnsupportedElement>
+    </DocxEditor>
+  );
+  await waitFor(() => expect(view.queryAllByAltText('Server drawing preview')).toHaveLength(1));
+  expect(view.container.querySelectorAll('[data-docx-unsupported]')).toHaveLength(1);
+  expect(captured?.ownerPartName).toBe('/word/document.xml');
+  expect(captured?.source?.localName).toBe('AlternateContent');
+  expect(
+    captured?.source?.children.map((child) => (child.kind === 'textValue' ? '' : child.localName))
+  ).toEqual(['Choice', 'Fallback']);
+  expect(captured?.drawing?.placeholderGraphicKind).toBe('chart');
+  expect(captured?.graphicKind).toBe('chart');
+  expect(captured?.bounds?.width).toBeGreaterThan(0);
+  const saved = await editor!.save();
+  const xml = strFromU8(unzipSync(new Uint8Array(saved!))['word/document.xml']!);
+  expect(xml).toContain('mc:Choice');
+  expect(xml).toContain('mc:Fallback');
+  expect(xml).toContain('r:id="rId9"');
+  expect(xml).toContain('Group structure chart');
+  expect(xml).not.toContain('/preview.png');
+  view.unmount();
+});
+
+test('rendered drawing previews require explicit opt-in and restore native rendering', async () => {
+  const { previewDocument, previewShape } =
+    await import('../../core/src/store/__tests__/drawing-support-fixtures.ts');
+  const { DocxEditor } = await import('../src/index.ts');
+  const bytes = previewDocument(previewShape('<a:effectLst><a:blur rad="127000"/></a:effectLst>'));
+  const ui = (include: boolean, show: boolean) => (
+    <DocxEditor document={bytes} chrome={false}>
+      <DocxEditor.UnsupportedElement>{() => <b>Placeholder only</b>}</DocxEditor.UnsupportedElement>
+      <DocxEditor.UnsupportedElement
+        includePartial={include}
+        match={(element) => !!element.drawingIssues?.length}
+      >
+        {() => (show ? <img alt="External preview" src="/preview.png" /> : null)}
+      </DocxEditor.UnsupportedElement>
+    </DocxEditor>
+  );
+  const view = render(ui(false, true));
+  await waitFor(() => expect(view.container.querySelector('svg')).not.toBeNull());
+  expect(view.queryByAltText('External preview')).toBeNull();
+  view.rerender(ui(true, true));
+  await waitFor(() => expect(view.queryByAltText('External preview')).not.toBeNull());
+  expect(view.queryByText('Placeholder only')).toBeNull();
+  expect(view.container.querySelector<HTMLElement>('.docx-drawing-native')!.hidden).toBe(true);
+  view.rerender(ui(true, false));
+  await waitFor(() =>
+    expect(view.container.querySelector<HTMLElement>('.docx-drawing-native')!.hidden).toBe(false)
+  );
+  view.rerender(ui(false, false));
+  await waitFor(() => expect(view.container.querySelector('[data-docx-unsupported]')).toBeNull());
+  expect(view.container.querySelector('svg')).not.toBeNull();
+});
+
+test('a child component that renders nothing keeps the editor drawing until it has content', async () => {
+  const { previewDocument, previewShape } =
+    await import('../../core/src/store/__tests__/drawing-support-fixtures.ts');
+  const { DocxEditor } = await import('../src/index.ts');
+  const bytes = previewDocument(previewShape('<a:effectLst><a:blur rad="127000"/></a:effectLst>'));
+  let finish: () => void = () => {};
+  function LoadingPreview() {
+    const [ready, setReady] = useState(false);
+    useEffect(() => {
+      finish = () => setReady(true);
+    }, []);
+    return ready ? <img alt="Server preview" src="/preview.png" /> : null;
+  }
+  const view = render(
+    <DocxEditor document={bytes} chrome={false}>
+      <DocxEditor.UnsupportedElement includePartial match={(element) => !!element.drawing}>
+        {() => <LoadingPreview />}
+      </DocxEditor.UnsupportedElement>
+    </DocxEditor>
+  );
+  await waitFor(() => expect(view.container.querySelector('.docx-drawing-native')).not.toBeNull());
+  await tick();
+  expect(view.container.querySelector<HTMLElement>('.docx-drawing-native')!.hidden).toBe(false);
+  expect(view.container.querySelector('[data-docx-customized]')).toBeNull();
+  await act(async () => finish());
+  await waitFor(() => expect(view.queryByAltText('Server preview')).not.toBeNull());
+  await waitFor(() =>
+    expect(view.container.querySelector<HTMLElement>('.docx-drawing-native')!.hidden).toBe(true)
+  );
+  view.unmount();
+});

@@ -10,7 +10,8 @@ seoTitle: 'Word feature support and fidelity'
 Use this page to check which document features you can edit, display, and preserve when you save. Read each feature's note for limits, including document settings that change layout. Use the guides for setup and editing instructions.
 
 - [Fonts and measurement](/docs/2.x/guides/fonts): Supply fonts that control text width and page breaks.
-- [Right-to-left text](/docs/2.x/guides/right-to-left): Configure paragraph direction and understand mixed-direction editing.
+- [Right-to-left support](/docs/2.x/guides/right-to-left): Configure mirrored controls, paragraph direction, and mixed-direction editing.
+- [Chinese, Japanese, and Korean text](/docs/2.x/guides/cjk): Configure interface translations and fonts.
 - [Images](/docs/2.x/guides/images): Review picture formats, text wrapping, and drawing limits.
 - [Headers and footers](/docs/2.x/guides/headers-footers): Configure section variants and edit page content.
 - [Footnotes and endnotes](/docs/2.x/guides/footnotes-and-endnotes): Review note placement and continuation limits.
@@ -22,7 +23,7 @@ The editor supports right-to-left scripts and Chinese, Japanese, and Korean text
 | Language group | Support | Details |
 | --- | --- | --- |
 | Arabic, Hebrew, Persian, and Urdu | <FeatureBadge id="text.rtl" /> | Letter shaping and joining, mixed-direction order, right-to-left paragraphs, lists, tables, and columns, typed text direction, and a mirrored interface. See [Right-to-left text](/docs/2.x/guides/right-to-left). |
-| Chinese, Japanese, and Korean | <FeatureBadge id="text.cjk" /> | Input-method typing, East Asian font selection, line-breaking rules, and fallback fonts. See [Render Chinese, Japanese, and Korean text](/docs/2.x/customization/fonts#render-chinese-japanese-and-korean-text). |
+| Chinese, Japanese, and Korean | <FeatureBadge id="text.cjk" /> | Input-method typing, East Asian font selection, line-breaking rules, and fallback fonts. See [Chinese, Japanese, and Korean text](/docs/2.x/guides/cjk). |
 | East Asian typography | <FeatureBadge id="paragraphs.east-asian-typography" /> | Automatic spacing between scripts, punctuation compression, and punctuation overflow. |
 | Thai, Lao, Khmer, and Myanmar | <FeatureBadge id="paragraphs.complex-script-line-breaks" /> | Line breaks at character clusters. |
 | Interface languages | <FeatureBadge id="collab.i18n" /> | Translated controls. See [@docx-editor.dev/i18n](/docs/2.x/i18n). |
@@ -88,7 +89,13 @@ Plain-style runs keep the run font, and a font other than Cambria Math also keep
 
 Equations retain their canonical Office Math source when you save the document. Literal text and normal text project within fractions, radicals, scripts, and other supported structures. Upper and lower bars also project as math. Bars, fractions, radicals, scripts, and n-ary operators project when their properties carry control properties (`m:ctrlPr`). The control properties can hold run fonts, bold, and italic, directly or inside a tracked insertion or deletion. They can also hold default formatting, which this section describes later. Operator glyphs and rules keep the default math formatting, and the control properties remain unchanged on save. Other content in control properties retains the text fallback.
 
-Control properties hold default formatting when their run properties contain only the Cambria Math font, italic, one font size, and a language. If every control property in an equation holds the same default formatting, compact equation replacement is available. The replacement writes the same control properties on each fraction, radical, script, and n-ary operator that it creates. Run properties (`w:rPr`) on equation runs follow the same rule. If every run in an equation holds the same default formatting and no math run properties (`m:rPr`), compact equation replacement is available. The replacement writes the same run properties on each run that it creates. If the runs share one font size, the equation lays out at that size. Otherwise, it takes the size of the surrounding text. A display equation takes a run size only when all of its equations share it. Compact equation replacement is disabled when it cannot preserve run formatting, bars, or other control properties, including tracked ones. You can remove the equation and edit ordinary text beside it. This restriction applies to the equation, not the document. Unsupported source properties retain the text fallback and remain unchanged on save.
+Control properties hold default formatting when their run properties contain only the Cambria Math font, italic, one font size, and a language. If every control property in an equation holds the same default formatting, compact equation replacement is available. The replacement writes the same control properties on each fraction, radical, script, and n-ary operator that it creates. Run properties (`w:rPr`) on equation runs follow the same rule. If every run in an equation holds the same default formatting and no math run properties (`m:rPr`), compact equation replacement is available. The replacement writes the same run properties on each run that it creates.
+
+Each supported equation run uses its authored `w:sz`, including runs inside display equations. An unsized run takes the surrounding text size. Script and fraction text scales from each run's own size. The equation bounds include the largest run, so automatic line spacing can accommodate it. Exact line spacing keeps its authored height.
+
+Supported sizes are positive integer half-points from 1 through 9999. A matching `w:szCs` is preserved; it does not set the math size alone. Conflicting size values retain the text fallback.
+
+Compact equation replacement is disabled when it cannot preserve run formatting, bars, or other control properties, including tracked ones. Mixed source sizes retain this restriction. You can remove the equation and edit ordinary text beside it. This restriction applies to the equation, not the document. Unsupported source properties retain the text fallback and remain unchanged on save.
 
 ### Paragraphs and styles
 
@@ -119,6 +126,10 @@ This support applies to single-column sections. Frames containing unsupported dr
 Headers also support bounded page-anchored text frames with numeric positions and widths. Adjacent paragraphs with identical direct frame properties share one frame. These frames retain paragraph borders and auto or minimum heights. They do not increase the header height that positions body text. Ordinary header content, including inline images, keeps its flow position.
 
 This subset requires a separate ordinary paragraph and clear space around the frame. Headers with fields or revisions retain ordinary flow for this subset. Frames with exact heights, negative positions, overlapping content, or unsupported properties also retain ordinary flow. The editor preserves source paragraphs and their text positions.
+
+#### Distributed alignment
+
+Distributed paragraphs (`w:jc` with `distribute`) stretch their final line. This also applies inside table cells and each passage beside a floating object. Ordinary justified paragraphs keep their final line at its natural width.
 
 ### Lists and numbering
 
@@ -162,9 +173,15 @@ Nested, positioned, and right-to-left tables retain their existing geometry. Tab
 
 #### Tabs inside cells
 
+Press **Tab** to select the next cell's content, or **Shift+Tab** to select the previous cell's content. Typing replaces that selection. In the last cell, **Tab** adds a row when the document permits that operation. **Shift+Tab** in the first cell leaves the caret unchanged. With several cells selected, either key selects the first selected cell's content.
+
+To insert a tab character inside one cell, press **Option+Tab** or **Ctrl+Tab**. Browsers can reserve **Ctrl+Tab** for switching tabs. These shortcuts insert nothing when several cells are selected.
+
 In left-to-right table text without adjacent floating objects, an ordinary left tab can continue on the next line. This occurs when its next stop exceeds the cell line edge and visible content follows it. The tab keeps its source position and uses the next line’s tab stops. Paragraphs with consecutive tabs retain their existing placement. Trailing, aligned, and positional tabs also retain their existing placement.
 
 #### Floating tables
+
+Only WordprocessingML properties control floating-table placement and stacking. Foreign XML extensions remain preserved without changing that geometry.
 
 Body text wraps beside supported floating tables and below tables that cover the text column. Text does not wrap into gaps of 0.25 inches or less beside floating tables. Captions and headings move past these gaps. The table's text distances keep the authored gap between its border and surrounding text. Text-anchored tables with numeric vertical offsets follow their next ordinary paragraph onto its page and column.
 
@@ -240,9 +257,9 @@ The matrix defines support status. Check these limits when a document contains d
 | Feature | Rendering | Editing | Round-trip |
 | --- | --- | --- | --- |
 | Anchored text boxes | Insert → Text Box creates a rectangular body text box. Supports typing, paragraph editing, text formatting, plain-text paste, undo, deletion, dragging, and resizing. Edits synchronize during collaboration, with remote cursors and text selections. Clicking inside shows the caret and frame handles. Content stays inside the authored extent. Text boxes in headers and footers support the same text editing, dragging, resizing, and deletion. Boxes with tables remain read-only. Linked chains, autofit, and rotation can clip or use placeholders. | Body, header, and footer text boxes | Preserved |
-| Drawing shapes | Renders all preset shapes and bounded custom geometry with solid, gradient, and pattern fills, outlines, line ends, and outer shadows. Groups and drawing canvases can include pictures and text boxes. Glow, inner shadow, reflection, soft edge, and the rim of a dark-edged bevel need the drawing module. Shapes outside these limits use a placeholder. Unsupported shapes in alternative content are hidden, and floating ones keep their wrap area. | No | Preserved |
+| Drawing shapes | Renders all preset shapes and bounded custom geometry with solid, gradient, and pattern fills, outlines, line ends, and outer shadows. Groups and drawing canvases can include pictures and text boxes. Glow, inner shadow, reflection, soft edge, and the rim of a dark-edged bevel need the drawing module. Shapes outside these limits use a placeholder. Unsupported visible shapes in alternative content show one placeholder when no supported fallback exists. Floating placeholders retain their wrap area. If an unsupported header or footer placeholder blocks the full body height, layout can omit its wrapping exclusion. The placeholder remains visible. | No | Preserved |
 | WMF and EMF | Rasterizes supported files in the editor. With the drawing module, draws them as vectors in PDF export and places files that set their own drawing origin correctly. In the editor, files that do not convert keep their extent with a placeholder; PDF export leaves them out and reports a diagnostic. | No | Full |
-| Charts | Render read-only with the [drawing module](/docs/2.x/pro/drawing); PDF export includes it. Without it, the editor shows a labeled placeholder. | No | Full |
+| Charts | Render read-only with the [drawing module](/docs/2.x/pro/drawing); PDF export includes it. If a chart cannot render, the editor uses its saved fallback picture or drawing when that fallback renders. Without a usable fallback, the editor shows a labeled placeholder. PDF export omits the chart and reports a `drawing` diagnostic, which fails strict export. Picture commands refuse charts in every state. Deleting a chart removes its fallback too. Treemap, sunburst, and map charts, and charts that combine a pie or radar plot with other plot types, do not render. For the list, see [What renders](/docs/2.x/pro/drawing#what-renders). | No | Preserved |
 | SmartArt | Renders the saved diagram drawing. A diagram saved without its drawing needs the [drawing module](/docs/2.x/pro/drawing). | No | Full |
 | WordArt | Renders with the [drawing module](/docs/2.x/pro/drawing). Without it, inline WordArt shows a placeholder and floating WordArt does not show. | No | Full |
 

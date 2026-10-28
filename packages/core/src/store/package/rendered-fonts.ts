@@ -32,6 +32,7 @@
 //   the one mark that does NOT count, because layout paints it in that face instead of the
 //   run's — see `GLYPH_MARKS` below.
 
+import { isEastAsianCodePoint } from './east-asian-code-points.ts';
 import type { OoxmlElement, OoxmlNode } from './ooxml-tree.ts';
 import { WML_NAMESPACE_URI } from './ooxml-shared.ts';
 import type { DocumentThemeFonts } from './theme-font-scheme.ts';
@@ -45,6 +46,7 @@ import {
   FORMAT_DEFAULT_EAST_ASIAN_FAMILY,
   FORMAT_DEFAULT_LATIN_FAMILY,
 } from './default-font-faces.ts';
+import { weakRefOf, type WeakRefOf } from './weak-ref.ts';
 
 /** `basedOn` walk cap, matching `run-defaults`. */
 const CHAIN_CAP = 16;
@@ -259,27 +261,6 @@ function runRendersGlyphs(run: OoxmlElement, projectedGlyphIds?: ReadonlySet<str
 }
 
 /**
- * Whether the run's text contains a codepoint Word resolves through `w:eastAsia`.
- *
- * The block set mirrors the East Asian scripts in `layout/script-itemization.ts` (Han,
- * Kana, Hangul, Bopomofo, their extensions, and full/half-width forms), which the binding
- * lane may not import. CJK-locale Office builds stamp a `w:eastAsia` theme face on nearly
- * every run, so without this gate a Latin-only document reports a CJK family as rendered.
- */
-function isEastAsianCodePoint(codePoint: number): boolean {
-  return (
-    (codePoint >= 0x1100 && codePoint <= 0x11ff) || // Hangul Jamo
-    (codePoint >= 0x2e80 && codePoint <= 0x9fff) || // CJK radicals through Unified Ideographs
-    (codePoint >= 0xa960 && codePoint <= 0xa97f) || // Hangul Jamo Extended-A
-    (codePoint >= 0xac00 && codePoint <= 0xd7ff) || // Hangul Syllables + Jamo Extended-B
-    (codePoint >= 0xf900 && codePoint <= 0xfaff) || // CJK Compatibility Ideographs
-    (codePoint >= 0xfe30 && codePoint <= 0xfe4f) || // CJK Compatibility Forms
-    (codePoint >= 0xff00 && codePoint <= 0xffef) || // Full/half-width forms
-    (codePoint >= 0x20000 && codePoint <= 0x3ffff) // CJK extension planes
-  );
-}
-
-/**
  * Whether a code point can draw in the `w:hAnsi` face: a non-ASCII BMP character outside
  * the East Asian blocks above, Hebrew and Arabic. The no-break space counts, because it
  * advances in that face. Over-reports the hint-dependent ranges, never hides a drawn face.
@@ -433,12 +414,7 @@ function summaryOf(
   }
   let summary: MutableSummary;
   if (subtree.children.length >= COMPOSE_CHILD_THRESHOLD && depth < MAX_COMPOSE_DEPTH) {
-    summary = createSummary();
-    for (const child of subtree.children as readonly OoxmlNode[]) {
-      if (!isElement(child)) continue;
-      mergeSummary(summary, summaryOf(child, themeFonts, depth + 1));
-    }
-    applyNode(subtree, summary, themeFonts);
+    summary = composedSummary(subtree, themeFonts, depth);
   } else {
     summary = walkSummary(subtree, themeFonts);
   }
@@ -451,6 +427,83 @@ function summaryOf(
     minorBidi: themeFonts.minorBidi,
     summary,
   });
+  return summary;
+}
+
+/** One wide container's composition, kept for its next revision; see {@link composedSummary}. */
+interface Composition {
+  /** Weakly: a kept composition must not keep a closed document's tree alive. */
+  readonly children: WeakRefOf<readonly OoxmlNode[]>;
+  readonly parts: readonly (RenderedFontsSummary | null)[];
+  readonly summary: MutableSummary;
+  readonly themeFonts: DocumentThemeFonts;
+}
+/** The last composition per container id: an edit makes a new container that keeps its id. */
+const compositions = new Map<string, Composition>();
+const MAX_COMPOSITIONS = 64;
+
+function sameThemeFonts(a: DocumentThemeFonts, b: DocumentThemeFonts): boolean {
+  return (
+    a.major === b.major &&
+    a.minor === b.minor &&
+    a.majorEastAsia === b.majorEastAsia &&
+    a.minorEastAsia === b.minorEastAsia &&
+    a.majorBidi === b.majorBidi &&
+    a.minorBidi === b.minorBidi
+  );
+}
+
+/** Whether two summaries hold the same profiles: their keys name every profile field. */
+function sameProfiles(a: RenderedFontsSummary | null, b: RenderedFontsSummary | null): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.profiles.size !== b.profiles.size) return false;
+  for (const key of a.profiles.keys()) if (!b.profiles.has(key)) return false;
+  return true;
+}
+
+/**
+ * A wide container's summary from its children's. An edit rebuilds the path to what it
+ * changed, so a body of thousands of blocks is new after every keystroke while all but one of
+ * its children are the objects it had. Those keep their summaries without a memo lookup, and
+ * when the changed ones hold the profiles they replace, the previous composition stands. Only a
+ * container that adds nothing of its own (not a run, paragraph or table) reuses it.
+ */
+function composedSummary(
+  subtree: OoxmlElement,
+  themeFonts: DocumentThemeFonts,
+  depth: number
+): MutableSummary {
+  const children = subtree.children as readonly OoxmlNode[];
+  const neutral =
+    subtree.namespaceUri !== WML_NAMESPACE_URI ||
+    (subtree.localName !== 'r' && !isStyledBlock(subtree));
+  const previous = neutral ? compositions.get(subtree.id) : undefined;
+  const previousChildren = previous?.children.deref();
+  const reusable =
+    previous !== undefined &&
+    previousChildren !== undefined &&
+    previousChildren.length === children.length &&
+    sameThemeFonts(previous.themeFonts, themeFonts);
+  let unchanged = reusable;
+  const parts = children.map((child, index) => {
+    if (reusable && child === previousChildren[index]) return previous.parts[index]!;
+    const part = isElement(child) ? summaryOf(child, themeFonts, depth + 1) : null;
+    if (unchanged && !sameProfiles(part, previous!.parts[index]!)) unchanged = false;
+    return part;
+  });
+  let summary: MutableSummary;
+  if (unchanged) summary = previous!.summary;
+  else {
+    summary = createSummary();
+    for (const part of parts) if (part) mergeSummary(summary, part);
+    applyNode(subtree, summary, themeFonts);
+  }
+  if (neutral) {
+    compositions.delete(subtree.id);
+    compositions.set(subtree.id, { children: weakRefOf(children), parts, summary, themeFonts });
+    if (compositions.size > MAX_COMPOSITIONS)
+      compositions.delete(compositions.keys().next().value!);
+  }
   return summary;
 }
 

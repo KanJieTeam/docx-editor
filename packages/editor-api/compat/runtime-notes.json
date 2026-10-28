@@ -125,7 +125,7 @@
   },
   "Word.InlinePicture#width": {
     "status": "partial",
-    "notes": "Points. Under an aspect lock, changing one dimension updates the other proportionally. Simultaneous contradictory width/height writes refuse; unlock first for independent dimensions. Writes coalesce per proxy. Existing unrelated drawing settings survive."
+    "notes": "Points. Under an aspect lock, changing one dimension updates the other proportionally. Simultaneous contradictory width/height writes refuse; unlock first for independent dimensions. Writes coalesce per proxy. Existing unrelated drawing settings survive. A chart is not listed in inlinePictures, whether the page draws it, shows its saved fallback picture, or shows a placeholder, so no InlinePicture write reaches it; a store picture edit of a chart or of either branch of its mc:AlternateContent refuses with edit.unsupported-content."
   },
   "Word.InlinePicture#height": {
     "status": "partial",
@@ -141,7 +141,7 @@
   },
   "Word.InlinePicture#delete": {
     "status": "partial",
-    "notes": "Deletes the inline drawing. Media parts and relationships are preserved, including references shared by other pictures; this implementation does not garbage-collect image media. Deleted picture handles refuse on later use."
+    "notes": "Deletes the inline drawing. Media parts and relationships are preserved, including references shared by other pictures; this implementation does not garbage-collect image media. Deleted picture handles refuse on later use. A chart is not listed in inlinePictures, whether the page draws it, shows its saved fallback picture, or shows a placeholder, so no InlinePicture.delete reaches it; see InlinePicture#width."
   },
   "Word.Range#insertTable": {
     "status": "partial",
@@ -373,11 +373,11 @@
   },
   "Word.Body#shapes": {
     "status": "partial",
-    "notes": "Lists floating (wp:anchor) and inline (wp:inline) drawings in the body or paragraph, in reading order. An inline picture is listed as a Picture shape and also stays in inlinePictures. A run-level mc:AlternateContent is read through the branch that layout selects; a shape whose selected branch is the VML fallback is not listed. A standalone legacy VML shape (w:pict) has no wp:docPr id, so it is not listed and its text box story is not reachable through Shape.body. Shapes in notes and in text boxes are listed, but their bodies refuse. Duplicate or missing wp:docPr ids refuse the listing. Range#shapes is not published."
+    "notes": "Lists floating (wp:anchor) and inline (wp:inline) drawings in the body or paragraph, in reading order. An inline picture is listed as a Picture shape and also stays in inlinePictures. A run-level mc:AlternateContent is read through the branch that layout selects; a shape whose selected branch is the VML fallback is not listed. A chart in mc:AlternateContent is always read through its chart branch, so it lists as one Unsupported shape with that branch's wp:docPr id, whether the page shows the chart, its fallback picture, or a placeholder. A standalone legacy VML shape (w:pict) has no wp:docPr id, so it is not listed and its text box story is not reachable through Shape.body. Shapes in notes and in text boxes are listed, but their bodies refuse. Duplicate or missing wp:docPr ids refuse the listing. Range#shapes is not published."
   },
   "Word.Paragraph#shapes": {
     "status": "partial",
-    "notes": "Lists floating (wp:anchor) and inline (wp:inline) drawings in the body or paragraph, in reading order. An inline picture is listed as a Picture shape and also stays in inlinePictures. A run-level mc:AlternateContent is read through the branch that layout selects; a shape whose selected branch is the VML fallback is not listed. A standalone legacy VML shape (w:pict) has no wp:docPr id, so it is not listed and its text box story is not reachable through Shape.body. Shapes in notes and in text boxes are listed, but their bodies refuse. Duplicate or missing wp:docPr ids refuse the listing. Range#shapes is not published."
+    "notes": "Lists floating (wp:anchor) and inline (wp:inline) drawings in the body or paragraph, in reading order. An inline picture is listed as a Picture shape and also stays in inlinePictures. A run-level mc:AlternateContent is read through the branch that layout selects; a shape whose selected branch is the VML fallback is not listed. A chart in mc:AlternateContent is always read through its chart branch, so it lists as one Unsupported shape with that branch's wp:docPr id, whether the page shows the chart, its fallback picture, or a placeholder. A standalone legacy VML shape (w:pict) has no wp:docPr id, so it is not listed and its text box story is not reachable through Shape.body. Shapes in notes and in text boxes are listed, but their bodies refuse. Duplicate or missing wp:docPr ids refuse the listing. Range#shapes is not published."
   },
   "Word.Shape#id": {
     "status": "partial",
@@ -389,7 +389,7 @@
   },
   "Word.Shape#type": {
     "status": "partial",
-    "notes": "TextBox for a wps shape that wps:cNvSpPr/@txBox marks as a text box, GeometricShape for any other wps shape, Picture, Group, Canvas, or Unsupported."
+    "notes": "TextBox for a wps shape that wps:cNvSpPr/@txBox marks as a text box, GeometricShape for any other wps shape, Picture, Group, Canvas, or Unsupported. A chart (classic or chartex) is Unsupported, also when its saved fallback is a picture."
   },
   "Word.Shape#body": {
     "status": "partial",
@@ -401,7 +401,7 @@
   },
   "Word.ShapeCollection#getFirst": {
     "status": "partial",
-    "notes": "Lists floating (wp:anchor) and inline (wp:inline) drawings in the body or paragraph, in reading order. An inline picture is listed as a Picture shape and also stays in inlinePictures. A run-level mc:AlternateContent is read through the branch that layout selects; a shape whose selected branch is the VML fallback is not listed. A standalone legacy VML shape (w:pict) has no wp:docPr id, so it is not listed and its text box story is not reachable through Shape.body. Shapes in notes and in text boxes are listed, but their bodies refuse. Duplicate or missing wp:docPr ids refuse the listing. Range#shapes is not published. Supported read-derived proxies can be addressed within one sync through read-only prerequisite batches followed by one atomic write transaction. All phases share a revision; concurrent changes refuse without replay. Table cell reads/writes and Range text writes support this path. Other accessors may still require an explicit sync. Proxies returned by writes require a completed sync before dependent operations; the runtime never commits a producer just to resolve its dependent command."
+    "notes": "Lists floating (wp:anchor) and inline (wp:inline) drawings in the body or paragraph, in reading order. An inline picture is listed as a Picture shape and also stays in inlinePictures. A run-level mc:AlternateContent is read through the branch that layout selects; a shape whose selected branch is the VML fallback is not listed. A chart in mc:AlternateContent is always read through its chart branch, so it lists as one Unsupported shape with that branch's wp:docPr id, whether the page shows the chart, its fallback picture, or a placeholder. A standalone legacy VML shape (w:pict) has no wp:docPr id, so it is not listed and its text box story is not reachable through Shape.body. Shapes in notes and in text boxes are listed, but their bodies refuse. Duplicate or missing wp:docPr ids refuse the listing. Range#shapes is not published. Supported read-derived proxies can be addressed within one sync through read-only prerequisite batches followed by one atomic write transaction. All phases share a revision; concurrent changes refuse without replay. Table cell reads/writes and Range text writes support this path. Other accessors may still require an explicit sync. Proxies returned by writes require a completed sync before dependent operations; the runtime never commits a producer just to resolve its dependent command."
   },
   "Word.ListCollection#getFirst": {
     "status": "partial",
@@ -417,7 +417,7 @@
   },
   "Word.ShapeCollection#getFirstOrNullObject": {
     "status": "partial",
-    "notes": "Lists floating (wp:anchor) and inline (wp:inline) drawings in the body or paragraph, in reading order. An inline picture is listed as a Picture shape and also stays in inlinePictures. A run-level mc:AlternateContent is read through the branch that layout selects; a shape whose selected branch is the VML fallback is not listed. A standalone legacy VML shape (w:pict) has no wp:docPr id, so it is not listed and its text box story is not reachable through Shape.body. Shapes in notes and in text boxes are listed, but their bodies refuse. Duplicate or missing wp:docPr ids refuse the listing. Range#shapes is not published. Supported read-derived proxies can be addressed within one sync through read-only prerequisite batches followed by one atomic write transaction. All phases share a revision; concurrent changes refuse without replay. Table cell reads/writes and Range text writes support this path. Other accessors may still require an explicit sync. Proxies returned by writes require a completed sync before dependent operations; the runtime never commits a producer just to resolve its dependent command."
+    "notes": "Lists floating (wp:anchor) and inline (wp:inline) drawings in the body or paragraph, in reading order. An inline picture is listed as a Picture shape and also stays in inlinePictures. A run-level mc:AlternateContent is read through the branch that layout selects; a shape whose selected branch is the VML fallback is not listed. A chart in mc:AlternateContent is always read through its chart branch, so it lists as one Unsupported shape with that branch's wp:docPr id, whether the page shows the chart, its fallback picture, or a placeholder. A standalone legacy VML shape (w:pict) has no wp:docPr id, so it is not listed and its text box story is not reachable through Shape.body. Shapes in notes and in text boxes are listed, but their bodies refuse. Duplicate or missing wp:docPr ids refuse the listing. Range#shapes is not published. Supported read-derived proxies can be addressed within one sync through read-only prerequisite batches followed by one atomic write transaction. All phases share a revision; concurrent changes refuse without replay. Table cell reads/writes and Range text writes support this path. Other accessors may still require an explicit sync. Proxies returned by writes require a completed sync before dependent operations; the runtime never commits a producer just to resolve its dependent command."
   },
   "Word.BuildingBlockCategoryCollection#getItemAt": {
     "status": "partial",
@@ -581,11 +581,11 @@
   },
   "Word.Comment#delete": {
     "status": "partial",
-    "notes": "Updates the comment thread through canonical package review writes. Browser writes require the review module and an editable document; deleted or unsupported thread targets refuse. Unrelated threads survive."
+    "notes": "Updates the comment thread through canonical package review writes. Browser writes require the review module and an editable document; deleted or unsupported thread targets refuse. Unrelated threads survive. Scan budgets scale with the loaded canonical package, including edits since import. A deletion batch shares marker scans and its scan budget. Each affected part rebuilds once. Mixed thread and reply deletions preserve their queue order. Nesting guards remain active. Incomplete scans refuse without partial deletion."
   },
   "Word.CommentReply#delete": {
     "status": "partial",
-    "notes": "Deletes the addressed reply through package review writes while preserving the parent thread. Browser writes require the review module and an editable document; stale targets refuse."
+    "notes": "Deletes the addressed reply through package review writes while preserving the parent thread. Browser writes require the review module and an editable document; stale targets refuse. Scan budgets scale with the loaded canonical package, including edits since import. A deletion batch shares marker scans and its scan budget. Each affected part rebuilds once. Mixed thread and reply deletions preserve their queue order. Nesting guards remain active. Incomplete scans refuse without partial deletion."
   },
   "Word.Revision#accept": {
     "status": "partial",

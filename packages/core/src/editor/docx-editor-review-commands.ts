@@ -2,7 +2,7 @@ import {
   filterReviewItemsByAuthor,
   type RevisionAuthorVisibility,
 } from './revision-author-visibility.ts';
-import { ordinaryMoveRanges } from '../store/store/revision-move-ranges.ts';
+import { paragraphsWithOrdinaryMoves } from '../store/store/revision-move-ranges.ts';
 import { emptiedTableCells } from '../store/store/revision-table-emptied-cells.ts';
 import type {
   EditorModuleRegistry,
@@ -842,6 +842,22 @@ function acceptEmptiesTableCell(part: OoxmlPart, item: ReviewRevisionItem): bool
   );
 }
 
+/**
+ * Whether a card can decide together with an ordinary move range. A card with no range has no
+ * paragraph to rule it out.
+ */
+function touchesOrdinaryMove(part: OoxmlPart, item: ReviewRevisionItem): boolean {
+  const paragraphs = paragraphsWithOrdinaryMoves(part.root);
+  if (paragraphs === 'everywhere') return true;
+  return (
+    paragraphs.size > 0 &&
+    (item.ranges.length === 0 ||
+      item.ranges.some(
+        (range) => paragraphs.has(range.start.paragraphId) || paragraphs.has(range.end.paragraphId)
+      ))
+  );
+}
+
 /** Resolve only the canonical sites that contributed to this card. */
 function resolutionOps(
   item: ReviewRevisionItem,
@@ -859,7 +875,8 @@ function resolutionOps(
     item.revisionKind === 'moveFrom' ||
     item.revisionKind === 'moveTo' ||
     item.revisionKind === 'paragraphMark' ||
-    ordinaryMoveRanges(part.root).length > 0 ||
+    // A change in a paragraph that holds part of an ordinary move range can resolve with it.
+    touchesOrdinaryMove(part, item) ||
     // A formatting decision can replace properties that hold another change, so the planner
     // decides it, as it decides a keyed bulk selection of the same card.
     item.revisionKind === 'format' ||

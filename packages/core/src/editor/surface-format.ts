@@ -31,6 +31,7 @@ import {
 } from './surface-formatting.ts';
 import { formattableRanges } from '@docx-editor.dev/core/store';
 import { findNode } from '../store/package/ooxml-edit.ts';
+import { isEastAsianFontFamily } from '../store/package/default-font-faces.ts';
 import { formattingRangeBesideRestrictedControl } from '../store/store/direct-properties.ts';
 import type {
   FormattingDisplayMode,
@@ -154,6 +155,19 @@ export function createSurfaceFormat(deps: SurfaceFormatDeps): FormatMethods {
       },
       caretSpan: true,
     };
+  };
+  // A font pick (`w:ascii` and `w:hAnsi` set to one family, nothing else) of an EAST ASIAN
+  // font also sets `w:eastAsia`, so the pick reaches Chinese, Japanese, and Korean text. A
+  // Latin font leaves `w:eastAsia` alone: it has no CJK glyphs, and writing it there would
+  // repaint the ideographs in a fallback face. The font is East Asian by its name only.
+  const withEastAsianSlot = (
+    attributes: Record<string, string> | undefined
+  ): Record<string, string> | undefined => {
+    const family = attributes?.ascii;
+    if (!family || attributes.hAnsi !== family || Object.keys(attributes).length !== 2) {
+      return attributes;
+    }
+    return isEastAsianFontFamily(family) ? { ...attributes, eastAsia: family } : attributes;
   };
   const applyOps = (
     ops: Parameters<TreeDocxSessionView['applyTreeOps']>[0],
@@ -447,7 +461,8 @@ export function createSurfaceFormat(deps: SurfaceFormatDeps): FormatMethods {
     setRunProperty(localName, attributes) {
       const refused = refuseRunFormat();
       if (refused) return refused;
-      const incoming = { localName, ...(attributes ? { attributes } : {}) };
+      const widened = localName === 'rFonts' ? withEastAsianSlot(attributes) : attributes;
+      const incoming = { localName, ...(widened ? { attributes: widened } : {}) };
       const cells = deps.selectedCells?.();
       if (cells && cells.length > 0) return writeRunPropertyOverCells(cells, incoming);
       const { from, to } = orderedRange();

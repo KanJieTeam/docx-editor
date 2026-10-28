@@ -15,13 +15,12 @@ import {
 import {
   createNodeIdAllocator,
   findNode,
-  parentNodeOf,
   replaceNode,
   type EditOptions,
 } from '../package/ooxml-edit.ts';
 import { MAX_INLINE_CONTAINER_DEPTH } from '../package/ooxml-shared.ts';
-import type { OoxmlNode, OoxmlPart } from '../package/ooxml-tree.ts';
-import { isInlineControl } from './content-control-checkbox.ts';
+import type { OoxmlElement, OoxmlNode, OoxmlPart } from '../package/ooxml-tree.ts';
+import { isInlineControl, isWml } from './content-control-checkbox.ts';
 import { contentWithText, editedProperties, promptFor } from './tree-op-content-controls.ts';
 import {
   contentControlContentOf,
@@ -41,7 +40,8 @@ const PROMPT_KINDS: ReadonlySet<ContentControlKind> = new Set<ContentControlKind
   'docPartList',
 ]);
 
-function holdsContent(node: OoxmlNode, depth: number): boolean {
+/** @internal Exported for the restore order oracle test. */
+export function holdsContent(node: OoxmlNode, depth: number): boolean {
   if (node.kind === 'textValue' || depth > MAX_INLINE_CONTAINER_DEPTH) return false;
   if (node.kind === 'run') return node.children.some((child) => !isRunPropertiesNode(child));
   if (node.localName === 'sdtPr' || node.localName === 'pPr') return false;
@@ -91,6 +91,32 @@ export function restoreEmptiedPlaceholder(
   return written.ok ? { ...result, part: written.part } : result;
 }
 
+/** A control the walk met, and whether it sits in run content. */
+interface Control {
+  readonly node: OoxmlElement;
+  readonly inline: boolean;
+}
+
+/** Block containers: a control below one, with no paragraph between, is block-level. */
+const BLOCKS: ReadonlySet<OoxmlNode['kind']> = new Set(['table', 'tableRow', 'tableCell']);
+
+const holdsControl = new WeakMap<OoxmlNode, boolean>();
+
+/**
+ * Whether `node` holds a content control. Memoized per node: a decision rebuilds only the path
+ * to what it changed, so in the next revision every other subtree answers from the memo.
+ */
+function holdsContentControl(node: OoxmlNode): boolean {
+  if (node.kind === 'textValue') return false;
+  const known = holdsControl.get(node);
+  if (known !== undefined) return known;
+  let holds = node.kind === 'contentControl';
+  for (let index = 0; !holds && index < node.children.length; index += 1)
+    holds = holdsContentControl(node.children[index]!);
+  holdsControl.set(node, holds);
+  return holds;
+}
+
 /**
  * Restore the placeholder of each inline control a revision decision emptied. A decision writes
  * five spaces under `w:showingPlcHdr`, the placeholder a control without its own prompt text
@@ -102,26 +128,63 @@ export function restoreDecisionEmptiedControls(
   after: OoxmlPart,
   options?: EditOptions
 ): OoxmlPart {
-  const controls = new Set<string>();
-  const inside = (node: OoxmlNode, depth: number): void => {
-    if (node.kind === 'textValue' || depth > MAX_INLINE_CONTAINER_DEPTH) return;
-    if (node.kind === 'contentControl') controls.add(node.id);
-    for (const child of node.children) inside(child, depth + 1);
+  // The controls around each decided change, and the ones a removed change held. One walk of
+  // `before` that enters only subtrees holding a control, and that keeps each control and
+  // whether it sits in run content: looking each change and control up instead indexed the
+  // whole part, and each decision makes a new part.
+  const order = [...decidedIds];
+  const decided = new Set(order);
+  /** Per decided id: the controls around it, innermost first, as a walk up meets them. */
+  const enclosingOf = new Map<string, readonly Control[]>();
+  /** Per decided id: the controls it holds, in document order, within the depth limit. */
+  const insideOf = new Map<string, Control[]>();
+  type Holder = { readonly id: string; readonly depth: number };
+  const noHolders: readonly Holder[] = [];
+  const visit = (
+    node: OoxmlNode,
+    enclosing: readonly Control[],
+    holders: readonly Holder[],
+    inline: boolean
+  ): void => {
+    if (node.kind === 'textValue') return;
+    let within =
+      holders.length === 0
+        ? noHolders
+        : holders.map((holder) => ({ id: holder.id, depth: holder.depth + 1 }));
+    // A repeated id counts where it first appears, as a lookup by id finds it.
+    if (decided.has(node.id) && !enclosingOf.has(node.id)) {
+      enclosingOf.set(node.id, [...enclosing].reverse());
+      insideOf.set(node.id, []);
+      within = [...within, { id: node.id, depth: 0 }];
+    }
+    let around = enclosing;
+    if (node.kind === 'contentControl') {
+      const control = { node, inline };
+      for (const holder of within)
+        if (holder.depth <= MAX_INLINE_CONTAINER_DEPTH) insideOf.get(holder.id)!.push(control);
+      around = [...enclosing, control];
+    }
+    // What sits below this node is in run content when the nearest block above it is a
+    // paragraph, as `isInlineControl` reads it.
+    const childInline =
+      node.kind === 'paragraph' || isWml(node, 'p') ? true : BLOCKS.has(node.kind) ? false : inline;
+    for (const child of node.children)
+      if (around.length > 0 || holdsContentControl(child))
+        visit(child, around, within, childInline);
   };
-  // The controls around each decided change, and the ones a removed change held.
-  for (const id of decidedIds) {
-    for (let node = parentNodeOf(before, id); node; node = parentNodeOf(before, node.id))
-      if (node.kind === 'contentControl') controls.add(node.id);
-    const decided = findNode(before, id);
-    if (decided) inside(decided, 0);
-  }
+  visit(before.root, [], [], false);
+  // In the order of the decided ids, each one's enclosing controls and then the ones it held:
+  // the order the restore allocates node ids in, which every peer must share.
+  const controls = new Map<string, Control>();
+  for (const id of order)
+    for (const control of [...(enclosingOf.get(id) ?? []), ...(insideOf.get(id) ?? [])])
+      if (!controls.has(control.node.id)) controls.set(control.node.id, control);
   let result: TreeOpResult = { ok: true, part: after, effect: NO_EFFECT };
-  for (const id of controls) {
-    if (!isInlineControl(before, id)) continue;
-    const control = findContentControl(before, id);
-    const content = control && contentControlContentOf(control);
+  for (const { node, inline } of controls.values()) {
+    if (!inline) continue;
+    const content = contentControlContentOf(node);
     if (!content || !holdsContent(content, 0)) continue;
-    result = restoreEmptiedPlaceholder(result, id, options, DECISION_PLACEHOLDER);
+    result = restoreEmptiedPlaceholder(result, node.id, options, DECISION_PLACEHOLDER);
   }
   return result.ok ? result.part : after;
 }

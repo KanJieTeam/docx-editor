@@ -409,6 +409,27 @@ export const CHART_GRAPHIC_DATA_URI = "http://schemas.openxmlformats.org/drawing
 export const CHART_NAMESPACE_URI = "http://schemas.openxmlformats.org/drawingml/2006/chart";
 
 // @internal
+export const CHART_STYLE_NAMESPACE_URI = "http://schemas.microsoft.com/office/drawing/2012/chartStyle";
+
+// @internal (undocumented)
+export const CHARTEX_GRAPHIC_DATA_URI = "http://schemas.microsoft.com/office/drawing/2014/chartex";
+
+// @internal (undocumented)
+export const CHARTEX_NAMESPACE_URI = "http://schemas.microsoft.com/office/drawing/2014/chartex";
+
+// @internal
+export interface ChartexPart {
+    readonly chartSpace: OoxmlElement;
+    readonly colors: OoxmlElement | null;
+    readonly partName: string;
+    readonly style: OoxmlElement | null;
+    readonly themeFaces: ChartThemeFaces;
+}
+
+// @internal
+export type ChartexPartResolver = (chart: OoxmlElement) => ChartexPart | null;
+
+// @internal
 export interface ChartPart {
     readonly chartSpace: OoxmlElement;
     readonly partName: string;
@@ -420,6 +441,7 @@ export type ChartPartResolver = (chart: OoxmlElement) => ChartPart | null;
 
 // @internal
 export interface ChartRenderContext {
+    readonly resolveChartexPart?: ChartexPartResolver;
     // (undocumented)
     readonly resolveChartPart?: ChartPartResolver;
     // (undocumented)
@@ -897,6 +919,9 @@ export interface Contribution {
 }
 
 // @public
+export function createDrawingPreviewPackage(pkg: OoxmlPackage, target: DrawingPreviewTarget, limits?: DrawingPreviewPackageLimits): DrawingPreviewPackageResult;
+
+// @public
 export function createImageResourceCache(initialPkg: OoxmlPackage, options: CreateImageResourceCacheOptions): ImageResourceLookup;
 
 // @public
@@ -1259,6 +1284,7 @@ export interface DiagramLayoutParts {
 export interface DiagramPartResolver {
     (relIds: OoxmlElement): DiagramParts | null;
     readonly chart?: ChartPartResolver;
+    readonly chartex?: ChartexPartResolver;
 }
 
 // @internal
@@ -1358,6 +1384,9 @@ export interface DrawingEffectsRenderer {
     }) => readonly VectorShapeComponent[];
 }
 
+// @public
+export type DrawingGraphicKind = 'picture' | 'chart' | 'diagram' | 'shape' | 'group' | 'textbox' | 'canvas' | 'graphic';
+
 // @internal
 export interface DrawingGraphicProjection {
     // (undocumented)
@@ -1414,6 +1443,29 @@ export interface DrawingPositionInput {
 }
 
 // @public
+export interface DrawingPreviewPackageLimits {
+    readonly maxBytes?: number;
+    readonly maxParts?: number;
+}
+
+// @public
+export type DrawingPreviewPackageResult = {
+    readonly copiedParts: readonly string[];
+    readonly docx: Uint8Array;
+    readonly ok: true;
+    readonly pageFitsDrawing: boolean;
+} | {
+    readonly ok: false;
+    readonly reason: 'drawing-not-found' | 'too-many-parts' | 'too-large';
+};
+
+// @public
+export interface DrawingPreviewTarget {
+    readonly nodeId: string;
+    readonly ownerPartName: string;
+}
+
+// @public
 export type DrawingPropertyIdResult = {
     readonly id: number;
     readonly ok: true;
@@ -1436,6 +1488,37 @@ export interface DrawingRenderers {
     readonly legacyTextArt?: (shape: OoxmlElement, context?: LegacyTextArtContext) => LegacyTextArtProjection | null;
     readonly metafile?: MetafileRenderer;
     readonly textArtLayout?: TextArtLayoutRenderer;
+}
+
+// @public
+export type DrawingSupport = 'native' | 'partial' | 'unrendered';
+
+// @public
+export interface DrawingSupportEntry {
+    readonly drawingNodeId: string | null;
+    readonly graphicKind: DrawingGraphicKind;
+    readonly issues: readonly DrawingSupportIssue[];
+    readonly nodeId: string;
+    readonly ownerPartName: string;
+    readonly source: OoxmlElement;
+    readonly state: 'projected' | 'fallback' | 'placeholder' | 'hidden' | 'unplaced';
+    readonly support: DrawingSupport;
+}
+
+// @public
+export interface DrawingSupportIssue {
+    readonly code: 'unsupported-effect' | 'renderer-required' | 'unverified-3d' | 'saved-fallback' | 'unplaced-drawing' | 'inspection-limit' | 'projection-diagnostic';
+    readonly detail: string;
+    readonly localName: string;
+    readonly namespaceUri: string;
+    readonly nodeId: string;
+}
+
+// @public
+export interface DrawingSupportReport {
+    readonly complete: boolean;
+    readonly coverage: 'explicit-source-effects';
+    readonly entries: readonly DrawingSupportEntry[];
 }
 
 // @internal
@@ -1524,9 +1607,11 @@ export type EquationExpression = {
     readonly items: readonly EquationExpression[];
     readonly kind: 'row';
 } | {
+    readonly fontSizePt?: number;
     readonly format?: {
         readonly bold?: boolean;
         readonly fontFamily?: string;
+        readonly fontSizePt?: number;
         readonly italic?: boolean;
         readonly literal?: boolean;
         readonly mathStyle?: 'p' | 'b' | 'i' | 'bi';
@@ -2349,6 +2434,9 @@ export type InsertTextOp = {
     readonly text: string;
     readonly textFormFieldId?: string;
 };
+
+// @public
+export function inspectDrawingSupport(pkg: OoxmlPackage): DrawingSupportReport;
 
 // @internal
 export function installDrawingRenderers(renderers: DrawingRenderers): void;
@@ -5840,6 +5928,8 @@ export type TreeOpRejection = 'unknown-op' | 'unknown-paragraph' | 'not-a-paragr
 | 'unknown-drawing'
 /** The drawing's graphic payload is not a supported picture. */
 | 'not-a-picture-drawing'
+/** A chart in any state: only a delete applies, and it removes the whole chart. */
+| 'chart-drawing'
 /** A lock flag or `@locked` forbids this mutation. */
 | 'drawing-locked'
 /** Finite EMU extent, crop, or position value is out of range. */

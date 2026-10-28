@@ -832,11 +832,15 @@ export interface DrawingAccessibility {
 }
 
 // @public
-export type DrawingChartPlotType = 'area' | 'area3D' | 'bar' | 'bar3D' | 'bubble' | 'doughnut' | 'line' | 'line3D' | 'ofPie' | 'pie' | 'pie3D' | 'radar' | 'scatter' | 'stock' | 'surface' | 'surface3D';
+export type DrawingChartPlotType = 'area' | 'area3D' | 'bar' | 'bar3D' | 'bubble' | 'doughnut' | 'line' | 'line3D' | 'ofPie' | 'pie' | 'pie3D' | 'radar' | 'scatter' | 'stock' | 'surface' | 'surface3D' | 'waterfall' | 'funnel' | 'histogram' | 'pareto' | 'boxWhisker' | 'treemap' | 'sunburst' | 'regionMap';
+
+// @public
+export type DrawingChartShownAs = 'chart' | 'fallback' | 'placeholder';
 
 // @public
 export interface DrawingChartSummary {
     readonly plotTypes: readonly DrawingChartPlotType[];
+    readonly shownAs: DrawingChartShownAs;
     readonly title: string | null;
 }
 
@@ -861,6 +865,9 @@ export interface DrawingGeometry {
     // (undocumented)
     readonly transformedCorners: readonly DrawingPoint[];
 }
+
+// @public
+export type DrawingGraphicKind = 'picture' | 'chart' | 'diagram' | 'shape' | 'group' | 'textbox' | 'canvas' | 'graphic';
 
 // @public
 export interface DrawingGroupPictureLayerRecord {
@@ -931,6 +938,18 @@ export interface DrawingPoint {
     readonly x: number;
     // (undocumented)
     readonly y: number;
+}
+
+// @public
+export type DrawingSupport = 'native' | 'partial' | 'unrendered';
+
+// @public
+export interface DrawingSupportIssue {
+    readonly code: 'unsupported-effect' | 'renderer-required' | 'unverified-3d' | 'saved-fallback' | 'unplaced-drawing' | 'inspection-limit' | 'projection-diagnostic';
+    readonly detail: string;
+    readonly localName: string;
+    readonly namespaceUri: string;
+    readonly nodeId: string;
 }
 
 // @public (undocumented)
@@ -1641,6 +1660,8 @@ export interface InlineDrawingRecord {
     readonly baselineOffset: number;
     readonly bidiLevel?: number;
     readonly chart?: DrawingChartSummary;
+    // @internal
+    readonly chartFallbackResource?: ImageResourceState;
     // (undocumented)
     readonly crop: SourceCrop;
     // (undocumented)
@@ -4909,38 +4930,30 @@ export function unionLayoutBoxes(boxes: readonly LayoutBox[]): LayoutBox | null;
 // @public
 export interface UnsupportedElement {
     readonly bounds?: LayoutBox;
-    // (undocumented)
     readonly drawing?: InlineDrawingRecord | AnchoredDrawingRecord;
-    // (undocumented)
+    readonly drawingIssues?: readonly DrawingSupportIssue[];
     readonly equation?: EquationSpanRecord;
-    // (undocumented)
+    readonly graphicKind?: DrawingGraphicKind;
     readonly label: string;
-    // (undocumented)
     readonly localName: string;
-    // (undocumented)
     readonly namespaceUri: string | null;
-    // (undocumented)
     readonly nodeId: string;
-    // (undocumented)
     readonly ownerPartName: string;
-    // (undocumented)
     readonly placement: 'inline' | 'block';
     readonly source: OoxmlElement | null;
+    readonly support?: Exclude<DrawingSupport, 'native'>;
 }
 
 // @public
 export interface UnsupportedElementLayout {
-    // (undocumented)
     readonly height: number;
-    // (undocumented)
     readonly width: number;
 }
 
 // @public
 export interface UnsupportedElementRule {
-    // (undocumented)
+    readonly includePartial?: boolean;
     readonly layout?: UnsupportedElementLayout;
-    // (undocumented)
     readonly match?: (element: UnsupportedElement) => boolean;
 }
 

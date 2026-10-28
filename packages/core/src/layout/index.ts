@@ -243,7 +243,11 @@ export type {
   InlineDrawingRecord,
 } from './drawing-layout.ts';
 export type { DrawingGroupPictureRecord, DrawingPlaceholderKind } from './drawing-paint-fields.ts';
-export type { DrawingChartPlotType, DrawingChartSummary } from '../store/package/chart-summary.ts';
+export type {
+  DrawingChartPlotType,
+  DrawingChartShownAs,
+  DrawingChartSummary,
+} from '../store/package/chart-summary.ts';
 export type { TextboxStoryLayout } from './textbox-story-layout.ts';
 export type { TextboxOutlineProjection } from '../store/package/legacy-vml-textbox-geometry.ts';
 export type { DrawingTextArtRecord, TextArtFit } from './drawing-text-art.ts';
@@ -782,3 +786,9 @@ export { tabLeaderPattern } from './tab-leader-pattern.ts';
 export { noteSeparatorRuleBox } from './note-separator-rule.ts';
 export type { StrikeoutStrokePt } from './sfnt-strikeout-metrics.ts';
 export { shapedRunOutline } from './text-outline.ts';
+
+export type {
+  DrawingGraphicKind,
+  DrawingSupport,
+  DrawingSupportIssue,
+} from '../store/package/drawing-support.ts';

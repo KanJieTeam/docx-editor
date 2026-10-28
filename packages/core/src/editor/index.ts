@@ -46,6 +46,7 @@ export {
   type FontResolverMark,
   type MarkedFontResolver,
 } from './font-resolver.ts';
+export { deferFonts } from '../layout/defer-fonts.ts';
 export { blankDocumentBytes, type BlankDocumentOptions } from './blank-document.ts';
 export { keepScrollAtInlineEnd } from './scroll-inline-end.ts';
 export { placeSubmenu, submenuKeys } from './submenu-placement.ts';
@@ -667,3 +668,17 @@ export {
   type GoToBookmarkGroup,
   type BookmarkSortOrder,
 } from './bookmark-dialog-model.ts';
+
+export { unsupportedElementRuleMatches } from '../layout/unsupported-content-types.ts';
+
+export type {
+  DrawingGraphicKind,
+  DrawingSupport,
+  DrawingSupportIssue,
+} from '../store/package/drawing-support.ts';
+
+export { drawingPreviewDocx } from './drawing-preview.ts';
+export type {
+  DrawingPreviewPackageLimits,
+  DrawingPreviewPackageResult,
+} from '../store/package/drawing-preview-package.ts';

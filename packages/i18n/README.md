@@ -65,6 +65,12 @@ const myLocale = {
 
 Missing or `null` keys keep the inherited catalog value. Without an outer `LocaleProvider`, they fall back to English.
 
+## Right-to-left interfaces
+
+The Arabic (`ar`) and Hebrew (`he`) catalogs declare `_dir: 'rtl'`. Passing either catalog through `i18n` mirrors editor controls in React and Vue. Interface direction does not change the document's paragraph direction.
+
+For custom translations, set `_dir: 'rtl'` in your catalog or pass `dir="rtl"` to `LocaleProvider`. For setup and limits, see [Right-to-left support](https://www.docx-editor.dev/docs/2.x/guides/right-to-left).
+
 ## Available locales
 
 | Code    | Export | Language            |
@@ -111,7 +117,7 @@ For on-demand loading, use a dynamic import instead:
 const pl = (await import('@docx-editor.dev/i18n/pl')).default;
 ```
 
-Subpaths ship for every locale: `/en`, `/ar`, `/de`, `/es`, `/fr`, `/he`, `/hi`, `/id`, `/ja`, `/pl`, `/pt-BR`, `/ru`, `/tr`, `/zh-CN`. Each also exports its locale as a named binding (`import { pl } from '@docx-editor.dev/i18n/pl'`) for callers that prefer non-default imports.
+Subpaths ship for every locale: `/en`, `/ar`, `/de`, `/es`, `/fr`, `/he`, `/hi`, `/id`, `/ja`, `/pl`, `/pt-BR`, `/tr`, `/zh-CN`. Each also exports its locale as a named binding (`import { pl } from '@docx-editor.dev/i18n/pl'`) for callers that prefer non-default imports.
 
 ## Types
 
@@ -128,7 +134,7 @@ import type {
 } from '@docx-editor.dev/i18n';
 ```
 
-## Outside the React adapter
+## Outside the editor adapters
 
 Build a typed `t()` outside the adapter packages:
 

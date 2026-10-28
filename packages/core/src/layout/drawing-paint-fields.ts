@@ -11,6 +11,7 @@ import type {
   VectorShapeProjection,
 } from '../store/package/drawing-projection.ts';
 import type { PictureFrameEffects } from '../store/package/drawing-picture-frame.ts';
+import { graphicKindOfUri } from '../store/package/drawing-graphic-kind.ts';
 
 /**
  * How a drawing record holds the picture member of a shape group.
@@ -19,9 +20,8 @@ import type { PictureFrameEffects } from '../store/package/drawing-picture-frame
  */
 export interface DrawingGroupPictureRecord {
   /**
-   * Whether the group is the chosen branch of a run-level `mc:AlternateContent`. An output
-   * that cannot draw the picture leaves such a group out, as it leaves out other MC content
-   * it cannot draw. A group without it shows the output's unsupported-drawing result.
+   * Whether the group is the chosen branch of a run-level `mc:AlternateContent`.
+   * Failed picture resources show one placeholder for the whole group.
    */
   readonly alternateContent: boolean;
 }
@@ -43,17 +43,13 @@ export type DrawingPlaceholderKind =
   | 'canvas'
   | 'graphic';
 
-// A Map, not an object literal: the key is a `graphicData@uri` out of the file, so a value
-// of `__proto__` or `constructor` must answer undefined, not a prototype member.
-const GRAPHIC_URI_KIND: ReadonlyMap<string, DrawingPlaceholderKind> = new Map([
-  ['http://schemas.openxmlformats.org/drawingml/2006/chart', 'chart'],
-  ['http://schemas.openxmlformats.org/drawingml/2006/diagram', 'diagram'],
-  // A legacy drawing on the line that cannot paint (`legacy-vml-placeholder.ts`).
-  ['legacy-vml', 'shape'],
-  ['http://schemas.microsoft.com/office/word/2010/wordprocessingGroup', 'group'],
-  ['http://schemas.microsoft.com/office/word/2010/wordprocessingShape', 'textbox'],
-  ['http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas', 'canvas'],
-]);
+/** The kind named by an `unsupported-graphic` diagnostic; `legacy-vml` marks a VML drawing. */
+function placeholderKindOfUri(uri: string): DrawingPlaceholderKind {
+  if (uri === 'legacy-vml') return 'shape';
+  // Every graphic kind except `picture` must also be a placeholder kind; the checker holds that.
+  const kind = graphicKindOfUri(uri);
+  return kind && kind !== 'picture' ? kind : 'graphic';
+}
 
 const EMPTY_TRANSFORM: DrawingTransform = Object.freeze({
   rotationDegrees: 0,
@@ -82,7 +78,7 @@ export function drawingPaintFields(projection: DrawingProjection): {
     for (const diagnostic of projection.diagnostics) {
       if (diagnostic.code !== 'unsupported-graphic') continue;
       const uri = diagnostic.detail ?? '';
-      placeholderGraphicKind = GRAPHIC_URI_KIND.get(uri) ?? 'graphic';
+      placeholderGraphicKind = placeholderKindOfUri(uri);
       break;
     }
     if (placeholderGraphicKind === null) placeholderGraphicKind = 'graphic';

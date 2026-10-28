@@ -352,6 +352,12 @@ export async function openFontBackedDocumentForExport(
         termination === 'active' ? session.validatedImageBytes(drawing) : null,
       metafileBytes: (drawing: Parameters<NonNullable<ExportSession['metafileBytes']>>[0]) =>
         termination === 'active' ? (session.metafileBytes?.(drawing) ?? null) : null,
+      chartFallbackResource: (
+        drawing: Parameters<NonNullable<ExportSession['chartFallbackResource']>>[0]
+      ) =>
+        termination === 'active'
+          ? (session.chartFallbackResource?.(drawing) ?? Promise.resolve(undefined))
+          : Promise.resolve(undefined),
       admittedFontFace: bindSessionAdmittedFont({
         status: () => termination,
         unavailable,
@@ -429,6 +435,8 @@ export async function acquireDocumentExportShaping(
             onOriginFailure: (failure) => originFailures.push(failure),
             reserveOwnedBytes: fontByteLease.reserve,
             maxExecutionFontBytes: executionPolicy.maxFontBytes,
+            // Export writes every page once, so it waits for faces an editor paints late.
+            awaitDeferred: true,
           }
         );
         throwIfAborted(controller.signal);
