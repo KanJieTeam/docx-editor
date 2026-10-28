@@ -34,6 +34,10 @@ interface ReferenceCase {
   pageEdge?: boolean;
   /** No compatibility mode, a 40pt last row: the repeat stays and the row runs past the margin. */
   overflows?: boolean;
+  /** No compatibility mode: a six-line row that cannot split stays whole past the 52pt band. */
+  tallRow?: boolean;
+  /** With `tallRow`: its second line references a two-line footnote. */
+  footnote?: boolean;
 }
 const SETTINGS = 'application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml';
 const settingsPackage = {
@@ -45,6 +49,19 @@ const settingsPackage = {
       '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>',
   },
 };
+const FOOTNOTES = 'application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml';
+const note = (id: number, content: string, type?: string) =>
+  `<w:footnote${type ? ` w:type="${type}"` : ''} w:id="${id}"><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr>${content}</w:p></w:footnote>`;
+const footnotePackage = {
+  overrides: `<Override PartName="/word/footnotes.xml" ContentType="${FOOTNOTES}"/>`,
+  documentRels:
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdNotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/></Relationships>',
+  extraXml: {
+    'word/footnotes.xml': `<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${note(-1, '<w:r><w:separator/></w:r>', 'separator')}${note(0, '<w:r><w:continuationSeparator/></w:r>', 'continuationSeparator')}${note(1, '<w:r><w:footnoteRef/></w:r><w:r><w:t>Note</w:t><w:br/><w:t>More</w:t></w:r>')}</w:footnotes>`,
+  },
+};
+const citing = (text: string) =>
+  paragraph(text).replace('</w:p>', '<w:r><w:footnoteReference w:id="1"/></w:r></w:p>');
 function documentBody(options: ReferenceCase) {
   const borders = ['top', 'bottom', 'left', 'right']
     .map(
@@ -53,9 +70,10 @@ function documentBody(options: ReferenceCase) {
     )
     .join('');
   const rows = (options.pageEdge ? ['First', 'Middle', 'Terminal'] : ['First', 'Terminal'])
-    .map(
-      (text, index) =>
-        `<w:tr><w:trPr>${index === 0 && !options.pageEdge ? '<w:tblHeader/>' : ''}<w:trHeight w:val="${index === 1 && options.headerYields ? 620 : index === 1 && options.overflows ? 800 : 397}" w:hRule="exact"/></w:trPr><w:tc><w:tcPr><w:vAlign w:val="${options.align}"/></w:tcPr>${paragraph(text)}</w:tc></w:tr>`
+    .map((text, index) =>
+      options.tallRow && index === 1
+        ? `<w:tr><w:trPr><w:cantSplit/></w:trPr><w:tc><w:tcPr><w:vAlign w:val="${options.align}"/></w:tcPr>${[1, 2, 3, 4, 5, 6].map((line) => (options.footnote && line === 2 ? citing : paragraph)(`${text}${line}`)).join('')}</w:tc></w:tr>`
+        : `<w:tr><w:trPr>${index === 0 && !options.pageEdge ? '<w:tblHeader/>' : ''}<w:trHeight w:val="${index === 1 && options.headerYields ? 620 : index === 1 && options.overflows ? 800 : 397}" w:hRule="exact"/></w:trPr><w:tc><w:tcPr><w:vAlign w:val="${options.align}"/></w:tcPr>${paragraph(text)}</w:tc></w:tr>`
     )
     .join('');
   const section = options.tightPage
@@ -87,6 +105,39 @@ function geometry(editor: Editor, options: ReferenceCase) {
     expect(last.box.height).toBeCloseTo(1 + 19.85 + options.width, 6);
     expect(last.cells[0]!.blocks[0]!.box.y - last.box.y).toBeCloseTo(8.85, 6);
     return { middle: middle!.box, rows: table.rows.map((r) => r.box), after: after?.box };
+  }
+  if (options.tallRow) {
+    // Page 2: the repeated header, then all six 12pt lines of the row, past the 52pt band.
+    expect(tables[1]).toEqual([table]);
+    const [repeat, last] = table.rows;
+    expect(repeat!.isHeaderRepeat).toBe(true);
+    expect(last!.hasContinuation).toBeFalsy();
+    expect(last!.cells[0]!.blocks).toHaveLength(6);
+    expect(last!.box.y + last!.box.height).toBeGreaterThan(52);
+    expect(layout.pages[2]!.fragments).toContain(after!);
+    // The caret on the last line, below the bottom margin, has geometry on that page.
+    const lastLine = last!.cells[0]!.blocks.at(-1)!;
+    const caret = caretAt(layout, {
+      paragraphId: lastLine.kind === 'paragraph' ? lastLine.paragraphId : '',
+      offset: 0,
+    });
+    expect(caret?.pageIndex).toBe(1);
+    if (options.footnote) {
+      // No reserve makes room below the row: the page keeps the note's first line at its
+      // bottom, over the row, and the second line continues on page 3.
+      const page = layout.pages[1]!;
+      const area = page.footnotes!;
+      expect(area.notes.map((n) => [n.noteId, n.continuation ?? false])).toEqual([[1, false]]);
+      expect(area.box.y + area.box.height).toBeCloseTo(
+        page.contentBox.y + page.contentBox.height,
+        6
+      );
+      expect(layout.pages[2]!.footnotes!.notes.map((n) => [n.noteId, n.continuation])).toEqual([
+        [1, true],
+      ]);
+      return { rows: table.rows.map((r) => r.box), after: after?.box, caret, notes: area.box };
+    }
+    return { rows: table.rows.map((r) => r.box), after: after?.box, caret };
   }
   if (options.overflows) {
     // Page 2: the repeated 19.85pt header stays above the 40pt row, which ends past the 52pt band.
@@ -146,11 +197,17 @@ for (const options of [
   { align: 'bottom', width: 1.5, tightPage: true, headerYields: true },
   { align: 'bottom', width: 1.5, tightPage: true, pageEdge: true },
   { align: 'center', width: 1.5, tightPage: true, overflows: true },
+  { align: 'center', width: 1.5, tightPage: true, tallRow: true },
+  { align: 'center', width: 1.5, tightPage: true, tallRow: true, footnote: true },
 ] satisfies ReferenceCase[])
-  test(`the ${options.align} terminal rule${options.headerYields ? ' that omits a repeated header' : options.pageEdge ? ' at a page edge' : options.overflows ? ' below a kept repeat' : ''} converges through edits and cold reopen`, async () => {
+  test(`the ${options.align} terminal rule${options.headerYields ? ' that omits a repeated header' : options.pageEdge ? ' at a page edge' : options.overflows ? ' below a kept repeat' : options.tallRow ? ` of a whole tall row${options.footnote ? ' with a footnote' : ''}` : ''} converges through edits and cold reopen`, async () => {
     const source = documentBody(options);
     const peers = await harness.pair(
-      options.headerYields ? zipDocument(source, settingsPackage) : zipDocument(source)
+      options.headerYields
+        ? zipDocument(source, settingsPackage)
+        : options.footnote
+          ? zipDocument(source, footnotePackage)
+          : zipDocument(source)
     );
     const [alice, bob] = [peers.alice, peers.bob].map((peer) => {
       peer.detach();

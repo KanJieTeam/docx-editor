@@ -657,6 +657,42 @@ Semantic layout SHALL place a supported terminal exact row's simple bottom rule 
 - **THEN** the repeated header group stays on that page
 - **AND** the row stays whole below it and runs past the bottom margin
 
+#### Scenario: A text row that cannot split stays whole before mode 15
+
+- **WHEN** compatibility mode is 14 or earlier, or absent
+- **AND** a text-only row that cannot split, without a vertical merge, is taller than a page
+- **AND** that page holds no wrapping picture, including one in the header or footer
+- **THEN** the row starts on a fresh page and keeps all its lines there, past the bottom margin
+- **AND** the next row or block starts on the following page
+
+#### Scenario: A whole tall row keeps the first line of its first footnote
+
+- **WHEN** compatibility mode is 14 or earlier, or absent
+- **AND** a row taller than the page stays whole past the bottom margin and references footnotes
+- **THEN** the page keeps the first line of the first referenced footnote at its bottom, over the row, wherever the reference sits in the row
+- **AND** the rest of that footnote and every later footnote of the row continue on the next page, each later footnote with its own mark
+
+#### Scenario: A carried footnote keeps the footnotes of a whole tall row behind it
+
+- **WHEN** compatibility mode is 14 or earlier, or absent
+- **AND** a footnote continued from an earlier page has no room on the page of a whole row taller than the page
+- **THEN** that page keeps no line of the footnotes of the row and paints no footnote area
+- **AND** the footnotes of the row start, each with its own mark, only on the page where the continued footnote ends
+
+#### Scenario: A row kept whole below repeated header rows keeps none of its footnotes
+
+- **WHEN** compatibility mode is 14 or earlier, or absent
+- **AND** a row that cannot split fits a fresh page but stays whole below repeated header rows and runs past the bottom margin
+- **THEN** the page of the row keeps no line of the footnotes that the row references
+- **AND** each of those footnotes starts on the next page with its own mark
+
+#### Scenario: A tall row splits before mode 15 outside the text-only case
+
+- **WHEN** compatibility mode is 14 or earlier, or absent
+- **AND** a row that cannot split is taller than a page
+- **AND** the row holds a vertical merge or a nested table, or its page holds a wrapping picture, including one in the header or footer
+- **THEN** the row starts on a fresh page and splits there
+
 #### Scenario: A body row below a repeated header reserves the boundary rule
 
 - **WHEN** a complete body row of a collapsed table starts directly below its repeated header rows
