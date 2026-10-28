@@ -97,3 +97,83 @@ describe('semantic equation paint', () => {
     stop();
   });
 });
+
+test('draws the spaced atoms of one run as one span at the laid-out positions', () => {
+  const { container, layout } = layoutAndPaint(
+    '<w:p><m:oMath><m:r><m:t>a+b=c</m:t></m:r></m:oMath></w:p>'
+  );
+  const geometry = linesOf(layout)[0]!.spans.find((span) => span.equation)!.equation!.geometry;
+  // Layout keeps one node per atom, each at its spaced position.
+  if (geometry.kind !== 'row') throw new Error('expected a row');
+  const atoms = geometry.items;
+  expect(atoms.map((atom) => (atom.kind === 'text' ? atom.text : atom.kind))).toEqual([
+    '𝑎',
+    '+',
+    '𝑏',
+    '=',
+    '𝑐',
+  ]);
+  const spans = Array.from(container.querySelectorAll<HTMLElement>('.docx-equation-text'));
+  expect(spans).toHaveLength(1);
+  const span = spans[0]!;
+  expect(span.textContent).toBe('𝑎+𝑏=𝑐');
+  const first = atoms[0]!;
+  const last = atoms[atoms.length - 1]!;
+  expect(Number.parseFloat(span.style.left)).toBeCloseTo(geometry.box.x + first.box.x, 6);
+  expect(Number.parseFloat(span.style.width)).toBeCloseTo(
+    last.box.x + last.box.width - first.box.x,
+    6
+  );
+  // Each spaced atom carries its gap as a start margin; the widths of the atoms come from the text.
+  const margins = Array.from(span.children).map((child) =>
+    Number.parseFloat((child as HTMLElement).style.marginLeft)
+  );
+  const gaps = atoms
+    .slice(1)
+    .map((atom, index) => atom.box.x - (atoms[index]!.box.x + atoms[index]!.box.width));
+  expect(margins).toHaveLength(gaps.filter((gap) => gap > 0).length);
+  margins.forEach((margin, index) =>
+    expect(margin).toBeCloseTo(gaps.filter((gap) => gap > 0)[index]!, 6)
+  );
+});
+
+test('draws each atom after the first as an inline-block so no shaping crosses an atom join', () => {
+  const { container, layout } = layoutAndPaint(
+    '<w:p><m:oMath><m:r><m:t>f(x),y</m:t></m:r></m:oMath></w:p>'
+  );
+  const geometry = linesOf(layout)[0]!.spans.find((span) => span.equation)!.equation!.geometry;
+  if (geometry.kind !== 'row') throw new Error('expected a row');
+  const atoms = geometry.items;
+  expect(atoms.map((atom) => (atom.kind === 'text' ? atom.text : atom.kind))).toEqual([
+    '𝑓',
+    '(',
+    '𝑥',
+    ')',
+    ',',
+    '𝑦',
+  ]);
+  const spans = Array.from(container.querySelectorAll<HTMLElement>('.docx-equation-text'));
+  expect(spans).toHaveLength(1);
+  const span = spans[0]!;
+  // The first atom is the run's own text; every later atom is an atomic inline of its own.
+  expect(span.firstChild?.nodeType).toBe(3);
+  expect(span.firstChild?.textContent).toBe('𝑓');
+  const children = Array.from(span.children) as HTMLElement[];
+  expect(span.childNodes).toHaveLength(atoms.length);
+  expect(children).toHaveLength(atoms.length - 1);
+  expect(children.map((child) => child.textContent)).toEqual(['(', '𝑥', ')', ',', '𝑦']);
+  for (const child of children) {
+    expect(child.style.display).toBe('inline-block');
+    // The face comes from the run span, so a child sets no face of its own.
+    expect(child.style.fontFamily).toBe('');
+    expect(child.style.fontSize).toBe('');
+  }
+  // Only a positive gap becomes a start margin.
+  children.forEach((child, index) => {
+    const previous = atoms[index]!;
+    const gap = atoms[index + 1]!.box.x - (previous.box.x + previous.box.width);
+    if (gap > 1e-9) expect(Number.parseFloat(child.style.marginLeft)).toBeCloseTo(gap, 6);
+    else expect(child.style.marginLeft).toBe('');
+  });
+  expect(children.some((child) => child.style.marginLeft === '')).toBe(true);
+});

@@ -312,7 +312,7 @@ function paragraphWidthsPt(paragraph: OoxmlElement, inputs: MinimumInputs): Para
     bidiSourceBoundaries(paragraph),
     true
   );
-  const typography = resolveCjkTypography(layoutInputs.props);
+  const typography = resolveCjkTypography(layoutInputs.props, styleCascade?.typography);
   const automaticSpacing = automaticAutofitSpacing(typography, measurer);
   let previousText: Parameters<typeof automaticSpacing>[3];
   const cjkBreaks = cjkAutofitBreaks(pieces, layoutInputs, measurer, styleCascade);
@@ -400,8 +400,11 @@ function paragraphWidthsPt(paragraph: OoxmlElement, inputs: MinimumInputs): Para
     const atomWidth = piece.inlineDrawing
       ? measureInlineDrawing(piece.inlineDrawing.projection).totalWidth
       : piece.equation
-        ? (layoutEquation ??= createEquationLayouter(measurer))(piece.equation, piece.style)
-            .geometry.box.width
+        ? (layoutEquation ??= createEquationLayouter(measurer))(
+            piece.equation,
+            piece.style,
+            piece.equationLayout
+          ).geometry.box.width
         : undefined;
     if (atomWidth !== undefined) {
       previousText = undefined;
