@@ -2,6 +2,9 @@
 // The fragments keep their own styles, advances, and model ranges.
 import type { FieldAwarePiece } from './field-pieces.ts';
 import { isDefaultGraphemeBoundary, segmentGraphemes } from './grapheme.ts';
+import { marksContinue } from './cjk-line-break.ts';
+import { usesEastAsianParagraphBreaks } from './cjk-paragraph-breaks.ts';
+import type { CjkParagraphTypography } from './cjk-typography.ts';
 import { isParagraphText, paragraphBreakText } from './paragraph-word-cuts.ts';
 import { measureDisplayText } from './run-style.ts';
 import { styleForFontSlot } from './script-itemization.ts';
@@ -9,8 +12,10 @@ import type { TextMeasurer } from './semantic-records.ts';
 
 export function graphemeContinuationWidth(
   pieces: readonly FieldAwarePiece[],
-  measurer: TextMeasurer
-): (pieceIndex: number, boundary: number) => number {
+  measurer: TextMeasurer,
+  policy?: CjkParagraphTypography
+): ((pieceIndex: number, boundary: number) => number) | undefined {
+  if (policy && !usesEastAsianParagraphBreaks(pieces, policy)) return undefined;
   if (pieces.length < 2) return () => 0;
   if (
     isDefaultGraphemeBoundary() &&
@@ -59,7 +64,10 @@ export function graphemeContinuationWidth(
     let following = 0;
     for (let index = fragments.length - 1; index >= 0; index--) {
       const fragment = fragments[index]!;
-      if (index < fragments.length - 1) tails.set(fragment.piece, following);
+      if (index < fragments.length - 1) {
+        if (!marksContinue(fragment.text.charCodeAt(fragment.text.length - 1))) following = 0;
+        tails.set(fragment.piece, following);
+      }
       following += measureDisplayText(
         fragment.text,
         styleForFontSlot(fragment.piece.style, fragment.piece.fontSlot),

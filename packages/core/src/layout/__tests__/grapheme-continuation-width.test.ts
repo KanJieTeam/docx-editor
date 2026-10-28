@@ -53,9 +53,65 @@ test('a custom grapheme strategy can join an ASCII run boundary', () => {
       { text: 'AB', start: 0, end: 2, style, props: [] },
       { text: 'CD', start: 2, end: 4, style, props: [] },
     ];
-    expect(graphemeContinuationWidth(pieces, measurer)(0, 2)).toBe(12);
+    expect(graphemeContinuationWidth(pieces, measurer)!(0, 2)).toBe(12);
     expect(render(['国AB', 'CD国'], 12)).toEqual(render(['国ABCD国'], 12));
   } finally {
     resetGraphemeBoundary();
   }
+});
+
+for (const separator of [' ', '\t', '\u200b', '-']) {
+  test(`a legal boundary before a mark does not reserve following text: ${JSON.stringify(separator)}`, () => {
+    const style = { ...DEFAULT_RUN_STYLE, fontSizePt: 11 };
+    const pieces = [
+      { text: 'A' + separator, start: 0, end: 2, style, props: [] },
+      { text: '\u1031B', start: 2, end: 4, style, props: [] },
+    ];
+    expect(graphemeContinuationWidth(pieces, measurer)!(0, 2)).toBe(0);
+    const parts = ['国国' + separator, '\u1031မာင္ '];
+    for (const width of [24, 48, 72])
+      expect(render(parts, width)).toEqual(render([parts.join('')], width));
+  });
+}
+for (const separator of ['\u00a0', '\u2007', '\u202f']) {
+  test(`a no-break space retains the mark continuation: ${JSON.stringify(separator)}`, () => {
+    const style = { ...DEFAULT_RUN_STYLE, fontSizePt: 11 };
+    const pieces = [
+      { text: 'A' + separator, start: 0, end: 2, style, props: [] },
+      { text: '\u0301B', start: 2, end: 4, style, props: [] },
+    ];
+    expect(graphemeContinuationWidth(pieces, measurer)!(0, 2)).toBe(6);
+    const parts = ['国国' + separator, '\u0301国国'];
+    for (const width of [24, 48, 72])
+      expect(render(parts, width)).toEqual(render([parts.join('')], width));
+  });
+}
+test('a legal boundary resets earlier reservations in a three-run custom cluster', () => {
+  setGraphemeBoundary({
+    segment: (text) => [{ index: 0, text, utf16From: 0, utf16To: text.length }],
+  });
+  try {
+    const style = { ...DEFAULT_RUN_STYLE, fontSizePt: 11 };
+    for (const separator of [' ', '\t', '\u200b', '-']) {
+      const pieces = ['A', separator, '\u1031'].map((text, index) => ({
+        text,
+        start: index,
+        end: index + 1,
+        style,
+        props: [],
+      }));
+      const tail = graphemeContinuationWidth(pieces, measurer)!;
+      expect(tail(0, 1)).toBe(measurer.measure(separator, style));
+      expect(tail(1, 1)).toBe(0);
+    }
+  } finally {
+    resetGraphemeBoundary();
+  }
+});
+test('a run-open dash retains ordinary Latin combining-mark overflow', () => {
+  expect(render(['A', '- ', 'abcde', '\u0301fgh'], 30).map((line) => line.text)).toEqual([
+    'A- ',
+    'abcde\u0301',
+    'fgh',
+  ]);
 });
