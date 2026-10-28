@@ -11,6 +11,35 @@ The layout engine SHALL stretch the final line of a paragraph with `w:jc` set to
 - **THEN** text fills each passage without crossing the floating object
 - **AND** the source text, formatting, and source positions remain unchanged
 
+### Requirement: Keeps beside a row taller than a page
+
+A `w:keepNext` paragraph, a chain of them, or a kept row before a `w:cantSplit` table row taller than a page SHALL move to the next page once, and the row SHALL start on the page after it. Content that already starts its page SHALL stay there. This rule SHALL apply in compatibility modes 14 and 15, for tables with one row or more.
+
+#### Scenario: A caption before a one-row table with a tall row
+
+- **GIVEN** a `w:keepNext` paragraph below other content, before a table whose only row has `w:cantSplit` and is taller than a page
+- **WHEN** layout paginates the body
+- **THEN** the paragraph starts the next page by itself
+- **AND** the row starts on the page after the paragraph and splits there
+
+#### Scenario: A caption at the top of a page before a tall row
+
+- **GIVEN** a `w:keepNext` paragraph at the top of a page, before a `w:cantSplit` row taller than a page
+- **WHEN** layout paginates the body
+- **THEN** the paragraph stays on its page and the row starts on the next page
+
+### Requirement: Header rows above a row taller than a page
+
+Authored header rows SHALL NOT hold a `w:cantSplit` body row taller than a page on their page, even at the page top. Only repeated header rows SHALL hold it. In compatibility mode 15 and later, authored header rows below other content SHALL first move to the next page by themselves, together with a kept group that opens the body. A header row group taller than a page SHALL place and keep as body rows.
+
+#### Scenario: Authored header rows above a tall row
+
+- **GIVEN** a table whose authored header row opens a page, followed by a `w:cantSplit` body row taller than a page
+- **WHEN** layout paginates the body
+- **THEN** the header row stays alone on its page
+- **AND** the body row starts on the next page, below a repeated header row in compatibility mode 14 and earlier
+- **AND** in compatibility mode 15 and later, the body row takes that whole page and the header row repeats on the page after it
+
 ### Requirement: Right-to-left lines beside floating objects
 
 The layout engine SHALL fill the passages that a floating object leaves a right-to-left line from right to left. Each part of a bidirectional line SHALL align inside its own passage, and bidirectional reordering SHALL stay inside that passage.

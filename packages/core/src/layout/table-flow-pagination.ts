@@ -37,9 +37,9 @@ import { fragmentRowContentDeps } from './table-fragment-content-insets.ts';
 import { probeRowFragmentProgress } from './table-row-progress-probe.ts';
 import { bottomToTopTextKeepsRowWhole } from './table-cell-text-direction.ts';
 import {
+  headerGroupMoves,
   keptRowGroupMoves,
-  onlyTopHeaderRows,
-  rowsOpening,
+  onlyRepeatedHeaderRows,
   rowStartsPage,
   tableKeptRowSource,
 } from './table-row-keeps.ts';
@@ -394,9 +394,11 @@ export function* paginateTableInFlowSteps(
     repeatedPlan = candidate;
   };
 
+  /** Start the next fragment; `repeat` false leaves out the header repeat on that page. */
   const breakForContinuation = (
     admitsBodyAfter?: (bodyTop: number) => boolean,
-    newPage = false
+    newPage = false,
+    repeat = repeatsEnabled
   ): void => {
     closeTableFragment();
     if (newPage) flow.advancePage();
@@ -405,15 +407,17 @@ export function* paginateTableInFlowSteps(
     // See placeHeaderGroup: the new fragment opens at the advanced cursor, which is the
     // column region top on a shared sheet and 0 only when a fresh page was opened.
     fragmentTop = flow.cursorY;
-    clearance?.clearPending(repeatsEnabled && headerRows.length > 0 ? headerGroupHeight : 0);
-    if (repeatsEnabled) placeHeaderGroup(true, admitsBodyAfter);
+    clearance?.clearPending(repeat && headerRows.length > 0 ? headerGroupHeight : 0);
+    if (repeat) placeHeaderGroup(true, admitsBodyAfter);
   };
 
+  /** Whole band of a fresh page: a note reserve yields to a kept row. */
+  const pageBand = () => Math.max(contentHeight(), flow.unreservedContentHeight?.() ?? 0);
   /** Kept-row pricing over `candidates` (`table-row-keeps.ts`); `first` overrides one row's height. */
   const keptSource = (
     candidates: readonly SemanticTableRow[],
     first?: [number, number],
-    pageHeight = Math.max(contentHeight(), flow.unreservedContentHeight?.() ?? 0)
+    pageHeight = pageBand()
   ) =>
     tableKeptRowSource({
       structure,
@@ -421,15 +425,16 @@ export function* paginateTableInFlowSteps(
       left: tableLeft,
       deps: tableDeps,
       pageHeight,
+      fullPageHeight: pageBand(),
       heightOf: cachedRowHeights(candidates, terminal.withRule(rowHeightOf, tableDeps), first),
       following: (room) => flow.followingKeepOpening?.(room),
     });
   const headerFollowsContent = flow.regionHoldsContent(fragmentTop);
   if (!initialHeaderGroupDegraded && headerRows.length > 0) clearAuthoredHeader();
 
-  // Word 2013 and later: header rows keep with the body rows' opening. When both do not fit
-  // below content already on the page but do fit a page of their own, the table starts on the
-  // next one. Earlier layout leaves the header rows and repeats them above the body rows.
+  // Mode 15 and later: header rows keep with the body rows' opening (`headerGroupMoves`).
+  // When both do not fit below content already on the page, the table starts on the next one.
+  // Earlier layout leaves the header rows and repeats them above the body rows.
   if (
     laterLayout &&
     breaksPages &&
@@ -440,8 +445,7 @@ export function* paginateTableInFlowSteps(
   ) {
     const fresh = contentHeight() - headerGroupHeight;
     const body = keptSource(structure.rows.slice(headerRows.length), undefined, fresh);
-    const opens = (room: number) => (rowsOpening(body, 0, room) ?? 0) <= room + 0.001;
-    if (!opens(contentHeight() - flow.cursorY - headerGroupHeight) && opens(fresh)) {
+    if (headerGroupMoves(body, contentHeight() - flow.cursorY - headerGroupHeight, fresh)) {
       closeTableFragment();
       advanceColumn();
       tableLeft = originX();
@@ -564,9 +568,7 @@ export function* paginateTableInFlowSteps(
     // `w:cantSplit` keeps a row whole only when a page can hold it. The full band counts,
     // because a note reserve yields to a kept row. A wrapping float still reduces that band.
     // A taller row starts on a fresh page and then splits like an ordinary row.
-    const pageHoldsRow = (): boolean =>
-      naturalHeight <=
-      Math.max(contentHeight(), flow.unreservedContentHeight?.() ?? 0) - bandTop + 0.001;
+    const pageHoldsRow = (): boolean => naturalHeight <= pageBand() - bandTop + 0.001;
     // `btLr` text takes its line length from the whole row, so such a row also moves whole to
     // a page that can hold it when its authored minimum does not fit the room below `top`
     // (`bottomToTopTextKeepsRowWhole`).
@@ -695,9 +697,7 @@ export function* paginateTableInFlowSteps(
             keptSource(bodyRows, [bodyRowIndex, naturalHeight]),
             bodyRowIndex,
             contentHeight() - flow.cursorY,
-            Math.max(contentHeight(), flow.unreservedContentHeight?.() ?? 0) -
-              (flow.columnTop?.() ?? 0) -
-              (repeatsEnabled ? headerGroupHeight : 0),
+            pageBand() - (flow.columnTop?.() ?? 0) - (repeatsEnabled ? headerGroupHeight : 0),
             flow.compatibilityMode,
             rows.length > 0 && rows.every((placed) => placed.isHeaderRow)
           )
@@ -741,7 +741,7 @@ export function* paginateTableInFlowSteps(
           top: flow.cursorY,
           columnTop: flow.columnTop?.() ?? 0,
           bottom: contentHeight(),
-          band: Math.max(contentHeight(), flow.unreservedContentHeight?.() ?? 0),
+          band: pageBand(),
           repeat: repeatsEnabled && !laterLayout ? headerGroupHeight : 0,
           belowBandOnly:
             bandTop > 0 &&
@@ -860,12 +860,12 @@ export function* paginateTableInFlowSteps(
       // nothing in `core` catches, on a path the module comment calls a recovery.
       if (!isContinuation && (row.cantSplit || row.height.rule === 'exact')) {
         const splitsAnyway = row.height.rule !== 'exact' && !pageHoldsRow();
-        // A row that splits anyway gains no room by leaving header rows that already open
-        // the page: repeats, or the authored group at the page top. Moving would strand them
-        // above an empty band. Header rows that start lower, below a float's band too, move.
-        const belowTopHeadersOnly = onlyTopHeaderRows(rows, fragmentTop);
-        if (flow.cursorY > bandTop && !movedToFreshPage && !(splitsAnyway && belowTopHeadersOnly)) {
-          breakForContinuation(admitsRepeatedHeaders);
+        // A row that splits anyway stays below repeated header rows only, and leaves authored
+        // ones. From mode 15 it opens its fresh page without a repeat (`onlyRepeatedHeaderRows`).
+        const belowRepeatsOnly = onlyRepeatedHeaderRows(rows);
+        if (flow.cursorY > bandTop && !movedToFreshPage && !(splitsAnyway && belowRepeatsOnly)) {
+          const repeat = repeatsEnabled && !(splitsAnyway && laterLayout);
+          breakForContinuation(admitsRepeatedHeaders, false, repeat);
           movedToFreshPage = true;
           // Re-offered like every other break that retries this row: a merge starting on a
           // `w:cantSplit` row that did not fit the band it was offered in may fit the fresh
