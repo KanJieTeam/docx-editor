@@ -43,7 +43,7 @@ import {
   validateDrawingNode,
   type DrawingParentContext,
 } from './ooxml-drawing-rules.ts';
-import { keepLeadingParagraphProperties } from './ooxml-paragraph-properties.ts';
+import { notePartRoot, repairedChildren, staysGenericUnder } from './ooxml-structure-repair.ts';
 
 export {
   W14_NAMESPACE_URI,
@@ -1611,6 +1611,8 @@ function wmlKindFor(localName: string, parentLocalName: string | undefined): Kno
   if ((localName === 'br' || localName === 'cr') && parentLocalName !== undefined) {
     return parentLocalName === 'r' ? 'hardBreak' : 'generic';
   }
+  if (parentLocalName !== undefined && staysGenericUnder(localName, parentLocalName))
+    return 'generic';
   return KNOWN_WML_ELEMENTS[localName] ?? 'generic';
 }
 
@@ -1831,6 +1833,7 @@ export function openElement(
     name.localName
   );
   const preserve = resolvedXmlSpace(attributes, inheritedPreserve);
+  if (parent === undefined) notePartRoot(metadata, attributes);
   const isWml = name.namespaceUri === WML_NAMESPACE_URI;
   // SDT vocabulary first (parent-contextual `w:lid` / checkbox states / run-misplaced
   // `w:sdt`), then WML known kinds including parent-gated content revisions.
@@ -1924,18 +1927,9 @@ export function convertChildOf(opened: OpenedElement, child: XmlNode, index: num
 
 /** @internal The kind checks and the node of `opened`, over its converted children. */
 export function closeElement(opened: OpenedElement, converted: readonly OoxmlNode[]): OoxmlElement {
-  const children =
-    opened.candidateKind === 'paragraph' ? keepLeadingParagraphProperties(converted) : converted;
-  const {
-    partName,
-    path,
-    name,
-    declarations,
-    resolvedAttributes,
-    attributes,
-    candidateKind,
-    parent,
-  } = opened;
+  const id = nodeId(opened.partName, opened.path);
+  const children = repairedChildren(opened, converted, id);
+  const { name, declarations, resolvedAttributes, attributes, candidateKind, parent } = opened;
   const attributesOk =
     resolvedAttributes.compatibleWithKnownNode &&
     (!resolvedAttributes.hasWmlVal ||
@@ -1966,7 +1960,7 @@ export function closeElement(opened: OpenedElement, converted: readonly OoxmlNod
       ? demoteDrawingKindsInSubtree(children, name)
       : children;
   return {
-    id: nodeId(partName, path),
+    id,
     kind,
     namespaceUri: name.namespaceUri,
     localName: name.localName,
