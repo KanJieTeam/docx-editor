@@ -2,4 +2,4 @@
 '@docx-editor.dev/core': patch
 ---
 
-Keep Japanese kana at their natural advances when character spacing control enables kana compression.
+Japanese kana no longer shrink in every overflowing paragraph when kana compression is enabled. Fixes #1303.

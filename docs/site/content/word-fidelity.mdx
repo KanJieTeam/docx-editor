@@ -399,7 +399,7 @@ In every script, a dash between letters is a break position even when the text a
 
 ### East Asian typography
 
-Japanese kana retain natural advances and authored character spacing under every `w:characterSpacingControl` value. Overflow wraps without automatic kana scaling. Punctuation fitting retains its separate rules.
+Japanese kana keep their natural advances and authored character spacing when a line overflows. Kana compression that fits a line-start-prohibited character on a full line is unavailable; the line hangs or wraps instead. Punctuation fitting retains its separate rules.
 
 East Asian layout keeps punctuation, graphemes, and full-width number groups together across formatting changes. Justified lines distribute inter-character spacing through the same geometry used for paint and caret placement.
 

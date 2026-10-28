@@ -799,7 +799,7 @@ The layout engine SHALL allow curly quotes in runs with the East Asian font hint
 
 ### Requirement: Natural kana advances
 
-Layout SHALL preserve natural kana advances and authored tracking under every character spacing control value. Paragraph overflow SHALL NOT apply a fixed kana reduction.
+Layout SHALL preserve natural kana advances and authored tracking when a line overflows. Paragraph overflow SHALL NOT apply a fixed kana reduction. Kana compression that fits a line-start-prohibited character on a full line is outside this requirement.
 
 #### Scenario: Japanese kana overflow the measure
 
