@@ -353,6 +353,9 @@ export const DocxEditorContextMenu = defineComponent({
           : null);
       if (!scroller) return;
       const onContextMenu = (event: MouseEvent) => {
+        // Text controls keep the browser menu for their own selection and clipboard.
+        if (isHTMLElementNode(event.target) && event.target.closest('input, textarea, select'))
+          return;
         event.preventDefault();
         const keyboard = event.button === -1 || (event.clientX === 0 && event.clientY === 0);
         const box = scroller.getBoundingClientRect();

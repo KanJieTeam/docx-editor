@@ -1,0 +1,14 @@
+{
+  "impact": "no-impact",
+  "fields": [],
+  "before": "The document context menu intercepted right-clicks in popup text fields.",
+  "after": "Native input controls keep their browser context menu, focus, and selection.",
+  "reason": "The React and Vue adapters ignore contextmenu events from native form controls. No operation, document state, or shared field changes. Two mounted editors on real collaboration sessions retain their state and still receive peer edits.",
+  "tests": [
+    "packages/react/test/context-menu-native-input.test.tsx",
+    "packages/vue/test/context-menu-native-input.test.ts",
+    "packages/pro/src/collaboration/__tests__/document-native-input-menu.test.tsx"
+  ],
+  "changeset": "native-input-context-menu",
+  "migration": null
+}

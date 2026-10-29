@@ -398,6 +398,9 @@ export function DocxEditorContextMenu({
     const scroller = scrollerFor(hostRef.current);
     if (!scroller) return undefined;
     const onContextMenu = (event: MouseEvent) => {
+      // Text controls keep the browser menu for their own selection and clipboard.
+      if (isHTMLElementNode(event.target) && event.target.closest('input, textarea, select'))
+        return;
       event.preventDefault();
       // A keyboard-triggered menu (Shift+F10, the Menu key) reports no pointer position.
       // Anchoring at the window's origin would drop the panel in the corner, so it opens at
